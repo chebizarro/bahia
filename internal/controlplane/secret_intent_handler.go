@@ -39,6 +39,15 @@ type SecretIntentEncryptor interface {
 	Encrypt(plaintext string, method domain.EncryptionMethod) ([]byte, error)
 }
 
+// SecretStoreIndex keeps the optional PostgreSQL index consistent with
+// store-backed secrets: a value-less marker row with every retained legacy
+// ciphertext scrubbed, so PostgreSQL consumers fail with
+// domain.ErrSecretInStore instead of omitting the secret.
+// repository.PgSecretRepository implements it.
+type SecretStoreIndex interface {
+	MarkStoreBacked(ctx context.Context, ref domain.SecretRef) error
+}
+
 // SecretRecordView reads canonical secret and service state from the
 // daemon's local event store (never PostgreSQL).
 type SecretRecordView interface {
@@ -77,6 +86,7 @@ type SecretIntentHandler struct {
 	servicePubkey nostr.PubKey
 	store         secretstore.SecretStore
 	records       SecretRecordView
+	storeIndex    SecretStoreIndex
 	publisher     SecretIntentPublisher
 	status        *IntentStatusPublisher
 	logger        *zap.Logger
@@ -93,6 +103,7 @@ type SecretIntentHandlerConfig struct {
 	ServicePubkey nostr.PubKey
 	Store         secretstore.SecretStore
 	Records       SecretRecordView
+	StoreIndex    SecretStoreIndex
 	Publisher     SecretIntentPublisher
 	Status        *IntentStatusPublisher
 	Logger        *zap.Logger
@@ -112,6 +123,7 @@ func NewSecretIntentHandler(cfg SecretIntentHandlerConfig) *SecretIntentHandler 
 		servicePubkey: cfg.ServicePubkey,
 		store:         cfg.Store,
 		records:       cfg.Records,
+		storeIndex:    cfg.StoreIndex,
 		publisher:     cfg.Publisher,
 		status:        cfg.Status,
 		logger:        logger.Named("secret-intent"),
@@ -259,19 +271,6 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 	if err != nil {
 		return fmt.Errorf("parse secret intent content: %w", err)
 	}
-	meta, err := h.store.Inspect(ctx, ref.CredentialID)
-	if err != nil {
-		return fmt.Errorf("check credential %s: %w", ref.CredentialID, err)
-	}
-	switch {
-	case meta.Status == secretstore.StatusRevoked:
-		return fmt.Errorf("check credential %s: %w", ref.CredentialID, secretstore.ErrRevoked)
-	case meta.Status == secretstore.StatusExpired:
-		return fmt.Errorf("check credential %s: %w", ref.CredentialID, secretstore.ErrExpired)
-	case meta.Version != ref.Version:
-		return fmt.Errorf("check credential %s: %w: active version is %d, the intent pins %d", ref.CredentialID, secretstore.ErrVersionMismatch, meta.Version, ref.Version)
-	}
-
 	existing, err := h.records.CurrentSecretRef(ctx, desired.ID)
 	if err != nil {
 		return fmt.Errorf("read canonical secret %s: %w", desired.ID, err)
@@ -313,15 +312,35 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 	if orgID != intent.OrgID.String() {
 		return fmt.Errorf("service %s does not belong to org %s", next.ServiceID, intent.OrgID)
 	}
+	// The credential must be this org's and this service's: the store holds
+	// every tenant's credentials under one owner and checks the label
+	// namespace. Errors name no credential id: status events are public.
+	scope := secretstore.Scope{OrgID: intent.OrgID, ServiceID: next.ServiceID}
+	meta, err := h.store.Inspect(ctx, ref.CredentialID, scope)
+	if err != nil {
+		return fmt.Errorf("check credential: %w", err)
+	}
+	switch {
+	case meta.Status == secretstore.StatusRevoked:
+		return fmt.Errorf("check credential: %w", secretstore.ErrRevoked)
+	case meta.Status == secretstore.StatusExpired:
+		return fmt.Errorf("check credential: %w", secretstore.ErrExpired)
+	case meta.Version != ref.Version:
+		return fmt.Errorf("check credential: %w: active version is %d, the intent pins %d", secretstore.ErrVersionMismatch, meta.Version, ref.Version)
+	}
 	next.EncryptionMethod = ""
 	next.CredentialRef = &ref
-	if h.registry != nil && existing != nil && existing.CredentialRef == nil {
-		// The secret moves to the store. Its legacy sealed value passed
-		// through a compromised path and must not stay readable, so it goes
-		// first: if the publish below fails, the secret is unreadable until
-		// the intent is retried, never readable with the old value.
-		if err := h.registry.Delete(ctx, next.ID); err != nil {
-			return fmt.Errorf("remove legacy value of secret %s: %w", next.ID, err)
+	if h.registry != nil {
+		// With PostgreSQL the index row becomes a value-less marker and any
+		// legacy ciphertext for this id is scrubbed, whatever the canonical
+		// record says. It goes first: if the publish below fails, the secret
+		// is unreadable until the intent is retried, never readable with a
+		// value that passed through a compromised path.
+		if h.storeIndex == nil {
+			return fmt.Errorf("the PostgreSQL secret index cannot record store-backed secrets")
+		}
+		if err := h.storeIndex.MarkStoreBacked(ctx, next); err != nil {
+			return fmt.Errorf("index secret %s as store-backed: %w", next.ID, err)
 		}
 	}
 	if err := h.publisher.PublishSecretRef(ctx, next); err != nil {
@@ -329,7 +348,6 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 	}
 	h.logger.Info("secret reference applied via intent",
 		zap.String("secret_id", next.ID.String()),
-		zap.String("credential_id", ref.CredentialID),
 		zap.Int("credential_version", ref.Version),
 		zap.String("intent_id", intent.IntentID),
 	)

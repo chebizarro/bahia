@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -142,6 +143,9 @@ func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
+	if secret.EncryptionMethod == domain.EncryptionStoreRef {
+		return nil, domain.SecretInStoreError(secret.ID, secret.Name)
+	}
 	value, err := h.encryptor.DecryptStored(secret.ID, secret.Version, secret.EncryptedValue, secret.EncryptionMethod)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decrypt secret")
@@ -159,7 +163,17 @@ func (h *EncryptedRouteHandlers) revealStoredSecret(ctx context.Context, service
 	if h.secretStore == nil {
 		return nil, fmt.Errorf("secret %s is held by the secret store, which is not configured", ref.ID)
 	}
-	value, err := h.secretStore.Resolve(ctx, *ref.CredentialRef)
+	// The credential must belong to this secret's org and service; the
+	// store checks the credential's label against that scope.
+	orgID, err := h.secretRecords.ServiceOrgID(ctx, serviceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the secret's organization")
+	}
+	org, err := uuid.Parse(orgID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the secret's organization")
+	}
+	value, err := h.secretStore.Resolve(ctx, *ref.CredentialRef, secretstore.Scope{OrgID: org, ServiceID: serviceID})
 	if err != nil {
 		h.logger.Warn("secret store refused reveal", zap.String("secret_id", ref.ID.String()), zap.Error(err))
 		return nil, fmt.Errorf("secret store could not release secret %s: %w", ref.ID, err)
@@ -321,6 +335,11 @@ func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent
 		}
 		for i := range versions {
 			value, err := h.encryptor.DecryptStored(versions[i].SecretID, versions[i].Version, versions[i].EncryptedValue, versions[i].EncryptionMethod)
+			if errors.Is(err, domain.ErrSecretInStore) {
+				// Redaction cannot know a value it cannot read: refuse the
+				// logs rather than return them unredacted.
+				return err
+			}
 			if err != nil {
 				return fmt.Errorf("decrypt referenced secret")
 			}

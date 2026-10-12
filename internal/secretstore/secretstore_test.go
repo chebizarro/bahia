@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -56,4 +57,30 @@ func TestValueZeroizeOverwritesAndRedacts(t *testing.T) {
 		t.Fatal("Bytes after Zeroize must be nil")
 	}
 	v.Zeroize() // idempotent
+}
+
+func TestScopeAdmitsOnlyItsLabelNamespace(t *testing.T) {
+	org, svc := uuid.New(), uuid.New()
+	scope := Scope{OrgID: org, ServiceID: svc}
+	if got := scope.LabelPrefix(); got != org.String()+"/"+svc.String()+"/" {
+		t.Fatalf("LabelPrefix = %q", got)
+	}
+	if !scope.Admits(org.String() + "/" + svc.String() + "/DB_PASSWORD") {
+		t.Fatal("the scope's own label refused")
+	}
+	for name, label := range map[string]string{
+		"bare prefix":      scope.LabelPrefix(),
+		"other service":    org.String() + "/" + uuid.NewString() + "/DB_PASSWORD",
+		"other org":        uuid.NewString() + "/" + svc.String() + "/DB_PASSWORD",
+		"unscoped":         "DB_PASSWORD",
+		"prefix lookalike": org.String() + "/" + svc.String() + "x/DB_PASSWORD",
+		"empty":            "",
+	} {
+		if scope.Admits(label) {
+			t.Errorf("%s: admitted %q", name, label)
+		}
+	}
+	if (Scope{}).Admits("00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/x") {
+		t.Fatal("an empty scope admits nothing")
+	}
 }

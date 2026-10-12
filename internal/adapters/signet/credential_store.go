@@ -31,9 +31,23 @@ import (
 // lets the relay filter out live replies.
 const signetReplyWindow = 49 * time.Hour
 
+// maxReplyContent bounds a gift wrap's content before any cryptography: a
+// NIP-44 payload of the largest credential Signet delivers (1 MiB), sealed
+// twice, stays well below it.
+const maxReplyContent = 4 << 20
+
+const (
+	defaultReconnectMin = time.Second
+	defaultReconnectMax = time.Minute
+)
+
 // signetCredentialIDPattern is Signet's credential id: "cred_" and the hex
 // BLAKE2b digest of (owner, type, label) (signet_secret_id_generate).
 var signetCredentialIDPattern = regexp.MustCompile(`^cred_[0-9a-f]{64}$`)
+
+// errReplySubscriptionDown marks requests refused while the reply
+// subscription has not caught up.
+var errReplySubscriptionDown = errors.New("Signet reply subscription is not caught up")
 
 // CredentialStoreConfig configures the Signet-backed secret store.
 type CredentialStoreConfig struct {
@@ -48,6 +62,10 @@ type CredentialStoreConfig struct {
 	Owner string
 	// RequestTimeout bounds each management round trip.
 	RequestTimeout time.Duration
+	// ReconnectMin and ReconnectMax bound the exponential backoff before the
+	// reply subscription is reopened after it ended; zero uses 1s and 1m.
+	ReconnectMin time.Duration
+	ReconnectMax time.Duration
 	// ClosedRetryBudget is nostr.closed_retry_budget; 0 keeps the default.
 	ClosedRetryBudget int
 	// OutboundAdmission gates every gift wrap and NIP-42 AUTH; nil uses the
@@ -57,23 +75,27 @@ type CredentialStoreConfig struct {
 
 // CredentialStore implements secretstore.SecretStore over Signet's
 // gift-wrapped ContextVM management plane (credential/inspect,
-// credential/deliver, credential/list). One long-lived subscription receives
+// credential/deliver, credential/list). One supervised subscription receives
 // every reply addressed to the requester; replies are matched to callers by
 // JSON-RPC id. See docs/architecture/secret-store.md.
 type CredentialStore struct {
-	signetPK nostr.PubKey
-	clientSK nostr.SecretKey
-	clientPK nostr.PubKey
-	owner    string
-	timeout  time.Duration
-	pool     *nostrpool.RelayPool
-	logger   *zap.Logger
-	cancel   context.CancelFunc
-	done     chan struct{}
+	signetPK     nostr.PubKey
+	clientSK     nostr.SecretKey
+	clientPK     nostr.PubKey
+	owner        string
+	timeout      time.Duration
+	reconnectMin time.Duration
+	reconnectMax time.Duration
+	pool         *nostrpool.RelayPool
+	logger       *zap.Logger
+	cancel       context.CancelFunc
+	done         chan struct{}
 
 	mu       sync.Mutex
 	pending  map[string]chan signetJSONRPCResponse
-	stopped  error
+	ready    chan struct{} // closed while the reply subscription is caught up
+	subErr   error         // why the subscription is not caught up
+	everDown bool          // a subscription ended at least once
 	lastAt   time.Time
 	lastErr  error
 	everDone bool
@@ -81,9 +103,10 @@ type CredentialStore struct {
 
 var _ secretstore.SecretStore = (*CredentialStore)(nil)
 
-// OpenCredentialStore validates cfg and opens the reply subscription. It does
-// not wait for Signet: the daemon starts while Signet is down, and every
-// operation fails closed with secretstore.ErrUnavailable until it answers.
+// OpenCredentialStore validates cfg and starts the reply subscription. It
+// does not wait for Signet: the daemon starts while Signet is down, and every
+// operation fails closed with secretstore.ErrUnavailable until the
+// subscription has caught up and Signet answers.
 func OpenCredentialStore(ctx context.Context, cfg CredentialStoreConfig, logger *zap.Logger) (*CredentialStore, error) {
 	if logger == nil {
 		logger = zap.NewNop()
@@ -103,6 +126,9 @@ func OpenCredentialStore(ctx context.Context, cfg CredentialStoreConfig, logger 
 	if cfg.RequestTimeout <= 0 {
 		return nil, fmt.Errorf("signet secret store: request timeout must be positive")
 	}
+	if cfg.ReconnectMin < 0 || cfg.ReconnectMax < 0 {
+		return nil, fmt.Errorf("signet secret store: reconnect backoff must not be negative")
+	}
 	clientPK := cfg.ClientKey.Public()
 	if clientPK == cfg.SignetPubkey {
 		return nil, fmt.Errorf("signet secret store: client key must not be Signet's own key")
@@ -115,35 +141,33 @@ func OpenCredentialStore(ctx context.Context, cfg CredentialStoreConfig, logger 
 		opts = append(opts, nostrpool.WithRetryableClosedBudget(cfg.ClosedRetryBudget))
 	}
 	named := logger.Named("signet-secret-store")
-	pool := nostrpool.NewRelayPool(cfg.Relays, named, opts...)
-	subCtx, cancel := context.WithCancel(ctx)
-	// One subscription for the store's lifetime. Replies are backdated by up
-	// to two days, so the since bound must reach that far back; on a reissue
-	// after a dropped connection the resume cursor keeps the same reach, and
-	// the pool's dedupe absorbs replays.
-	sub, err := pool.SubscribeWithOptions(subCtx, []nostr.Filter{{
-		Kinds: []nostr.Kind{signetKindGiftWrap},
-		Tags:  nostr.TagMap{"p": []string{clientPK.Hex()}},
-		Since: nostr.Timestamp(time.Now().Add(-signetReplyWindow).Unix()),
-	}}, nostrpool.SubscribeOptions{AwaitUnavailableRelays: true, ResumeOverlap: signetReplyWindow})
-	if err != nil {
-		cancel()
-		pool.Close()
-		return nil, fmt.Errorf("signet secret store: subscribe to replies: %w", err)
-	}
 	s := &CredentialStore{
-		signetPK: cfg.SignetPubkey,
-		clientSK: cfg.ClientKey,
-		clientPK: clientPK,
-		owner:    cfg.Owner,
-		timeout:  cfg.RequestTimeout,
-		pool:     pool,
-		logger:   named,
-		cancel:   cancel,
-		done:     make(chan struct{}),
-		pending:  make(map[string]chan signetJSONRPCResponse),
+		signetPK:     cfg.SignetPubkey,
+		clientSK:     cfg.ClientKey,
+		clientPK:     clientPK,
+		owner:        cfg.Owner,
+		timeout:      cfg.RequestTimeout,
+		reconnectMin: cfg.ReconnectMin,
+		reconnectMax: cfg.ReconnectMax,
+		pool:         nostrpool.NewRelayPool(cfg.Relays, named, opts...),
+		logger:       named,
+		done:         make(chan struct{}),
+		pending:      make(map[string]chan signetJSONRPCResponse),
+		ready:        make(chan struct{}),
+		subErr:       errors.New("waiting for the first EOSE"),
 	}
-	go s.readReplies(subCtx, sub)
+	if s.reconnectMin == 0 {
+		s.reconnectMin = defaultReconnectMin
+	}
+	if s.reconnectMax == 0 {
+		s.reconnectMax = defaultReconnectMax
+	}
+	if s.reconnectMax < s.reconnectMin {
+		s.reconnectMax = s.reconnectMin
+	}
+	subCtx, cancel := context.WithCancel(ctx)
+	s.cancel = cancel
+	go s.superviseReplies(subCtx)
 	return s, nil
 }
 
@@ -154,13 +178,17 @@ func (s *CredentialStore) Close() {
 	s.pool.Close()
 }
 
-// LastOutcome reports the last Signet round trip: when it ended and, if
-// Signet was unreachable or refused this requester, why. An answer about the
-// credential itself (not found, revoked, expired, another version) is a
-// healthy round trip. ok is false before the first round trip.
+// LastOutcome reports the store's health: when the last Signet round trip
+// ended and, if the reply subscription is down or Signet was unreachable or
+// refused this requester, why. An answer about the credential itself (not
+// found, revoked, expired, another version, another tenant) is a healthy
+// round trip. ok is false before the first round trip.
 func (s *CredentialStore) LastOutcome() (at time.Time, ok bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.subErr != nil && s.everDown {
+		return s.lastAt, true, fmt.Errorf("%w: %w (%v); reconnecting", secretstore.ErrUnavailable, errReplySubscriptionDown, s.subErr)
+	}
 	return s.lastAt, s.everDone, s.lastErr
 }
 
@@ -174,40 +202,51 @@ func (s *CredentialStore) Health(ctx context.Context) error {
 	return s.call(ctx, "credential/list", map[string]any{"agent_id": s.owner}, &listed)
 }
 
-// Inspect returns payload-free metadata for a credential the owner holds.
-func (s *CredentialStore) Inspect(ctx context.Context, credentialID string) (secretstore.Metadata, error) {
+// Inspect returns payload-free metadata for a credential of scope that the
+// owner holds.
+func (s *CredentialStore) Inspect(ctx context.Context, credentialID string, scope secretstore.Scope) (secretstore.Metadata, error) {
 	if !signetCredentialIDPattern.MatchString(credentialID) {
 		return secretstore.Metadata{}, fmt.Errorf("%w: Signet credential ids are cred_ and 64 hex characters", secretstore.ErrInvalidRef)
+	}
+	if scope.OrgID == [16]byte{} || scope.ServiceID == [16]byte{} {
+		return secretstore.Metadata{}, fmt.Errorf("%w: a credential scope needs an org and a service", secretstore.ErrDenied)
 	}
 	var raw signetCredentialMetadata
 	if err := s.call(ctx, "credential/inspect", map[string]any{"credential_id": credentialID}, &raw); err != nil {
 		return secretstore.Metadata{}, err
 	}
 	if raw.CredentialID != credentialID {
-		return secretstore.Metadata{}, fmt.Errorf("%w: Signet inspected credential %q, not %q", secretstore.ErrUnavailable, raw.CredentialID, credentialID)
+		return secretstore.Metadata{}, fmt.Errorf("%w: Signet inspected another credential", secretstore.ErrUnavailable)
 	}
 	if raw.AgentID != s.owner {
 		// Signet delivers only the owner's credentials to this requester;
 		// any other owner is unresolvable here.
 		return secretstore.Metadata{}, fmt.Errorf("%w: credential is not owned by %q", secretstore.ErrDenied, s.owner)
 	}
+	if !scope.Admits(raw.Label) {
+		// One owner holds every tenant's credentials: the label is the
+		// tenant binding. The other tenant's label is never echoed.
+		return secretstore.Metadata{}, fmt.Errorf("%w: credential is not labelled %s<name>", secretstore.ErrDenied, scope.LabelPrefix())
+	}
 	return raw.metadata()
 }
 
-// Resolve fetches the pinned version under a one-use Signet delivery lease.
-// credential/deliver always releases the active version and does not report
-// which one, so the delivery is bracketed by two metadata reads: rotation
+// Resolve fetches the pinned version of a credential of scope under a
+// one-use Signet delivery lease. The delivery is preceded by a metadata read
+// (owner, tenant label, status, version) and asks for expected_version. A
+// Signet that reports the delivered version settles the pin in that reply;
+// otherwise a second metadata read brackets the delivery: rotation
 // increments the version atomically and never reuses one, so equal versions
 // before and after prove the delivered value is that version.
-func (s *CredentialStore) Resolve(ctx context.Context, ref domain.SecretCredentialRef) (*secretstore.Value, error) {
+func (s *CredentialStore) Resolve(ctx context.Context, ref domain.SecretCredentialRef, scope secretstore.Scope) (*secretstore.Value, error) {
 	if err := secretstore.ValidateRef(ref); err != nil {
 		return nil, err
 	}
-	if err := s.requireActiveVersion(ctx, ref); err != nil {
+	if err := s.requireActiveVersion(ctx, ref, scope); err != nil {
 		return nil, err
 	}
 	var delivered signetDelivery
-	if err := s.call(ctx, "credential/deliver", map[string]any{"agent_id": s.owner, "credential_id": ref.CredentialID}, &delivered); err != nil {
+	if err := s.call(ctx, "credential/deliver", map[string]any{"agent_id": s.owner, "credential_id": ref.CredentialID, "expected_version": ref.Version}, &delivered); err != nil {
 		return nil, err
 	}
 	payload, leaseExpiresAt, err := delivered.open(ref.CredentialID, s.owner)
@@ -215,15 +254,22 @@ func (s *CredentialStore) Resolve(ctx context.Context, ref domain.SecretCredenti
 		return nil, err
 	}
 	value := secretstore.NewValue(payload, leaseExpiresAt)
-	if err := s.requireActiveVersion(ctx, ref); err != nil {
+	if delivered.Version != nil {
+		if *delivered.Version != ref.Version {
+			value.Zeroize()
+			return nil, fmt.Errorf("%w: Signet delivered version %d, reference pins %d", secretstore.ErrVersionMismatch, *delivered.Version, ref.Version)
+		}
+		return value, nil
+	}
+	if err := s.requireActiveVersion(ctx, ref, scope); err != nil {
 		value.Zeroize()
 		return nil, err
 	}
 	return value, nil
 }
 
-func (s *CredentialStore) requireActiveVersion(ctx context.Context, ref domain.SecretCredentialRef) error {
-	meta, err := s.Inspect(ctx, ref.CredentialID)
+func (s *CredentialStore) requireActiveVersion(ctx context.Context, ref domain.SecretCredentialRef, scope secretstore.Scope) error {
+	meta, err := s.Inspect(ctx, ref.CredentialID, scope)
 	if err != nil {
 		return err
 	}
@@ -246,6 +292,20 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
+	// A request is only sent once the reply subscription has caught up, so
+	// its reply cannot fall in a gap.
+	s.mu.Lock()
+	ready := s.ready
+	s.mu.Unlock()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		s.mu.Lock()
+		reason := s.subErr
+		s.mu.Unlock()
+		return fmt.Errorf("%w: %w (%v)", secretstore.ErrUnavailable, errReplySubscriptionDown, reason)
+	}
+
 	idBytes := make([]byte, 16)
 	if _, err := rand.Read(idBytes); err != nil {
 		return fmt.Errorf("signet secret store: request id: %w", err)
@@ -253,11 +313,6 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	id := hex.EncodeToString(idBytes)
 	replies := make(chan signetJSONRPCResponse, 1)
 	s.mu.Lock()
-	if s.stopped != nil {
-		stopped := s.stopped
-		s.mu.Unlock()
-		return fmt.Errorf("%w: %v", secretstore.ErrUnavailable, stopped)
-	}
 	s.pending[id] = replies
 	s.mu.Unlock()
 	defer func() {
@@ -361,29 +416,90 @@ func (s *CredentialStore) wrapRequest(id, method string, params map[string]any) 
 	return gift, nil
 }
 
-// readReplies unwraps every gift wrap addressed to the requester and hands a
-// reply to the caller waiting on its JSON-RPC id. Gift wraps that do not open
-// as a Signet-sealed reply, and replies nobody waits for (history, or a call
-// that already timed out), are dropped.
-func (s *CredentialStore) readReplies(ctx context.Context, sub *nostrpool.MergedSubscription) {
+// superviseReplies keeps one reply subscription open for the store's
+// lifetime and reopens it with exponential backoff whenever it ends (every
+// relay refused it for good, or left the pool).
+func (s *CredentialStore) superviseReplies(ctx context.Context) {
 	defer close(s.done)
+	backoff := s.reconnectMin
+	for {
+		caughtUp, err := s.readReplies(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		s.setDown(err)
+		s.logger.Warn("Signet reply subscription ended; reconnecting", zap.Error(err), zap.Duration("backoff", backoff))
+		if caughtUp {
+			backoff = s.reconnectMin
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, s.reconnectMax)
+	}
+}
+
+func (s *CredentialStore) setUp() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.subErr != nil {
+		s.subErr = nil
+		close(s.ready)
+	}
+}
+
+func (s *CredentialStore) setDown(reason error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.subErr == nil {
+		s.ready = make(chan struct{})
+	}
+	s.subErr = reason
+	s.everDown = true
+}
+
+// readReplies runs one reply subscription until it ends. The store is ready
+// once a relay has sent EOSE: from then on a reply to a new request is
+// delivered live. Every gift wrap is checked before any cryptography;
+// replies nobody waits for (history, or a call that already timed out) are
+// dropped. caughtUp reports whether this subscription ever reached EOSE.
+func (s *CredentialStore) readReplies(ctx context.Context) (caughtUp bool, err error) {
+	// Replies are backdated by up to two days, so the since bound must reach
+	// that far back; on a reissue after a dropped connection the resume
+	// cursor keeps the same reach, and the pool's dedupe absorbs replays.
+	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{{
+		Kinds: []nostr.Kind{signetKindGiftWrap},
+		Tags:  nostr.TagMap{"p": []string{s.clientPK.Hex()}},
+		Since: nostr.Timestamp(time.Now().Add(-signetReplyWindow).Unix()),
+	}}, nostrpool.SubscribeOptions{AwaitUnavailableRelays: true, ResumeOverlap: signetReplyWindow, ValidateEvent: s.plausibleReply})
+	if err != nil {
+		return false, fmt.Errorf("subscribe to Signet replies: %w", err)
+	}
 	defer sub.Close()
-	defer func() {
-		s.mu.Lock()
-		s.stopped = errors.New("Signet reply subscription ended")
-		s.mu.Unlock()
-	}()
-	closed := sub.Closed
+	eose, closed := sub.RelayEOSE, sub.Closed
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return caughtUp, ctx.Err()
+		case _, ok := <-eose:
+			if !ok {
+				eose = nil
+				continue
+			}
+			if !caughtUp {
+				caughtUp = true
+				s.setUp()
+			}
 		case ev, ok := <-sub.Events:
 			if !ok {
 				if gaveUp := sub.GaveUp(); gaveUp != nil {
-					s.logger.Error("Signet reply subscription ended", zap.Error(gaveUp))
+					return caughtUp, gaveUp
 				}
-				return
+				return caughtUp, errors.New("reply subscription closed")
 			}
 			reply, err := s.openReply(ev)
 			if err != nil {
@@ -393,11 +509,14 @@ func (s *CredentialStore) readReplies(ctx context.Context, sub *nostrpool.Merged
 			s.mu.Lock()
 			waiter := s.pending[reply.ID]
 			s.mu.Unlock()
-			if waiter != nil {
-				select {
-				case waiter <- reply:
-				default:
-				}
+			if waiter == nil {
+				clear(reply.Result)
+				continue
+			}
+			select {
+			case waiter <- reply:
+			default:
+				clear(reply.Result)
 			}
 		case c, ok := <-closed:
 			if !ok {
@@ -409,10 +528,25 @@ func (s *CredentialStore) readReplies(ctx context.Context, sub *nostrpool.Merged
 	}
 }
 
+// plausibleReply runs before any ECDH: a gift wrap addressed to the
+// requester, of bounded size, whose id and ephemeral signature verify.
+func (s *CredentialStore) plausibleReply(ev *nostr.Event) bool {
+	if ev.Kind != signetKindGiftWrap || len(ev.Content) == 0 || len(ev.Content) > maxReplyContent {
+		return false
+	}
+	addressed := false
+	for _, tag := range ev.Tags {
+		if len(tag) >= 2 && tag[0] == "p" && tag[1] == s.clientPK.Hex() {
+			addressed = true
+		}
+	}
+	return addressed && ev.CheckID() && ev.VerifySignature()
+}
+
 func (s *CredentialStore) openReply(gift *nostr.Event) (signetJSONRPCResponse, error) {
 	var none signetJSONRPCResponse
-	if gift.Kind != signetKindGiftWrap {
-		return none, fmt.Errorf("kind %d is not a gift wrap", gift.Kind)
+	if !s.plausibleReply(gift) {
+		return none, fmt.Errorf("not a gift wrap addressed to the requester")
 	}
 	giftKey, err := nip44.GenerateConversationKey(gift.PubKey, s.clientSK)
 	if err != nil {
@@ -437,39 +571,60 @@ func (s *CredentialStore) openReply(gift *nostr.Event) (signetJSONRPCResponse, e
 	if err != nil {
 		return none, fmt.Errorf("open seal: %w", err)
 	}
+	// The decrypted texts are Go strings and cannot be overwritten; the
+	// byte copies made to decode them can.
+	rumorBytes := []byte(rumorJSON)
+	defer clear(rumorBytes)
 	var rumor nostr.Event
-	if err := json.Unmarshal([]byte(rumorJSON), &rumor); err != nil {
+	if err := json.Unmarshal(rumorBytes, &rumor); err != nil {
 		return none, fmt.Errorf("decode rumor: %w", err)
 	}
-	// NIP-59: the rumor's author is the seal's signer.
+	// NIP-59: the rumor's author is the seal's signer; NIP-17: a kind-14
+	// message addressed to the requester.
 	if rumor.PubKey != s.signetPK {
 		return none, fmt.Errorf("rumor author is not Signet")
 	}
+	if rumor.Kind != nostr.KindDirectMessage {
+		return none, fmt.Errorf("rumor kind %d is not a direct message", rumor.Kind)
+	}
+	if tag := rumor.Tags.Find("p"); len(tag) < 2 || tag[1] != s.clientPK.Hex() {
+		return none, fmt.Errorf("rumor is not addressed to the requester")
+	}
+	contentBytes := []byte(rumor.Content)
+	defer clear(contentBytes)
 	var reply signetJSONRPCResponse
-	if err := json.Unmarshal([]byte(rumor.Content), &reply); err != nil {
+	if err := json.Unmarshal(contentBytes, &reply); err != nil {
 		return none, fmt.Errorf("decode JSON-RPC reply: %w", err)
 	}
 	if reply.ID == "" {
+		clear(reply.Result)
 		return none, fmt.Errorf("reply has no id")
 	}
 	return reply, nil
 }
 
 // decodeSignetReply maps a JSON-RPC error onto the secretstore sentinels by
-// Signet's stable reason code (error.data); the message never carries
-// secret material.
+// Signet's stable reason code (error.data). Only the method and the code
+// reach callers, never Signet's free-text message. The raw result is
+// overwritten once decoded.
 func decodeSignetReply(method string, reply signetJSONRPCResponse, out any) error {
+	defer clear(reply.Result)
 	if reply.Error != nil {
 		code := reply.Error.Data
 		var sentinel error
-		switch code {
-		case "not_found", "credential_not_found":
+		switch {
+		case code == "not_found" || code == "credential_not_found":
 			sentinel = secretstore.ErrNotFound
-		case "revoked", "credential_revoked":
+		case code == "revoked" || code == "credential_revoked":
 			sentinel = secretstore.ErrRevoked
-		case "expired", "credential_expired":
+		case code == "expired" || code == "credential_expired":
 			sentinel = secretstore.ErrExpired
-		case "not_owner", "no_capability", "deny_listed", "type_denied", "lease_invalid":
+		case code == "version_mismatch":
+			sentinel = secretstore.ErrVersionMismatch
+		case code == "not_owner" || code == "no_capability" || code == "deny_listed" || code == "type_denied" || code == "lease_invalid" || code == "unauthorized":
+			sentinel = secretstore.ErrDenied
+		case code == "" && reply.Error.Code == -32002:
+			// The requester is not authorized to use the management plane.
 			sentinel = secretstore.ErrDenied
 		default:
 			sentinel = secretstore.ErrUnavailable
@@ -477,7 +632,7 @@ func decodeSignetReply(method string, reply signetJSONRPCResponse, out any) erro
 		if code == "" {
 			code = fmt.Sprintf("code %d", reply.Error.Code)
 		}
-		return fmt.Errorf("%w: Signet %s refused (%s): %s", sentinel, method, code, reply.Error.Message)
+		return fmt.Errorf("%w: Signet %s refused (%s)", sentinel, method, code)
 	}
 	if out == nil {
 		return nil
@@ -537,12 +692,14 @@ func (m signetCredentialMetadata) metadata() (secretstore.Metadata, error) {
 }
 
 // signetDelivery is the credential/deliver result. PayloadB64 stays raw JSON
-// so the base64 text Bahia owns can be overwritten after decoding.
+// so the base64 text Bahia owns can be overwritten after decoding. Version is
+// present when Signet reports the delivered version.
 type signetDelivery struct {
 	CredentialID   string          `json:"credential_id"`
 	AgentID        string          `json:"agent_id"`
 	PayloadB64     json.RawMessage `json:"payload_b64"`
 	LeaseExpiresAt int64           `json:"lease_expires_at"`
+	Version        *int            `json:"version"`
 }
 
 func (d *signetDelivery) open(credentialID, owner string) ([]byte, time.Time, error) {

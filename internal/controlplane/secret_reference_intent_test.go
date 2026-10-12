@@ -74,7 +74,8 @@ type memSecretStore struct {
 	inspected []string
 }
 
-func (s *memSecretStore) Inspect(_ context.Context, id string) (secretstore.Metadata, error) {
+// Inspect enforces the scope on the label like the Signet store does.
+func (s *memSecretStore) Inspect(_ context.Context, id string, scope secretstore.Scope) (secretstore.Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.inspected = append(s.inspected, id)
@@ -85,10 +86,13 @@ func (s *memSecretStore) Inspect(_ context.Context, id string) (secretstore.Meta
 	if !ok {
 		return secretstore.Metadata{}, secretstore.ErrNotFound
 	}
+	if !scope.Admits(meta.Label) {
+		return secretstore.Metadata{}, secretstore.ErrDenied
+	}
 	return meta, nil
 }
 
-func (s *memSecretStore) Resolve(context.Context, domain.SecretCredentialRef) (*secretstore.Value, error) {
+func (s *memSecretStore) Resolve(context.Context, domain.SecretCredentialRef, secretstore.Scope) (*secretstore.Value, error) {
 	return nil, errors.New("the intent handler never resolves values")
 }
 
@@ -113,7 +117,7 @@ func newReferenceFixture(t *testing.T, withRegistry bool) *referenceFixture {
 	credID := "cred_" + strings.Repeat("ab", 32)
 	f := &referenceFixture{
 		canonical: &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{}, serviceOrg: map[uuid.UUID]string{serviceID: testOrgID().String()}},
-		store:     &memSecretStore{creds: map[string]secretstore.Metadata{credID: {CredentialID: credID, Owner: "bahia-vault", Version: 2, Status: secretstore.StatusActive}}},
+		store:     &memSecretStore{creds: map[string]secretstore.Metadata{credID: {CredentialID: credID, Owner: "bahia-vault", Label: testOrgID().String() + "/" + serviceID.String() + "/DB_PASSWORD", Version: 2, Status: secretstore.StatusActive}}},
 		ownerPub:  ownerPub,
 		serviceID: serviceID,
 		credID:    credID,
@@ -124,10 +128,15 @@ func newReferenceFixture(t *testing.T, withRegistry bool) *referenceFixture {
 	if withRegistry {
 		f.repo = newMemSecretRepo()
 		cfg.Registry = f.repo
+		cfg.StoreIndex = f.repo
 		cfg.Encryptor = &testEncryptor{}
 	}
 	f.processor.RegisterHandler("secret", NewSecretIntentHandler(cfg))
 	return f
+}
+
+func (f *referenceFixture) label() string {
+	return testOrgID().String() + "/" + f.serviceID.String() + "/DB_PASSWORD"
 }
 
 func (f *referenceFixture) content(secretID uuid.UUID, version int) map[string]interface{} {
@@ -159,7 +168,7 @@ func TestSecretReferenceIntentPublishesReferenceWithoutPostgres(t *testing.T) {
 
 	// Rotation at the source: the operator re-points the secret to the new
 	// version, guarded by the record's revision.
-	f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Version: 3, Status: secretstore.StatusActive}
+	f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Label: f.label(), Version: 3, Status: secretstore.StatusActive}
 	update := f.content(secretID, 3)
 	update["expected_updated_at"] = ref.UpdatedAt.Format(time.RFC3339Nano)
 	if err := f.process(t, "update", update); err != nil {
@@ -204,7 +213,7 @@ func TestSecretReferenceIntentRejections(t *testing.T) {
 			c["credential_ref"].(map[string]interface{})["version"] = 1
 		}, "active version is 2"},
 		{"revoked", func(f *referenceFixture) {
-			f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Version: 2, Status: secretstore.StatusRevoked}
+			f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Label: f.label(), Version: 2, Status: secretstore.StatusRevoked}
 		}, nil, "revoked"},
 		{"unknown credential", func(f *referenceFixture) { delete(f.store.creds, f.credID) }, nil, "not found"},
 		{"store unavailable", func(f *referenceFixture) { f.store.err = secretstore.ErrUnavailable }, nil, "unavailable"},
@@ -266,12 +275,10 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	if ref.CredentialRef == nil || ref.EncryptionMethod != "" || ref.Version != 5 {
 		t.Fatalf("record after re-point = %+v", ref)
 	}
-	if row, _ := f.repo.GetByID(context.Background(), secretID); row != nil {
-		t.Fatal("the legacy sealed value must not stay readable after the secret moved to the store")
-	}
+	requireStoreMarker(t, f.repo, secretID)
 
 	// A re-point whose publish fails still retires the compromised value:
-	// the secret is unreadable until the intent is retried.
+	// the index row is a marker before the publish is attempted.
 	other := domain.NewEntityID()
 	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionNIP44, Version: 1, CreatedAt: time.Now().UTC()}
 	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptedValue: []byte("sealed"), Version: 1})
@@ -279,8 +286,55 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	if err := f.process(t, "update", f.content(other, 2)); err == nil {
 		t.Fatal("a failed publish must fail the intent")
 	}
-	if row, _ := f.repo.GetByID(context.Background(), other); row != nil {
-		t.Fatal("a failed re-point left the compromised sealed value readable")
+	requireStoreMarker(t, f.repo, other)
+	f.canonical.publishErr = nil
+
+	// A sealed row with no canonical record (an index the canonical history
+	// lost) is scrubbed by id all the same.
+	orphan := domain.NewEntityID()
+	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: orphan, ServiceID: f.serviceID, Name: "ORPHAN", EncryptedValue: []byte("sealed"), Version: 1})
+	if err := f.process(t, "create", f.content(orphan, 2)); err != nil {
+		t.Fatalf("reference intent for an unindexed id: %v", err)
+	}
+	requireStoreMarker(t, f.repo, orphan)
+}
+
+// requireStoreMarker asserts PostgreSQL holds a value-less marker, so its
+// consumers fail with ErrSecretInStore rather than omit the secret.
+func requireStoreMarker(t *testing.T, repo *memSecretRepo, id uuid.UUID) {
+	t.Helper()
+	row, _ := repo.GetByID(context.Background(), id)
+	if row == nil || row.EncryptionMethod != domain.EncryptionStoreRef || len(row.EncryptedValue) != 0 {
+		t.Fatalf("index row = %+v, want a value-less store-ref marker", row)
+	}
+}
+
+// A credential of another org or another service of the same org is
+// refused even though the store holds it under the same owner.
+func TestSecretReferenceIntentRefusesAnotherTenantsCredential(t *testing.T) {
+	for name, label := range map[string]func(*referenceFixture) string{
+		"another org":               func(*referenceFixture) string { return uuid.NewString() + "/" + uuid.NewString() + "/DB_PASSWORD" },
+		"another service, same org": func(*referenceFixture) string { return testOrgID().String() + "/" + uuid.NewString() + "/DB_PASSWORD" },
+		"another org, same service": func(f *referenceFixture) string {
+			return uuid.NewString() + "/" + f.serviceID.String() + "/DB_PASSWORD"
+		},
+		"unscoped label": func(*referenceFixture) string { return "DB_PASSWORD" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newReferenceFixture(t, false)
+			f.store.creds[f.credID] = secretstore.Metadata{CredentialID: f.credID, Label: label(f), Version: 2, Status: secretstore.StatusActive}
+			secretID := domain.NewEntityID()
+			err := f.process(t, "create", f.content(secretID, 2))
+			if !errors.Is(err, secretstore.ErrDenied) {
+				t.Fatalf("err = %v, want ErrDenied", err)
+			}
+			if strings.Contains(err.Error(), f.credID) {
+				t.Fatalf("the refusal (a public status) names the credential id: %v", err)
+			}
+			if ref, _ := f.canonical.CurrentSecretRef(context.Background(), secretID); ref != nil {
+				t.Fatal("a cross-tenant reference was published")
+			}
+		})
 	}
 }
 

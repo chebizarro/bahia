@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -67,14 +68,37 @@ type Metadata struct {
 	RevokedAt    time.Time
 }
 
+// Scope is the tenant a credential must belong to. One store owner holds
+// every tenant's credentials, so the store releases a credential only when
+// its label is in the scope's namespace, "<org-id>/<service-id>/<name>"
+// (LabelPrefix). Labels are set by whoever imports the credential into the
+// store, which requires store administrator rights, not Bahia org roles.
+type Scope struct {
+	OrgID     uuid.UUID
+	ServiceID uuid.UUID
+}
+
+// LabelPrefix is the label namespace of the scope's credentials.
+func (s Scope) LabelPrefix() string {
+	return s.OrgID.String() + "/" + s.ServiceID.String() + "/"
+}
+
+// Admits reports whether label names a credential of this scope.
+func (s Scope) Admits(label string) bool {
+	prefix := s.LabelPrefix()
+	return s.OrgID != uuid.Nil && s.ServiceID != uuid.Nil && len(label) > len(prefix) && strings.HasPrefix(label, prefix)
+}
+
 // SecretStore resolves and inspects externally held secret values.
+// Implementations enforce scope on every call and fail closed with
+// ErrDenied for a credential outside it.
 type SecretStore interface {
 	// Resolve fetches the value ref pins under a short store-issued lease.
 	// It fails with ErrVersionMismatch unless the delivered value is exactly
 	// ref.Version. The caller owns the Value and must Zeroize it.
-	Resolve(ctx context.Context, ref domain.SecretCredentialRef) (*Value, error)
-	// Inspect returns metadata for one credential this daemon may resolve.
-	Inspect(ctx context.Context, credentialID string) (Metadata, error)
+	Resolve(ctx context.Context, ref domain.SecretCredentialRef, scope Scope) (*Value, error)
+	// Inspect returns metadata for one credential of scope.
+	Inspect(ctx context.Context, credentialID string, scope Scope) (Metadata, error)
 	// Health performs an authenticated, payload-free round trip to the store.
 	Health(ctx context.Context) error
 }

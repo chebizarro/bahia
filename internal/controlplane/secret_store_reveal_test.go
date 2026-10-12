@@ -21,13 +21,19 @@ type resolvingSecretStore struct {
 	value   string
 	lease   time.Duration
 	err     error
+	label   string // the credential's label in the store
 	refs    []domain.SecretCredentialRef
+	scopes  []secretstore.Scope
 	handed  []*secretstore.Value
 	buffers [][]byte
 }
 
-func (s *resolvingSecretStore) Resolve(_ context.Context, ref domain.SecretCredentialRef) (*secretstore.Value, error) {
+func (s *resolvingSecretStore) Resolve(_ context.Context, ref domain.SecretCredentialRef, scope secretstore.Scope) (*secretstore.Value, error) {
 	s.refs = append(s.refs, ref)
+	s.scopes = append(s.scopes, scope)
+	if s.label != "" && !scope.Admits(s.label) {
+		return nil, secretstore.ErrDenied
+	}
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -38,7 +44,7 @@ func (s *resolvingSecretStore) Resolve(_ context.Context, ref domain.SecretCrede
 	return v, nil
 }
 
-func (s *resolvingSecretStore) Inspect(context.Context, string) (secretstore.Metadata, error) {
+func (s *resolvingSecretStore) Inspect(context.Context, string, secretstore.Scope) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrNotFound
 }
 
@@ -49,8 +55,8 @@ func TestRevealSecretResolvesStoreBackedSecretAndZeroizes(t *testing.T) {
 	credRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("ef", 32), Version: 7}
 	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{
 		secretID: {ID: secretID, ServiceID: serviceID, Name: "DB_PASSWORD", Version: 1, CredentialRef: &credRef},
-	}, serviceOrg: map[uuid.UUID]string{}}
-	store := &resolvingSecretStore{value: "s3cr3t-from-signet", lease: time.Minute}
+	}, serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
+	store := &resolvingSecretStore{value: "s3cr3t-from-signet", lease: time.Minute, label: orgID.String() + "/" + serviceID.String() + "/DB_PASSWORD"}
 	services, rbac := encryptedAuthDeps(t, serviceID, orgID, domain.RoleAdmin)
 	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretStore: store, Services: services, RBAC: rbac, Logger: zap.NewNop()})
 	transport, publisher := encryptedRouteTransport(t, h)
@@ -71,6 +77,9 @@ func TestRevealSecretResolvesStoreBackedSecretAndZeroizes(t *testing.T) {
 	}
 	if len(store.refs) != 1 || store.refs[0] != credRef {
 		t.Fatalf("resolved %v, want the pinned reference", store.refs)
+	}
+	if store.scopes[0] != (secretstore.Scope{OrgID: orgID, ServiceID: serviceID}) {
+		t.Fatalf("resolved in scope %+v, want the secret's org and service", store.scopes[0])
 	}
 	for i, b := range store.buffers[0] {
 		if b != 0 {
@@ -114,7 +123,7 @@ func uniqueRevealRequest(t *testing.T, serviceID, secretID uuid.UUID) *nostr.Eve
 func TestRevealSecretStoreBackedRequiresReadPermission(t *testing.T) {
 	serviceID, orgID, secretID := uuid.New(), uuid.New(), uuid.New()
 	credRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("ef", 32), Version: 1}
-	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{secretID: {ID: secretID, ServiceID: serviceID, CredentialRef: &credRef}}, serviceOrg: map[uuid.UUID]string{}}
+	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{secretID: {ID: secretID, ServiceID: serviceID, CredentialRef: &credRef}}, serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
 	store := &resolvingSecretStore{value: "x", lease: time.Minute}
 	services, _ := encryptedAuthDeps(t, serviceID, orgID, domain.RoleAdmin)
 	_, outsider := encryptedAuthDeps(t, serviceID, uuid.New(), domain.RoleAdmin)
@@ -126,5 +135,26 @@ func TestRevealSecretStoreBackedRequiresReadPermission(t *testing.T) {
 	}
 	if len(store.refs) != 0 {
 		t.Fatal("the store was asked for a value before authorization")
+	}
+}
+
+// An org-A secret record that references org B's credential (the store holds
+// both under one owner) reveals nothing.
+func TestRevealSecretRefusesAnotherTenantsCredential(t *testing.T) {
+	serviceID, orgID, secretID := uuid.New(), uuid.New(), uuid.New()
+	credRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("ab", 32), Version: 1}
+	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{secretID: {ID: secretID, ServiceID: serviceID, CredentialRef: &credRef}},
+		serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
+	store := &resolvingSecretStore{value: "org-b-secret", lease: time.Minute, label: uuid.NewString() + "/" + uuid.NewString() + "/DB_PASSWORD"}
+	services, rbac := encryptedAuthDeps(t, serviceID, orgID, domain.RoleAdmin)
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretStore: store, Services: services, RBAC: rbac, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+	transport.HandleEvent(context.Background(), uniqueRevealRequest(t, serviceID, secretID))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error == nil {
+		t.Fatalf("revealed another tenant's credential: %+v", response.Result)
+	}
+	if strings.Contains(response.Error.Message, "org-b-secret") {
+		t.Fatal("the refusal carries the value")
 	}
 }
