@@ -12,11 +12,11 @@ import (
 )
 
 // ErrServiceKeyMaterialRequired is returned by every feature that derives
-// keys from the raw service private key (HKDF, HMAC or SHA-256 over the nsec)
-// when the configured service signer keeps that key outside this process.
-// No signer can serve those derivations; each is blocked until its
-// bahia-cd0wr.4.x migration (4.7 service secrets, 4.8 assistant transcripts,
-// legacy O1 OCK, confidential-state dedupe) replaces the raw-key dependency.
+// keys from the raw service private key (HMAC or SHA-256 over the nsec) when
+// the configured service signer keeps that key outside this process. No
+// signer can serve those derivations; each is blocked until its
+// bahia-cd0wr.4.x migration (4.8 assistant transcripts, legacy O1 OCK,
+// confidential-state dedupe) replaces the raw-key dependency.
 var ErrServiceKeyMaterialRequired = errors.New("service key material required: the configured service signer holds no in-process private key, and this feature derives keys from the raw nsec (blocked on the bahia-cd0wr.4.x raw-key migrations)")
 
 // ServiceKeyMaterialHolder is the optional capability of a service Keyer

@@ -873,7 +873,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				Details: map[string]string{"provider": cfg.EdgeRouting.Provider, "convergence": fmt.Sprintf("%t", edgeRoutingConvergence)}}
 			if !edgeRoutingConvergence {
 				check.Status = HealthStatusWarn
-				check.Message = "edge-route convergence suspended: the provider API token is a secret value held only in the PostgreSQL secret store; route canary observation continues"
+				check.Message = "edge-route convergence suspended: the provider API token is a secret value and no secret store is configured (secret_store.backend); route canary observation continues"
 			}
 			return check
 		})
