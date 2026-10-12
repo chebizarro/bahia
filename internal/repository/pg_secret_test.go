@@ -49,11 +49,21 @@ func TestPgSecretRepositoryRecordSecretAccessAudit(t *testing.T) {
 	}
 
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO secret_access_audit")).
-		WithArgs(audit.ID, audit.SecretID, audit.VersionID, audit.Version, audit.ServiceID, audit.EnvironmentID, string(audit.Operation), string(audit.Outcome), audit.Actor, audit.Reason, audit.RequestID, audit.Error, audit.AccessedAt).
+		WithArgs(audit.ID, audit.SecretID, &audit.VersionID, audit.Version, audit.ServiceID, audit.EnvironmentID, string(audit.Operation), string(audit.Outcome), audit.Actor, audit.Reason, audit.RequestID, audit.Error, audit.AccessedAt).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	if err := repo.RecordSecretAccessAudit(ctx, audit); err != nil {
 		t.Fatalf("RecordSecretAccessAudit: %v", err)
+	}
+
+	// A store-backed resolve has no PostgreSQL version row: NULL.
+	storeBacked := *audit
+	storeBacked.ID, storeBacked.VersionID = uuid.New(), uuid.Nil
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO secret_access_audit")).
+		WithArgs(storeBacked.ID, storeBacked.SecretID, (*uuid.UUID)(nil), storeBacked.Version, storeBacked.ServiceID, storeBacked.EnvironmentID, string(storeBacked.Operation), string(storeBacked.Outcome), storeBacked.Actor, storeBacked.Reason, storeBacked.RequestID, storeBacked.Error, storeBacked.AccessedAt).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	if err := repo.RecordSecretAccessAudit(ctx, &storeBacked); err != nil {
+		t.Fatalf("RecordSecretAccessAudit without a version row: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

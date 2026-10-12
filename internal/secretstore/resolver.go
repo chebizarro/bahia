@@ -72,24 +72,26 @@ func (r *Resolver) Resolve(ctx context.Context, secretID uuid.UUID) (Resolved, e
 	return Resolved{Secret: secret, Value: value}, nil
 }
 
-// ResolveAll resolves distinct secrets for one operation, all or nothing:
-// on failure no value is returned and the error names the failing secret.
+// ResolveAll resolves secrets for one operation, all or nothing: on failure
+// no value is returned and the error names the failing secret. Each distinct
+// secret is resolved once; a repeated id gets its own copy of the value, in
+// input order, so every Value can be zeroized independently.
 func (r *Resolver) ResolveAll(ctx context.Context, secretIDs []uuid.UUID) ([]Resolved, error) {
 	if len(secretIDs) == 0 {
 		return nil, nil
 	}
-	seen := make(map[uuid.UUID]struct{}, len(secretIDs))
+	first := make(map[uuid.UUID]int, len(secretIDs))
 	secrets := make([]domain.SecretRef, 0, len(secretIDs))
 	reqs := make([]Request, 0, len(secretIDs))
 	for _, id := range secretIDs {
-		if _, dup := seen[id]; dup {
-			return nil, fmt.Errorf("secret %s is requested twice", id)
+		if _, dup := first[id]; dup {
+			continue
 		}
-		seen[id] = struct{}{}
 		secret, req, err := r.target(ctx, id)
 		if err != nil {
 			return nil, err
 		}
+		first[id] = len(secrets)
 		secrets = append(secrets, secret)
 		reqs = append(reqs, req)
 	}
@@ -105,9 +107,16 @@ func (r *Resolver) ResolveAll(ctx context.Context, secretIDs []uuid.UUID) ([]Res
 		ZeroizeAll(values)
 		return nil, fmt.Errorf("%w: the store returned %d values for %d secrets", ErrUnavailable, len(values), len(reqs))
 	}
-	out := make([]Resolved, len(values))
-	for i := range values {
-		out[i] = Resolved{Secret: secrets[i], Value: values[i]}
+	out := make([]Resolved, len(secretIDs))
+	used := make([]bool, len(values))
+	for i, id := range secretIDs {
+		j := first[id]
+		value := values[j]
+		if used[j] {
+			value = NewValue(append([]byte(nil), values[j].Bytes()...), values[j].LeaseExpiresAt())
+		}
+		used[j] = true
+		out[i] = Resolved{Secret: secrets[j], Value: value}
 	}
 	return out, nil
 }

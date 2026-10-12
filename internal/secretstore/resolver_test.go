@@ -119,9 +119,17 @@ func TestResolverResolvesCanonicalReferencesInTheServicesScope(t *testing.T) {
 	if _, err := r.Resolve(t.Context(), uuid.New()); !errors.Is(err, secretstore.ErrNoRecord) {
 		t.Fatalf("missing record = %v, want ErrNoRecord", err)
 	}
-	if _, err := r.ResolveAll(t.Context(), []uuid.UUID{second.ID, second.ID}); err == nil {
-		t.Fatal("duplicate ids were accepted")
+	// A repeated id is resolved once and each occurrence owns its value.
+	batches := len(store.batches)
+	dup, err := r.ResolveAll(t.Context(), []uuid.UUID{second.ID, storeBacked.ID, second.ID})
+	if err != nil || len(dup) != 3 || len(store.batches[batches]) != 2 {
+		t.Fatalf("repeated ids = %d values, batch %v, %v", len(dup), store.batches[batches:], err)
 	}
+	dup[0].Value.Zeroize()
+	if string(dup[2].Value.Bytes()) != "cred_b@1" || dup[2].Secret.ID != second.ID || dup[1].Secret.ID != storeBacked.ID {
+		t.Fatal("a repeated id shares its value with another occurrence")
+	}
+	secretstore.ZeroizeResolved(dup)
 
 	// Store failures name the failing secret.
 	store.fail = map[string]error{"cred_b": secretstore.ErrRevoked}
