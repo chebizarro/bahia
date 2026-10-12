@@ -164,6 +164,10 @@ func (s *AssistantExecutionStore) Append(ctx context.Context, execution domain.A
 }
 
 func (s *AssistantExecutionStore) sealCheckpoint(ctx context.Context, execution domain.AssistantExecution, previous string, plaintext []byte) (nostr.Event, error) {
+	return s.sealCheckpointAt(ctx, execution, previous, plaintext, nostr.Timestamp(s.now().UTC().Unix()))
+}
+
+func (s *AssistantExecutionStore) sealCheckpointAt(ctx context.Context, execution domain.AssistantExecution, previous string, plaintext []byte, createdAt nostr.Timestamp) (nostr.Event, error) {
 	key, err := s.keys.ActiveTranscriptKey(ctx)
 	if err != nil {
 		return nostr.Event{}, err
@@ -190,7 +194,7 @@ func (s *AssistantExecutionStore) sealCheckpoint(ctx context.Context, execution 
 	if err != nil {
 		return nostr.Event{}, err
 	}
-	ev := nostr.Event{Kind: nostr.Kind(domain.AssistantExecutionCheckpointKind), CreatedAt: nostr.Timestamp(s.now().UTC().Unix()), Tags: checkpointTags(execution, previous, key), Content: string(content)}
+	ev := nostr.Event{Kind: nostr.Kind(domain.AssistantExecutionCheckpointKind), CreatedAt: createdAt, Tags: checkpointTags(execution, previous, key), Content: string(content)}
 	if err = signGoNostrEvent(ctx, s.signer, &ev); err != nil {
 		return nostr.Event{}, fmt.Errorf("sign assistant checkpoint: %w", err)
 	}

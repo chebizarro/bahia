@@ -9,6 +9,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
@@ -119,4 +120,29 @@ func (r *systemKeysRunner) attemptCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.attempts
+}
+
+// ResolveSystemKeys opens the configured secret store and resolves every
+// configured system key once, for offline operator tools. The caller must
+// call release, which zeroizes the keys and closes the store.
+func ResolveSystemKeys(ctx context.Context, cfg *config.Config, servicePubkey string, admission *nostrout.Admission, logger *zap.Logger) (ring *secretstore.Keyring, release func(), err error) {
+	ring, err = systemKeyring(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := openSecretStore(ctx, cfg, servicePubkey, admission, logger)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configuring secret store: %w", err)
+	}
+	if store == nil {
+		return nil, nil, fmt.Errorf("%w: secret_store.backend is not set", secretstore.ErrNotConfigured)
+	}
+	if err := ring.Load(ctx, store); err != nil {
+		store.Close()
+		return nil, nil, err
+	}
+	return ring, func() {
+		ring.Zeroize()
+		store.Close()
+	}, nil
 }
