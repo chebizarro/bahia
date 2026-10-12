@@ -54,7 +54,9 @@ Important defaults:
 | `server.host`, `server.port` | `127.0.0.1`, `8080` |
 | `db.host`, `db.port`, `db.user`, `db.name` | `localhost`, `5432`, `bahia`, `bahia` |
 | `db.password`, `db.sslmode` | empty, `require` |
-| `nostr.publish_enabled`, `publish_quorum` | `true`, `1` |
+| `nostr.publish_enabled`, `publish_quorum` | `true`, `1` (at most the number of service write relays; `-1` = all) |
+| `nostr.controlled_relays` | empty = the service, ContextVM and browser relays; the sidecar URLs are always controlled |
+| `nostr.allowed_public_relays` | empty (public relays are rejected in every relay list) |
 | `nostr.closed_retry_budget` | `5` |
 | `nostr.signer.method` | empty = `local` when `nostr.private_key` is set; `nip46` or `nip55l` keep the service key in a remote signer, see the [service signer runbook](runbooks/service-signer.md) |
 | `nostr.outbound.kill_switch_file` | empty (also `BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE`) |
@@ -118,6 +120,10 @@ nostr:
 `service_relays` is the daemon publication/backfill set. When it is empty,
 `nostr.relays` supplies that list. Browser and ContextVM sets are advertised
 by discovery; the sidecar URL is added to the ContextVM policy when enabled.
+These lists are the bootstrap topology: once the daemon receives the
+canonical relay settings, those govern. Every control-plane relay must be in
+`nostr.controlled_relays` and none may be a public relay; see the
+[relay configuration runbook](runbooks/relay-configuration.md).
 See [control planes](control-planes.md) and the
 [relay sidecar reference](relay-sidecar.md).
 

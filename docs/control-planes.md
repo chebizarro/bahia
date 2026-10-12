@@ -73,6 +73,13 @@ no usable signer for are excluded from that operation and the operation fails
 if the remaining relays cannot satisfy its success rule
 (`nostr.relay_auth_unavailable: exclude_and_fail`, the only value).
 
+The canonical relay settings (`30900` `d=relay-settings:operator`) govern
+these purposes once received; the configuration keys above are the bootstrap
+topology. Service, ContextVM and browser relays must be in
+`nostr.controlled_relays` and never public relays, and the daemon refuses to
+put a service-signed control-plane event on any other relay
+([relay configuration](runbooks/relay-configuration.md)).
+
 Readiness tracks relay health against `nostr.relay_quorum`
 (`full_min_healthy: 2`, `degraded_min_healthy: 1`, `emergency_min_healthy: 1`
 by operating `mode`).

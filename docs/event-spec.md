@@ -498,7 +498,7 @@ events durably unless `nostr.sidecar.event_retention` is set.
 |---|---|
 | `11316` | Server announcement: `schema`, `registries`, `versions`, `observed_deployments`, `control_plane` (`wire_version`, `capabilities`, kind map, advertised ContextVM methods), `blossom`, `runtime`, `oci`, `nostr.trusted_relay_monitor_pubkeys`, `assistant`, and `features` (`oci`, `harbor`, `blossom`, `hiveci`, `cashu`, `telemetry`, `notifications`, `auth`, `relay_sidecar`, `relay_read_models`, `encrypted_nostr_requests`, `llm_control_plane`, `direct_nostr_http_auth`, `mcp_transport`, `publish_enabled`) |
 | `11317`–`11320` | Tools, resources, resource templates, prompts |
-| `30002` | Relay sets: `d=bahia-browser-v1` (`nostr.browser_relays`), `d=bahia-contextvm-v1` (`nostr.contextvm_relays`, falling back to browser relays), `d=bahia-service-v1` (`nostr.service_relays`) |
+| `30002` | Relay sets from the relay policy in force (canonical relay settings once received, static config until then; published after the relay settings catch up): `d=bahia-browser-v1` (browser relays), `d=bahia-contextvm-v1` (ContextVM relays, falling back to browser relays), `d=bahia-service-v1` (service relays), `d=bahia-nip34-v1` (NIP-34 relays, when set) |
 | `10002` | Service NIP-65 list: ContextVM relays as `read`, service relays as `write`; advisory only |
 | `10050` | DM relay list for `nostr.dm_relay_lists` entries with `identity: service`; never inferred |
 

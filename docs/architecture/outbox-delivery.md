@@ -58,6 +58,26 @@ can retry the same signed event ID. Exhaustion alone never signs a rejection
 because one relay may already hold the event; MCP reports acceptance only
 after both the run and final-status proofs exist.
 
+## Write relays and quorum
+
+A publisher's **write relays** are the relays each delivery round targets and
+counts `nostr.publish_quorum` against; they are read every round, so a relay
+policy change applies to pending entries on their next round. The service
+publisher's write relays are the service write relays of the effective relay
+policy (`NostrConfig.ServiceWriteRelays`: the canonical service relays once
+received, the static ones until then; the sidecar counted once, by its
+backend URL). Loom relays share the service pool but are never write relays,
+so they can neither receive service publications nor satisfy the quorum. A
+quorum above 1 needs at least that many service write relays: configuration
+with fewer fails validation and canonical relay settings with fewer are
+refused ([relay configuration](../runbooks/relay-configuration.md)).
+
+Every relay pool also refuses to write a service-signed control-plane event
+to a relay outside `nostr.controlled_relays`; that relay's result is a local
+`blocked:` rejection, permanent for the entry like a relay-sent one. With the
+effective policy validated against the same set, the guard does not fire for
+a publisher's own write relays.
+
 ## Abandonment: two cases, decided by who was told
 
 1. **Abandoned in the caller's round.** The caller receives

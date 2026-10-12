@@ -94,7 +94,9 @@ Do not model ordinary state reads as ContextVM calls. Subscribe to canonical sta
 
 ## Relays and discovery
 
-The service publishes NIP-51 kind-`30002` relay sets named `bahia-browser-v1`, `bahia-contextvm-v1`, and `bahia-service-v1`, plus an advisory NIP-65 kind-`10002` list. Clients start from configured bootstrap relays and trusted service pubkeys, then follow the signed relay sets.
+The service publishes NIP-51 kind-`30002` relay sets named `bahia-browser-v1`, `bahia-contextvm-v1`, `bahia-service-v1` (and `bahia-nip34-v1` when configured), plus an advisory NIP-65 kind-`10002` list. Clients start from configured bootstrap relays and trusted service pubkeys, then follow the signed relay sets.
+
+The relay sets list the relays in force: the canonical relay settings once the daemon has received them, the static `nostr.*_relays` lists only until then. Bahia's control plane is published only to the relays in `nostr.controlled_relays`, never to a public relay; startup fails on a configuration that would do otherwise. See the [relay configuration runbook](../runbooks/relay-configuration.md).
 
 The web container receives its runtime seed through `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS`. The CLI uses `--bootstrap-relay` and `--trusted-service-pubkey` or explicit `--relay` and `--service-pubkey`.
 
@@ -106,7 +108,7 @@ Clients handle `AUTH`, `OK`, `EOSE`, and `CLOSED`. A connection alone is not evi
 
 ## Publish outbox
 
-The daemon stores publish work until the configured relay quorum accepts it. Exhausted entries move to failed state and mark their canonical coordinate undelivered. Readiness reports this as `canonical_delivery` with warning details.
+The daemon stores publish work until `nostr.publish_quorum` of its service write relays accept it. Exhausted entries move to failed state and mark their canonical coordinate undelivered. Readiness reports this as `canonical_delivery` with warning details.
 
 Every outbound relay frame — publications inline and redelivered, NIP-42 AUTH frames, NIP-77 reconcile uploads, NIP-46 signer requests, from the daemon and standalone agents alike — crosses one process-wide admission controller before relay I/O: per-lane and aggregate event budgets, a per-relay wire budget, duplicate suppression from a bounded receipt cache, a shared circuit breaker that any `rate-limited:` feedback opens, and a file-backed emergency kill switch. Admission refusals are back-pressure: the outbox entry stays pending and is retried; they never count against the attempt budget and never abandon an entry. Configuration lives under `nostr.outbound` (`BAHIA_NOSTR_OUTBOUND_*`); the `nostr_outbound_admission` health check reports the gate status with content-free counters. See the [outbound admission runbook](../runbooks/nostr-outbound-admission.md).
 
