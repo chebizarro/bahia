@@ -37,7 +37,8 @@ type AdoptionImportRequest struct {
 	IdempotencyKey string              `json:"-"`
 	OrgID          string              `json:"org_id,omitempty"`
 	// NonSecretEnvKeys are environment keys declared not to be secrets.
-	NonSecretEnvKeys []string `json:"non_secret_env_keys,omitempty"`
+	NonSecretEnvKeys []string                              `json:"non_secret_env_keys,omitempty"`
+	SecretRefs       map[string]domain.SecretCredentialRef `json:"secret_refs,omitempty"`
 }
 
 // DiscoveredContainer is a normalized container preview returned by adoption scan.

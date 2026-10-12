@@ -2385,6 +2385,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
 	secretResolver.UseRecords(secretView)
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
+	if adoptionSvc != nil {
+		refs := service.AdoptionSecretReferences{Store: secretValues, View: secretView, Publisher: secretCanonical}
+		if secretIndex != nil {
+			refs.Index = secretIndex
+		}
+		adoptionSvc.ConfigureSecretReferences(refs)
+	}
 	if secretIndex != nil {
 		// Store-backed secrets recorded while PostgreSQL was absent get their
 		// value-less marker once the projector has warm-started, so

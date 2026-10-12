@@ -1,10 +1,12 @@
 package controlplane
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
 
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
@@ -14,6 +16,40 @@ type adoptionScanEventRequest struct {
 	Limit   int                   `json:"limit,omitempty"`
 }
 
+func validateAdoptionSecretRefPayload(content map[string]interface{}) error {
+	if _, ok := content["value"]; ok {
+		return fmt.Errorf("adoption intents never carry secret values")
+	}
+	if _, ok := content["encrypted_value"]; ok {
+		return fmt.Errorf("adoption intents never carry secret values")
+	}
+	raw, present := content["secret_refs"]
+	if !present {
+		return nil
+	}
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("secret_refs must contain credential references")
+	}
+	var entries map[string]map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &entries); err != nil || entries == nil {
+		return fmt.Errorf("secret_refs must contain credential references")
+	}
+	for key, fields := range entries {
+		if fields == nil {
+			return fmt.Errorf("secret_refs.%s must be a credential reference", key)
+		}
+		for field := range fields {
+			switch field {
+			case "store", "credential_id", "version":
+			default:
+				return fmt.Errorf("secret_refs.%s accepts only store, credential_id and version", key)
+			}
+		}
+	}
+	return nil
+}
+
 type adoptionImportEventRequest struct {
 	Targets    []adoptionEventTarget    `json:"targets"`
 	Selections []adoptionEventSelection `json:"selections,omitempty"`
@@ -21,7 +57,30 @@ type adoptionImportEventRequest struct {
 	OrgID      string                   `json:"org_id,omitempty"`
 	// NonSecretEnvKeys are environment keys the operator declares are not
 	// secrets (adoption keeps them instead of refusing the container).
-	NonSecretEnvKeys []string `json:"non_secret_env_keys,omitempty"`
+	NonSecretEnvKeys []string                              `json:"non_secret_env_keys,omitempty"`
+	SecretRefs       map[string]domain.SecretCredentialRef `json:"secret_refs,omitempty"`
+}
+
+func validateAdoptionSecretRefs(refs map[string]domain.SecretCredentialRef, nonSecret []string) error {
+	if len(refs) > maxNonSecretEnvKeys {
+		return fmt.Errorf("secret_refs lists too many keys")
+	}
+	exempt := make(map[string]bool, len(nonSecret))
+	for _, key := range nonSecret {
+		exempt[key] = true
+	}
+	for key, ref := range refs {
+		if strings.TrimSpace(key) != key || key == "" || len(key) > 256 || strings.ContainsAny(key, "=\x00\r\n") {
+			return fmt.Errorf("secret_refs keys must be environment variable names")
+		}
+		if exempt[key] {
+			return fmt.Errorf("secret_refs and non_secret_env_keys both name %s", key)
+		}
+		if err := service.ValidateAdoptionCredentialRef(ref); err != nil {
+			return fmt.Errorf("secret_refs.%s: invalid credential reference", key)
+		}
+	}
+	return nil
 }
 
 // maxNonSecretEnvKeys bounds non_secret_env_keys.
