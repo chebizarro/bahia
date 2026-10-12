@@ -55,6 +55,8 @@ Exit codes: `0` accepted, `1` rejected or conflict, `2` published but no status 
 
 ### Hive-CI pipeline policies
 
+Legacy SQL-only policies can be reviewed as unsigned drafts with `bahia-migrate --export-dir /absolute/new/dir export`; see the [legacy SQL cutover runbook](../runbooks/legacy-sql-cutover.md#operator-re-assertion-review). The `bahia` CLI, not the migration tool, signs approved drafts with the operator key.
+
 ```bash
 bahia --relay wss://operator-relay.example --nostr-key-file operator.key \
   --service-pubkey "$BAHIA_NOSTR_SERVICE_PUBKEY" \
