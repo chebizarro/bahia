@@ -2,10 +2,8 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -44,6 +42,8 @@ type EncryptedRouteHandlersConfig struct {
 	SecretStore   secretstore.SecretStore
 	// SecretValues resolves referenced secrets to redact run logs.
 	SecretValues RunLogSecretValues
+	// SecretAudit records run-log redaction resolves; optional.
+	SecretAudit  secretstore.Auditor
 	Runs         repository.DeploymentRunRepository
 	RunLogs      RunLogFetcher
 	Artifacts    repository.ArtifactRepository
@@ -59,6 +59,9 @@ type EncryptedRouteHandlers struct {
 	secretRecords SecretRecordView
 	secretStore   secretstore.SecretStore
 	secretValues  RunLogSecretValues
+	secretAudit   secretstore.Auditor
+	runLogCache   *runLogSecretCache
+	runLogLimiter runLogResolveLimiter
 	runs          repository.DeploymentRunRepository
 	runLogs       RunLogFetcher
 	artifacts     repository.ArtifactRepository
@@ -77,6 +80,7 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 	}
 	return &EncryptedRouteHandlers{
 		secretRecords: cfg.SecretRecords, secretStore: cfg.SecretStore, secretValues: cfg.SecretValues,
+		secretAudit: cfg.SecretAudit, runLogCache: newRunLogSecretCache(),
 		runs: cfg.Runs, runLogs: cfg.RunLogs, artifacts: cfg.Artifacts,
 		signatures: cfg.Signatures, signVerifier: cfg.SignVerifier,
 		services: cfg.Services, intents: cfg.Intents, rbac: cfg.RBAC,
@@ -251,7 +255,7 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 	if logs == nil {
 		logs = &adapterruntime.RunLogs{RunID: runID}
 	}
-	if err := h.redactRunLogSecrets(ctx, run, intent, logs); err != nil {
+	if err := h.redactRunLogSecrets(ctx, requestPrincipal(request).PubKey, run, intent, runLogsText{logs}); err != nil {
 		h.logger.Error("failed to redact encrypted request run logs", zap.String("run_id", runID.String()), zap.Error(err))
 		// The reason names secrets, never values; the caller may read logs.
 		return nil, fmt.Errorf("logs withheld because they cannot be safely redacted: %w", err)
@@ -296,76 +300,6 @@ func (h *EncryptedRouteHandlers) authorizeRunPermission(ctx context.Context, req
 	}
 	return intent, nil
 }
-
-// redactRunLogSecrets redacts the value of every secret the run's desired
-// state references. Values resolve through the secret store, which releases
-// only the version a secret is pinned to now: when a secret was re-pointed
-// after the run began, or still holds a legacy value, the run may contain a
-// value redaction cannot know, so the logs are withheld rather than returned
-// unredacted.
-func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, run *domain.DeploymentRun, intent *domain.DeploymentIntent, logs *adapterruntime.RunLogs) error {
-	if intent == nil || intent.DesiredState == nil || len(intent.DesiredState.SecretRefs) == 0 {
-		return nil
-	}
-	if h.secretRecords == nil || h.secretValues == nil {
-		return fmt.Errorf("secret redaction dependencies are not configured")
-	}
-	ids := make([]uuid.UUID, 0, len(intent.DesiredState.SecretRefs))
-	seen := make(map[uuid.UUID]struct{}, len(intent.DesiredState.SecretRefs))
-	for _, ref := range intent.DesiredState.SecretRefs {
-		if ref.SecretID == uuid.Nil {
-			return fmt.Errorf("desired secret reference is incomplete")
-		}
-		if _, ok := seen[ref.SecretID]; ok {
-			continue
-		}
-		seen[ref.SecretID] = struct{}{}
-		current, err := h.secretRecords.CurrentSecretRef(ctx, ref.SecretID)
-		if err != nil {
-			return fmt.Errorf("load referenced secret %s: %w", ref.SecretID, err)
-		}
-		if current == nil {
-			return fmt.Errorf("referenced secret %s: %w", ref.SecretID, secretstore.ErrNoRecord)
-		}
-		if current.CredentialRef == nil {
-			return domain.LegacySecretValueError(current.ID, current.Name)
-		}
-		if run != nil && current.UpdatedAt.After(run.CreatedAt) {
-			return fmt.Errorf("%w: secret %s (%s) was re-pointed after this run began; the store no longer releases the value the run used, so its logs are withheld", ErrRunLogsUnredactable, current.ID, current.Name)
-		}
-		ids = append(ids, ref.SecretID)
-	}
-	resolved, err := h.secretValues.ResolveAll(ctx, ids)
-	if err != nil {
-		return err
-	}
-	defer secretstore.ZeroizeResolved(resolved)
-	values := make([]string, 0, len(resolved))
-	for _, r := range resolved {
-		if value := string(r.Value.Bytes()); value != "" {
-			values = append(values, value)
-		}
-	}
-	// Longest first prevents a short secret that is a substring of another from
-	// leaving a partially-redacted value behind.
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
-	redact := func(input string) string {
-		for _, value := range values {
-			input = strings.ReplaceAll(input, value, "[REDACTED]")
-			if encoded, err := json.Marshal(value); err == nil && len(encoded) >= 2 {
-				input = strings.ReplaceAll(input, string(encoded[1:len(encoded)-1]), "[REDACTED]")
-			}
-		}
-		return input
-	}
-	logs.Stdout = redact(logs.Stdout)
-	logs.Stderr = redact(logs.Stderr)
-	return nil
-}
-
-// ErrRunLogsUnredactable: a run's logs may contain a secret value redaction
-// cannot resolve, so they are withheld.
-var ErrRunLogsUnredactable = errors.New("run logs cannot be safely redacted")
 
 func isTerminalEncryptedRunStatus(status domain.DeploymentRunStatus) bool {
 	switch status {

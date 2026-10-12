@@ -191,7 +191,7 @@ func TestRuntimeLifecycleActionErrorScrubsRawAndEscapedSecrets(t *testing.T) {
 	escaped := string(encoded[1 : len(encoded)-1])
 	lifecycle := &RuntimeLifecycleService{secrets: repo, secretValues: values}
 
-	got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped))
+	got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped), nil)
 	if strings.Contains(got, secretValue) || strings.Contains(got, escaped) {
 		t.Fatalf("scrubbed runtime error leaked secret: %q", got)
 	}
@@ -200,8 +200,17 @@ func TestRuntimeLifecycleActionErrorScrubsRawAndEscapedSecrets(t *testing.T) {
 	}
 
 	values.requireAllZeroized(t)
+	// A deploy scrubs its failure with the values it injected itself: no
+	// second resolve.
+	batches := len(values.batches)
+	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped), []string{secretValue}); got != "raw=[REDACTED] escaped=[REDACTED]" {
+		t.Fatalf("scrub with the injected values = %q", got)
+	}
+	if len(values.batches) != batches {
+		t.Fatal("scrubbing with the injected values resolved the secrets again")
+	}
 	lifecycle.secretValues = nil
-	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s", secretValue)); got != runtimeActionErrorDetailsWithheld {
+	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s", secretValue), nil); got != runtimeActionErrorDetailsWithheld {
 		t.Fatalf("redaction dependency failure returned %q, want withheld", got)
 	}
 }

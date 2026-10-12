@@ -683,6 +683,8 @@ func (c *Coordinator) executeRouteOnlyDeployment(
 			"endpoint_ref":                 unit.EndpointRef,
 			"phase_sequence":               0,
 			"phases":                       []map[string]any{},
+			// The secrets the run injects; written before each apply.
+			domain.RunSecretAccessesKey: []map[string]any{},
 		},
 	}
 	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
@@ -798,6 +800,8 @@ func (c *Coordinator) executeDirectRuntimeDeployment(
 			"endpoint_ref":                 unit.EndpointRef,
 			"phase_sequence":               0,
 			"phases":                       []map[string]any{},
+			// The secrets the run injects; written before each apply.
+			domain.RunSecretAccessesKey: []map[string]any{},
 		},
 	}
 	if err := c.registry.CreateDeploymentRun(ctx, run); err != nil {
@@ -829,6 +833,7 @@ func (c *Coordinator) applyDirectRuntimeRun(
 	if run.ApplyMetadata == nil {
 		run.ApplyMetadata = map[string]any{}
 	}
+	ctx = service.WithSecretAccessRecorder(ctx, c.recordRunSecretAccesses(run))
 	statusFn := func(statusCtx context.Context, step service.DeployStep, _ string) {
 		c.recordDirectRunPhase(statusCtx, run, string(step), "running")
 	}
@@ -959,6 +964,22 @@ func deploymentUnitIDsEqual(left, right *uuid.UUID) bool {
 		return left == nil && right == nil
 	}
 	return *left == *right
+}
+
+// recordRunSecretAccesses persists, before an apply injects them, the
+// secrets (id and canonical record revision) the run is about to inject, in
+// addition to those earlier applies of the run (a rollback) injected. Run-log
+// redaction resolves exactly these. A record that cannot be persisted fails
+// the apply.
+func (c *Coordinator) recordRunSecretAccesses(run *domain.DeploymentRun) service.SecretAccessRecorder {
+	return func(ctx context.Context, accesses []domain.SecretAccessManifest) error {
+		recorded, _ := domain.RunSecretAccesses(run.ApplyMetadata)
+		for _, access := range accesses {
+			recorded = append(recorded, domain.RunSecretAccess{SecretID: access.SecretID, RecordVersion: access.RecordVersion})
+		}
+		run.ApplyMetadata[domain.RunSecretAccessesKey] = domain.EncodeRunSecretAccesses(recorded)
+		return c.registry.UpdateDeploymentRunApplyMetadata(ctx, run.ID, run.ApplyMetadata)
+	}
 }
 
 func (c *Coordinator) recordDirectRunPhase(ctx context.Context, run *domain.DeploymentRun, phase, status string) {

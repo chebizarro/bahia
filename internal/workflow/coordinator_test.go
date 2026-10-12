@@ -529,10 +529,14 @@ type stubDeploymentRuntimeLifecycle struct {
 	unit  *domain.DeploymentUnit
 	calls int
 	specs []*domain.DesiredServiceSpec
+	// injects is what each apply reports it injects, as the real lifecycle
+	// does through service.SecretAccessRecorderFrom.
+	injects   []domain.SecretAccessManifest
+	recordErr error
 }
 
 func (s *stubDeploymentRuntimeLifecycle) DeployDeploymentUnitWithStatus(
-	_ context.Context,
+	ctx context.Context,
 	_, _ uuid.UUID,
 	_ *uuid.UUID,
 	unit *domain.DeploymentUnit,
@@ -542,6 +546,11 @@ func (s *stubDeploymentRuntimeLifecycle) DeployDeploymentUnitWithStatus(
 	s.unit = unit
 	s.calls++
 	s.specs = append(s.specs, desiredState)
+	if record := service.SecretAccessRecorderFrom(ctx); record != nil && s.injects != nil {
+		if s.recordErr = record(ctx, s.injects); s.recordErr != nil {
+			return nil, s.recordErr
+		}
+	}
 	if statusFn != nil {
 		statusFn(context.Background(), service.DeployStep("applying"), "")
 	}
@@ -1116,6 +1125,65 @@ func TestRecoverNonTerminalRuns_ResumesDirectRuntimeAndPersistsPhases(t *testing
 	}
 	if phases := metadataPhases(updated.ApplyMetadata["phases"]); len(phases) < 2 {
 		t.Fatalf("recovered run phases were not persisted: %#v", updated.ApplyMetadata)
+	}
+}
+
+// A direct runtime run persists the secrets its apply injects (id and
+// canonical record revision, no value) before the apply, so run-log
+// redaction resolves exactly those.
+func TestDirectRuntimeRunRecordsInjectedSecretsBeforeApplying(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{
+		ID: uuid.New(), EnvironmentID: env.ID, Key: "arcana",
+		RuntimeType: domain.RuntimeTypeCompose, EndpointRef: "arcana-local", ComposeDir: "/srv/arcana",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged,
+	}
+	unitRepo := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	desired := &domain.DesiredServiceSpec{
+		SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID:     svc.ID, EnvironmentID: env.ID, ArtifactID: art.ID,
+		DeploymentUnitID: &unit.ID, DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType,
+		DesiredHash: "sha256:reviewed",
+	}
+	intent := &domain.DeploymentIntent{
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID, ArtifactID: art.ID,
+		RequestedBy: "test", SourceKind: domain.SourceKindManual,
+		ApprovalStatus: domain.ApprovalStatusNotRequired, Status: domain.IntentStatusApproved,
+		DesiredState: desired, DesiredHash: desired.DesiredHash,
+	}
+	if err := registry.CreateDeploymentIntent(ctx, intent); err != nil {
+		t.Fatal(err)
+	}
+	intentRepo.intents[intent.ID].Status = domain.IntentStatusApproved
+	now := time.Now().UTC()
+	run := &domain.DeploymentRun{
+		DeploymentIntentID: intent.ID, DeploymentUnitID: &unit.ID,
+		LoomJobID: "runtime:direct", Status: domain.RunStatusRunning, StartedAt: &now,
+		ApplyMetadata: map[string]any{"phases": []map[string]any{}, "phase_sequence": 0, domain.RunSecretAccessesKey: []map[string]any{}},
+	}
+	if err := registry.CreateDeploymentRun(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	secretID := uuid.New()
+	lifecycle := &stubDeploymentRuntimeLifecycle{injects: []domain.SecretAccessManifest{{SecretID: secretID, RecordVersion: 3, Version: 7}}}
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(), WithDeploymentUnitRouting(unitRepo, lifecycle))
+	if err := coord.RecoverNonTerminalRuns(ctx); err != nil {
+		t.Fatalf("RecoverNonTerminalRuns: %v", err)
+	}
+	coord.wg.Wait()
+	if lifecycle.recordErr != nil {
+		t.Fatalf("recording the injected secrets: %v", lifecycle.recordErr)
+	}
+	updated, err := registry.GetDeploymentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded, ok := domain.RunSecretAccesses(updated.ApplyMetadata)
+	if !ok || len(recorded) != 1 || recorded[0] != (domain.RunSecretAccess{SecretID: secretID, RecordVersion: 3}) {
+		t.Fatalf("recorded secret accesses = %v (%v)", recorded, ok)
 	}
 }
 

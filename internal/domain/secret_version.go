@@ -24,10 +24,13 @@ const (
 
 // SecretAccessAudit records one secret access attempt without plaintext.
 type SecretAccessAudit struct {
-	ID            uuid.UUID             `json:"id"`
-	SecretID      uuid.UUID             `json:"secret_id"`
-	VersionID     uuid.UUID             `json:"secret_version_id"`
-	Version       int                   `json:"version"`
+	ID        uuid.UUID `json:"id"`
+	SecretID  uuid.UUID `json:"secret_id"`
+	VersionID uuid.UUID `json:"secret_version_id"`
+	Version   int       `json:"version"`
+	// RecordVersion is the revision of the canonical secret record the value
+	// was resolved through; re-pointing a secret increments it.
+	RecordVersion int                   `json:"record_version,omitempty"`
 	ServiceID     uuid.UUID             `json:"service_id"`
 	EnvironmentID *uuid.UUID            `json:"environment_id,omitempty"`
 	Operation     SecretAccessOperation `json:"operation"`
@@ -42,9 +45,12 @@ type SecretAccessAudit struct {
 // SecretAccessManifest is safe metadata returned alongside resolved secret
 // values. It intentionally contains no ciphertext or plaintext.
 type SecretAccessManifest struct {
-	SecretID      uuid.UUID             `json:"secret_id"`
-	VersionID     uuid.UUID             `json:"secret_version_id"`
-	Version       int                   `json:"version"`
+	SecretID  uuid.UUID `json:"secret_id"`
+	VersionID uuid.UUID `json:"secret_version_id"`
+	Version   int       `json:"version"`
+	// RecordVersion is the revision of the canonical secret record the value
+	// was resolved through; re-pointing a secret increments it.
+	RecordVersion int                   `json:"record_version,omitempty"`
 	ServiceID     uuid.UUID             `json:"service_id"`
 	EnvironmentID *uuid.UUID            `json:"environment_id,omitempty"`
 	Name          string                `json:"name"`

@@ -9,8 +9,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 // fakeSecretValues is the secret store as consumers see it: canonical
@@ -124,4 +126,46 @@ func TestRuntimeInjectionRefusesIndexDisagreeingWithCanonicalRecord(t *testing.T
 	require.ErrorContains(t, err, "disagrees with the canonical record")
 	require.Empty(t, opts.Environment)
 	values.requireAllZeroized(t)
+}
+
+// A deploy reports the secrets it is about to inject (record revision
+// included) before the runtime applies anything; a recorder failure aborts
+// the deploy.
+func TestRuntimeDeployRecordsInjectedSecretsBeforeApplying(t *testing.T) {
+	ctx := context.Background()
+	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
+	stateRepo := registry.state.(*mockStateRepo)
+	rt := &lifecycleMockRuntime{}
+	secretRepo := newMockSecretRepo()
+	values := newFakeSecretValues()
+	lifecycle := NewRuntimeLifecycleService(
+		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
+		WithRuntimeLifecycleSecrets(secretRepo, values),
+	)
+	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
+	row := values.storeBacked(t, secretRepo, svc.ID, nil, "API_TOKEN", "token")
+	ref := values.refs[row.ID]
+	ref.Version = 5
+	values.refs[row.ID] = ref
+
+	var recorded []domain.SecretAccessManifest
+	recordCtx := WithSecretAccessRecorder(ctx, func(_ context.Context, accesses []domain.SecretAccessManifest) error {
+		recorded = append(recorded, accesses...)
+		return nil
+	})
+	if _, err := lifecycle.Deploy(recordCtx, svc.ID, env.ID, &artifact.ID); err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+	require.Len(t, recorded, 1)
+	require.Equal(t, row.ID, recorded[0].SecretID)
+	require.Equal(t, 5, recorded[0].RecordVersion)
+	require.Equal(t, 4, recorded[0].Version)
+
+	rt.deployTarget = ""
+	failCtx := WithSecretAccessRecorder(ctx, func(context.Context, []domain.SecretAccessManifest) error {
+		return errors.New("run metadata unavailable")
+	})
+	_, err := lifecycle.Deploy(failCtx, svc.ID, env.ID, &artifact.ID)
+	require.ErrorContains(t, err, "recording the secrets this apply injects")
+	require.Empty(t, rt.deployTarget, "nothing is applied when the record cannot be written")
 }

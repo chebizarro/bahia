@@ -2744,6 +2744,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			SecretRecords: secretView,
 			SecretStore:   secretValues,
 			SecretValues:  secretResolver,
+			SecretAudit:   secretAudit,
 			Runs:          runRepo,
 			RunLogs:       runLogService,
 			Artifacts:     artifactRepo,

@@ -56,6 +56,7 @@ func resolvedSecretManifest(row domain.ServiceSecret, r secretstore.Resolved, op
 	return domain.SecretAccessManifest{
 		SecretID:      row.ID,
 		Version:       r.Secret.CredentialRef.Version,
+		RecordVersion: r.Secret.Version,
 		ServiceID:     row.ServiceID,
 		EnvironmentID: row.EnvironmentID,
 		Name:          row.Name,
@@ -63,4 +64,24 @@ func resolvedSecretManifest(row domain.ServiceSecret, r secretstore.Resolved, op
 		Outcome:       domain.SecretAccessOutcomeSuccess,
 		AccessedAt:    time.Now().UTC(),
 	}
+}
+
+// SecretAccessRecorder receives, before a direct runtime apply injects
+// them, the secrets it is about to inject (secret id, canonical record
+// revision, credential version). An error aborts the apply: a run whose
+// injected secrets are not recorded could not have its logs redacted.
+type SecretAccessRecorder func(ctx context.Context, accesses []domain.SecretAccessManifest) error
+
+type secretAccessRecorderKey struct{}
+
+// WithSecretAccessRecorder makes the deploys run under ctx report the
+// secrets they inject to record.
+func WithSecretAccessRecorder(ctx context.Context, record SecretAccessRecorder) context.Context {
+	return context.WithValue(ctx, secretAccessRecorderKey{}, record)
+}
+
+// SecretAccessRecorderFrom returns the recorder ctx carries, or nil.
+func SecretAccessRecorderFrom(ctx context.Context) SecretAccessRecorder {
+	record, _ := ctx.Value(secretAccessRecorderKey{}).(SecretAccessRecorder)
+	return record
 }

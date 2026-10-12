@@ -414,6 +414,9 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	waitForLock bool,
 ) (*domain.RuntimeObservation, error) {
 	start := time.Now()
+	// injected holds the secret values this apply resolved: a failure is
+	// scrubbed with them instead of resolving the secrets again.
+	injected := []string{}
 	notify := func(step DeployStep, msg string) {
 		if statusFn != nil {
 			statusFn(ctx, step, msg)
@@ -425,13 +428,13 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 
 	svc, env, rt, err := s.resolveForDeploymentUnit(ctx, serviceID, envID, unit)
 	if err != nil {
-		s.logRuntimeAction(ctx, "deploy", nil, nil, serviceID, envID, artifactID, start, "failed", err)
+		s.logDeployAction(ctx, injected, nil, nil, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
 	}
 
 	artifact, err := s.resolveDeployArtifact(ctx, serviceID, envID, artifactID)
 	if err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, artifactID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, artifactID, start, "failed", err)
 		return nil, err
 	}
 
@@ -440,19 +443,20 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 
 	secrets, err := s.effectiveSecrets(ctx, serviceID, envID)
 	if err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 
 	builder := NewDesiredStateBuilder()
 	targetSpec, err := desiredStateForDeployment(builder, svc, env, artifact, unit, secrets, canonicalDesiredState)
 	if err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("building desired state: %w", err)
 	}
-	secretAccesses, err := s.mergeEffectiveSecrets(ctx, secrets, &opts, targetSpec, svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil)
+	secretAccesses, targetValues, err := s.mergeEffectiveSecretValues(ctx, secrets, &opts, targetSpec, svc.RuntimeConfig != nil && svc.RuntimeConfig.Managed != nil)
+	injected = append(injected, targetValues...)
 	if err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 	plan, err := NewEnvironmentPlanAssembler(EnvironmentPlanAssemblerDeps{
@@ -465,7 +469,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		Builder:     builder,
 	}).Assemble(ctx, envID, serviceID, targetSpec)
 	if err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("assembling desired environment plan: %w", err)
 	}
 	serviceSecrets := map[string]map[string]string{targetSpec.StableServiceKey: opts.Environment}
@@ -473,10 +477,26 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		var siblingSecretAccesses []domain.SecretAccessManifest
 		serviceSecrets, siblingSecretAccesses, err = s.resolveUnitApplySecrets(ctx, plan, targetSpec, envID, opts.Environment)
 		if err != nil {
-			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("resolving deployment-unit secrets: %w", err)
 		}
 		secretAccesses = append(secretAccesses, siblingSecretAccesses...)
+		for key, values := range serviceSecrets {
+			if key == targetSpec.StableServiceKey {
+				continue
+			}
+			for _, value := range values {
+				injected = append(injected, value)
+			}
+		}
+	}
+	// The run records what it is about to inject before anything is
+	// applied, so its logs can be redacted against exactly these secrets.
+	if record := SecretAccessRecorderFrom(ctx); record != nil {
+		if err := record(ctx, secretAccesses); err != nil {
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			return nil, fmt.Errorf("recording the secrets this apply injects: %w", err)
+		}
 	}
 
 	if opts.Labels == nil {
@@ -517,7 +537,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 				failureData["ownership_reason_code"] = ownershipTyped.ReasonCode
 			}
 			s.publishFailure(ctx, svc, env, bestEffortObs, failureData)
-			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", ownershipErr)
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", ownershipErr)
 			return nil, fmt.Errorf("compose ownership validation failed: %w", ownershipErr)
 		}
 	}
@@ -528,7 +548,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	if s.applyLock != nil {
 		unlock, lockErr := s.acquireApplyLock(ctx, envID, waitForLock)
 		if lockErr != nil {
-			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
 			return nil, fmt.Errorf("acquiring environment apply lock: %w", lockErr)
 		}
 		defer unlock()
@@ -553,19 +573,19 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		})
 		if err != nil {
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
-			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("applying desired state for runtime target %q: %w", targetName, err)
 		}
 	} else {
 		if unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose {
 			err := fmt.Errorf("%w: resolved compose deployment unit %q", runtime.ErrDesiredStateNotSupported, unit.Key)
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
-			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, err
 		}
 		if err := rt.Deploy(ctx, targetName, imageRef, opts); err != nil {
 			s.recordRuntimeApplySecretAudit(ctx, secretAccesses, domain.SecretAccessOutcomeFailure, err)
-			s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 			return nil, fmt.Errorf("deploying runtime target %q: %w", targetName, err)
 		}
 	}
@@ -577,7 +597,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	waitForHealthy := unit != nil && unit.RuntimeType == domain.RuntimeTypeCompose
 	obs, observeErr := s.observeDeploymentHealth(ctx, rt, serviceID, envID, targetName, waitForHealthy, targetSpec.DesiredHash)
 	if obs == nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
 		return nil, observeErr
 	}
 	if obs.ObservedAt.IsZero() {
@@ -592,11 +612,11 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 	notify(DeployStepProjecting, "Persisting deployment outcome")
 
 	if err := s.updateDesiredArtifact(ctx, serviceID, envID, artifact.ID, targetSpec); err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, err
 	}
 	if err := s.registry.RecordObservation(ctx, obs); err != nil {
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", err)
 		return nil, fmt.Errorf("recording deploy observation: %w", err)
 	}
 	if observeErr != nil {
@@ -608,7 +628,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 			"artifact_id":    artifact.ID,
 			"failure_reason": failureCode,
 		})
-		s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
+		s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", observeErr)
 		return obs, observeErr
 	}
 	actionData := map[string]any{"artifact_id": artifact.ID, "desired_hash": targetSpec.DesiredHash, "environment_revision": plan.RevisionHash}
@@ -619,7 +639,7 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		actionData["warnings"] = applyResult.Warnings
 	}
 	s.publishAction(ctx, runtimeActionDeployEvent, svc, env, obs, actionData)
-	s.logRuntimeAction(ctx, "deploy", svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
+	s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "success", nil)
 	return obs, nil
 }
 
@@ -1102,9 +1122,17 @@ func (l secretListerOrEmpty) ListEffective(ctx context.Context, serviceID, envID
 }
 
 func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, secrets []domain.ServiceSecret, opts *runtime.DeployOptions, desiredState *domain.DesiredServiceSpec, managed bool) ([]domain.SecretAccessManifest, error) {
+	accesses, _, err := s.mergeEffectiveSecretValues(ctx, secrets, opts, desiredState, managed)
+	return accesses, err
+}
+
+// mergeEffectiveSecretValues is mergeEffectiveSecrets that also returns the
+// injected values, so a failed apply scrubs its error without resolving the
+// secrets again.
+func (s *RuntimeLifecycleService) mergeEffectiveSecretValues(ctx context.Context, secrets []domain.ServiceSecret, opts *runtime.DeployOptions, desiredState *domain.DesiredServiceSpec, managed bool) ([]domain.SecretAccessManifest, []string, error) {
 	bindings, err := desiredSecretBindings(desiredState, managed)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	envVars := make(map[uuid.UUID]string, len(secrets))
 	selected := make([]domain.ServiceSecret, 0, len(secrets))
@@ -1123,20 +1151,21 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, sec
 		selected = append(selected, secret)
 	}
 	if managed && len(selected) != len(bindings) {
-		return nil, fmt.Errorf("managed desired state references unavailable secrets")
+		return nil, nil, fmt.Errorf("managed desired state references unavailable secrets")
 	}
 	if len(selected) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	resolved, err := resolveSecretValues(ctx, s.secretValues, selected)
 	if err != nil {
-		return nil, fmt.Errorf("resolving effective secrets: %w", err)
+		return nil, nil, fmt.Errorf("resolving effective secrets: %w", err)
 	}
 	defer secretstore.ZeroizeResolved(resolved)
 	if opts.Environment == nil {
 		opts.Environment = map[string]string{}
 	}
 	accesses := make([]domain.SecretAccessManifest, 0, len(resolved))
+	values := make([]string, 0, len(resolved))
 	for i, r := range resolved {
 		manifest := resolvedSecretManifest(selected[i], r, domain.SecretAccessOperationResolve)
 		audit := &domain.SecretAccessAudit{
@@ -1150,14 +1179,16 @@ func (s *RuntimeLifecycleService) mergeEffectiveSecrets(ctx context.Context, sec
 			AccessedAt:    manifest.AccessedAt,
 		}
 		if err := s.secrets.RecordSecretAccessAudit(ctx, audit); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		accesses = append(accesses, manifest)
 		// The runtime API takes the environment as Go strings, which
 		// cannot be zeroized; the store's buffer is.
-		opts.Environment[envVars[selected[i].ID]] = string(r.Value.Bytes())
+		value := string(r.Value.Bytes())
+		opts.Environment[envVars[selected[i].ID]] = value
+		values = append(values, value)
 	}
-	return accesses, nil
+	return accesses, values, nil
 }
 
 func desiredSecretBindings(desiredState *domain.DesiredServiceSpec, managed bool) (map[uuid.UUID]string, error) {
@@ -1267,6 +1298,22 @@ func (s *RuntimeLifecycleService) publishAction(ctx context.Context, eventType e
 }
 
 func (s *RuntimeLifecycleService) logRuntimeAction(ctx context.Context, action string, svc *domain.Service, env *domain.Environment, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result string, err error) {
+	s.logRuntimeActionScrubbed(ctx, nil, action, svc, env, serviceID, envID, artifactID, start, result, err)
+}
+
+// logDeployAction logs a deploy outcome, scrubbing its error with the secret
+// values the deploy itself resolved (injected; none before resolution).
+func (s *RuntimeLifecycleService) logDeployAction(ctx context.Context, injected []string, svc *domain.Service, env *domain.Environment, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result string, err error) {
+	if injected == nil {
+		injected = []string{}
+	}
+	s.logRuntimeActionScrubbed(ctx, injected, "deploy", svc, env, serviceID, envID, artifactID, start, result, err)
+}
+
+// logRuntimeActionScrubbed logs a runtime action. A nil known resolves the
+// service's effective secrets to scrub the error; a non-nil known is the
+// complete set of values that can appear in it.
+func (s *RuntimeLifecycleService) logRuntimeActionScrubbed(ctx context.Context, known []string, action string, svc *domain.Service, env *domain.Environment, serviceID, envID uuid.UUID, artifactID *uuid.UUID, start time.Time, result string, err error) {
 	fields := []zap.Field{
 		zap.String("action", action),
 		zap.String("service_id", serviceID.String()),
@@ -1295,16 +1342,19 @@ func (s *RuntimeLifecycleService) logRuntimeAction(ctx context.Context, action s
 		}
 	}
 	if err != nil {
-		fields = append(fields, zap.String("error", s.scrubRuntimeActionError(ctx, serviceID, envID, err)))
+		fields = append(fields, zap.String("error", s.scrubRuntimeActionError(ctx, serviceID, envID, err, known)))
 	}
 	s.logger.Info("direct runtime action completed", fields...)
 }
 
 const runtimeActionErrorDetailsWithheld = "runtime action error details withheld"
 
-func (s *RuntimeLifecycleService) scrubRuntimeActionError(ctx context.Context, serviceID, envID uuid.UUID, actionErr error) string {
+func (s *RuntimeLifecycleService) scrubRuntimeActionError(ctx context.Context, serviceID, envID uuid.UUID, actionErr error, known []string) string {
 	if actionErr == nil {
 		return ""
+	}
+	if known != nil {
+		return scrubValues(actionErr.Error(), known)
 	}
 	if s.secrets == nil {
 		return runtimeActionErrorDetailsWithheld
@@ -1327,17 +1377,26 @@ func (s *RuntimeLifecycleService) scrubRuntimeActionError(ctx context.Context, s
 			values = append(values, value)
 		}
 	}
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
-	redacted := actionErr.Error()
+	return scrubValues(actionErr.Error(), values)
+}
+
+// scrubValues replaces every value, raw and JSON-escaped, longest first so a
+// value that is a substring of another leaves nothing behind.
+func scrubValues(text string, values []string) string {
+	sorted := make([]string, 0, len(values))
 	for _, value := range values {
-		redacted = strings.ReplaceAll(redacted, value, "[REDACTED]")
-		encoded, err := json.Marshal(value)
-		if err != nil || len(encoded) < 2 {
-			return runtimeActionErrorDetailsWithheld
+		if value != "" {
+			sorted = append(sorted, value)
 		}
-		redacted = strings.ReplaceAll(redacted, string(encoded[1:len(encoded)-1]), "[REDACTED]")
 	}
-	return redacted
+	sort.Slice(sorted, func(i, j int) bool { return len(sorted[i]) > len(sorted[j]) })
+	for _, value := range sorted {
+		text = strings.ReplaceAll(text, value, "[REDACTED]")
+		if encoded, err := json.Marshal(value); err == nil && len(encoded) >= 2 {
+			text = strings.ReplaceAll(text, string(encoded[1:len(encoded)-1]), "[REDACTED]")
+		}
+	}
+	return text
 }
 
 func deployOptionsFromServiceRuntimeConfig(svc *domain.Service) runtime.DeployOptions {
