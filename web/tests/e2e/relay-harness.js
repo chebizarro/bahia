@@ -20,15 +20,18 @@ let cleanupHooksInstalled = false;
  *   unauthenticated REQ with CLOSED auth-required and need AUTH from the
  *   seeded operator (browser) or service identity (test observers). Pass
  *   `off` only for a spec that must read protected models while signed out.
+ * @param {string[]} [options.admit] further pubkeys admitted to read protected
+ *   kinds, such as a harness backend's own service identity.
  */
 export async function startBahiaTestRelay({
   addr = defaultAddr,
   readAuth = 'enforce',
+  admit = [],
   waitForReady = waitForRelayReady,
   spawnImpl = spawn,
   killImpl = process.kill.bind(process)
 } = {}) {
-  const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr, '--read-auth', readAuth], {
+  const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr, '--read-auth', readAuth, ...admit.flatMap((pubkey) => ['--admit', pubkey])], {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: { ...process.env, BAHIA_TEST_RELAY_ADDR: addr },

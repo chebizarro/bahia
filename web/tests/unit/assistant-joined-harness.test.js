@@ -82,7 +82,15 @@ describe('assistant joined harness backend config', () => {
       relayUrl: RELAY,
       providerUrl: 'http://127.0.0.1:43000',
       serviceSecretHex: 'c'.repeat(64),
-      operatorPubkey: 'd'.repeat(64)
+      operatorPubkey: 'd'.repeat(64),
+      signet: {
+        relayUrl: 'ws://127.0.0.1:44000',
+        pubkey: 'e'.repeat(64),
+        requesterKeyFile: '/run/test/requester.key',
+        owner: 'bahia-vault',
+        keyId: 'dev',
+        credentials: { 'assistant-transcript': `cred_${'1'.repeat(64)}`, 'confidential-dedupe': `cred_${'2'.repeat(64)}` }
+      }
     });
     expect(yaml).not.toMatch(/dev_mode/);
     expect(yaml).toContain('sslmode: require');
@@ -91,5 +99,30 @@ describe('assistant joined harness backend config', () => {
     expect(yaml).toContain(`contextvm_relays: ["${RELAY}"]`);
     expect(yaml).toContain('llm_base_url: "http://127.0.0.1:43000"');
     expect(yaml).toContain('default_workflow: "batch"');
+  });
+
+  it('resolves the system keys from the disposable Signet, as assistant.enabled requires', () => {
+    const yaml = backendConfig({
+      backendPort: 41000,
+      pg: { port: 42000, password: 'pw' },
+      relayUrl: RELAY,
+      providerUrl: 'http://127.0.0.1:43000',
+      serviceSecretHex: 'c'.repeat(64),
+      operatorPubkey: 'd'.repeat(64),
+      signet: {
+        relayUrl: 'ws://127.0.0.1:44000',
+        pubkey: 'e'.repeat(64),
+        requesterKeyFile: '/run/test/requester.key',
+        owner: 'bahia-vault',
+        keyId: 'dev',
+        credentials: { 'assistant-transcript': `cred_${'1'.repeat(64)}`, 'confidential-dedupe': `cred_${'2'.repeat(64)}` }
+      }
+    });
+    expect(yaml).toContain('backend: signet');
+    expect(yaml).toContain(`pubkey: "${'e'.repeat(64)}"`);
+    expect(yaml).toContain('relays: ["ws://127.0.0.1:44000"]');
+    expect(yaml).toContain('client_key_file: "/run/test/requester.key"');
+    expect(yaml).toContain(`- {key_id: "dev", credential_id: "cred_${'1'.repeat(64)}", version: 1}`);
+    expect(yaml).toContain(`- {key_id: "dev", credential_id: "cred_${'2'.repeat(64)}", version: 1}`);
   });
 });
