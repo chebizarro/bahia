@@ -40,6 +40,7 @@ func TestSecretStoreConfigRejects(t *testing.T) {
 		"short pubkey":         func(c *SecretStoreConfig) { c.Signet.Pubkey = "abcd" },
 		"no relays":            func(c *SecretStoreConfig) { c.Signet.Relays = []string{" , "} },
 		"http relay":           func(c *SecretStoreConfig) { c.Signet.Relays = []string{"https://signet.example"} },
+		"public relay":         func(c *SecretStoreConfig) { c.Signet.Relays = []string{"wss://signet.example", "wss://relay." + "dam" + "us.io"} },
 		"relative key file":    func(c *SecretStoreConfig) { c.Signet.ClientKeyFile = "secrets/key" },
 		"no key file":          func(c *SecretStoreConfig) { c.Signet.ClientKeyFile = "" },
 		"no owner":             func(c *SecretStoreConfig) { c.Signet.Owner = " " },

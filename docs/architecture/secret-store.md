@@ -277,6 +277,13 @@ secret_store:
     request_timeout: 30s              # per Signet round trip
 ```
 
+`secret_store.signet.relays` is the store's own explicit relay list: relays
+Signet and the daemon both use. A well-known public relay is refused at
+configuration (`nostr.allowed_public_relays` does not apply), so secret
+requests and deliveries never touch a public relay. These relays need not be
+in `nostr.controlled_relays`: the store's pool authenticates as the
+requester, never as the service, and publishes no control-plane event.
+
 `secret_store` health reports the last round trip; a one-shot startup probe
 (`credential/list` for the owner) runs as a non-required background runner.
 

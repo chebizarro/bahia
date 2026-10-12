@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/openagentsinc/bahia/internal/relayguard"
 )
 
 // SecretStoreBackendSignet selects Signet's generic secret store.
@@ -26,7 +28,11 @@ type SecretStoreConfig struct {
 type SecretStoreSignetConfig struct {
 	// Pubkey is Signet's management identity (its [nostr] bunker_pubkey).
 	Pubkey string `koanf:"pubkey" yaml:"pubkey" secret:"false"`
-	// Relays carry the gift-wrapped requests and Signet's replies.
+	// Relays carry the gift-wrapped requests and Signet's replies. They are
+	// this store's own explicit allowlist: relays Signet and the daemon both
+	// use, never a well-known public relay. They need not be control-plane
+	// relays (nostr.controlled_relays); the store never publishes the
+	// control plane.
 	Relays []string `koanf:"relays" yaml:"relays" secret:"false"`
 	// ClientKeyFile is an absolute path to the dedicated requester key (64
 	// hex) Signet authorizes for delivery. It must not be the service key;
@@ -65,6 +71,11 @@ func (s *SecretStoreConfig) validate() error {
 		u, err := url.Parse(relay)
 		if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
 			return fmt.Errorf("config validation failed: secret_store.signet.relays: %q is not a ws:// or wss:// URL", relay)
+		}
+		// Secret requests and deliveries never touch a public relay, even
+		// encrypted; nostr.allowed_public_relays does not apply here.
+		if relayguard.IsWellKnownPublic(relay) {
+			return fmt.Errorf("config validation failed: secret_store.signet.relays: %q is a public relay; secret delivery uses only relays you operate", relay)
 		}
 	}
 	if sig.ClientKeyFile == "" || !filepath.IsAbs(sig.ClientKeyFile) {

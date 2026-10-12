@@ -141,6 +141,10 @@ func OpenCredentialStore(ctx context.Context, cfg CredentialStoreConfig, logger 
 		opts = append(opts, nostrpool.WithRetryableClosedBudget(cfg.ClosedRetryBudget))
 	}
 	named := logger.Named("signet-secret-store")
+	// The pool authenticates as the requester, never as the service, and
+	// only addresses the explicitly configured Signet relays (configuration
+	// refuses public ones). It publishes no service-signed control-plane
+	// event, so it carries no control-plane relay guard.
 	s := &CredentialStore{
 		signetPK:     cfg.SignetPubkey,
 		clientSK:     cfg.ClientKey,

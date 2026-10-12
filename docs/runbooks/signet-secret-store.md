@@ -18,7 +18,9 @@ Three identities are involved; keep them distinct:
 - `signetd` with its persistent store (`SIGNET_DB_KEY`) and a file-backed
   policy store (`[policy_defaults] policy_file`). Cache-only Signet answers
   credential operations with `no_store`.
-- Relays both Signet and the daemon use (`[nostr] relays` in Signet).
+- Relays both Signet and the daemon use (`[nostr] relays` in Signet), operated
+  by you: the daemon refuses a well-known public relay in
+  `secret_store.signet.relays`.
 - `signetctl` configured with a provisioner key, and `nak` for key handling.
 
 ## Set up
