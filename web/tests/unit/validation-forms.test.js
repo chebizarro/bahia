@@ -4,7 +4,7 @@ import {
   parseRuntimeConfig,
   policyFormSchema,
   secretFormSchema,
-  secretValueSchema,
+  secretReferenceSchema,
   serviceFormSchema,
   validateForm
 } from '../../src/lib/validation/forms.js';
@@ -28,9 +28,12 @@ describe('form validation schemas', () => {
   });
 
   it('validates secret forms', () => {
-    expect(validateForm(secretFormSchema, { name: '', value: 'x' }).error).toBe('Secret name is required');
-    expect(validateForm(secretFormSchema, { name: 'TOKEN', value: '' }).error).toBe('Secret value is required');
-    expect(validateForm(secretValueSchema, { value: '' }).error).toBe('Secret value is required');
+    const credential_id = `cred_${'a'.repeat(64)}`;
+    expect(validateForm(secretFormSchema, { name: '', credential_id, credential_version: 1 }).error).toBe('Secret name is required');
+    expect(validateForm(secretFormSchema, { name: 'TOKEN', credential_id: '', credential_version: 1 }).error).toMatch(/Signet credential id/);
+    expect(validateForm(secretReferenceSchema, { credential_id, credential_version: 0 }).error).toBe('Credential version must be at least 1');
+    expect(validateForm(secretReferenceSchema, { credential_id, credential_version: 1.5 }).error).toBe('Credential version must be a whole number');
+    expect(validateForm(secretFormSchema, { name: 'TOKEN', credential_id, credential_version: '2' }).data).toEqual({ name: 'TOKEN', credential_id, credential_version: 2 });
   });
 
   it('parses runtime config with empty fallback', () => {

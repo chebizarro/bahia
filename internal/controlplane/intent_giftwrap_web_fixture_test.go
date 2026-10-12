@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -50,6 +51,11 @@ func TestWebGiftWrapFixtureUnwrapsAsIntent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "secret", intent.Domain)
 	require.Equal(t, "fixture-secret", intent.Content["name"])
+	require.NotContains(t, intent.Content, "encrypted_value")
+	require.NotContains(t, intent.Content, "value")
+	require.Equal(t, map[string]interface{}{
+		"store": "signet", "credential_id": "cred_" + strings.Repeat("a", 64), "version": json.Number("2"),
+	}, intent.Content["credential_ref"])
 
 	// The reverse fixture is generated with fixed test-only ephemeral key and
 	// NIP-44 nonces. Production GiftWrap continues to use fresh randomness.

@@ -8,6 +8,8 @@ const SERVICE_ID = 'service-1';
 const BUILD_ID = 'build-1';
 const ARTIFACT_ID = 'artifact-1';
 const ENCRYPTED_RELAY = 'wss://relay.example.com';
+const CREDENTIAL_ID = `cred_${'a'.repeat(64)}`;
+const NEXT_CREDENTIAL_ID = `cred_${'b'.repeat(64)}`;
 
 const mockService = {
   schema: 'bahia.registry.service.v1',
@@ -51,8 +53,8 @@ const mockArtifacts = [{
 }];
 
 const seededSecrets = [
-  { id: 'secret-1', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'DATABASE_URL', value: 'postgres://hidden.example/db', redacted_value: '********', version: 1, created_at: '2026-05-13T12:15:00.000Z', updated_at: '2026-05-13T12:15:00.000Z' },
-  { id: 'secret-2', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'API_KEY', value: 'api-key-hidden-value', redacted_value: '********', version: 1, created_at: '2026-05-13T12:16:00.000Z', updated_at: '2026-05-13T12:16:00.000Z' }
+  { id: 'secret-1', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'DATABASE_URL', credential_ref: { store: 'signet', credential_id: CREDENTIAL_ID, version: 1 }, value: 'postgres://hidden.example/db', version: 1, created_at: '2026-05-13T12:15:00.000Z', updated_at: '2026-05-13T12:15:00.000Z' },
+  { id: 'secret-2', org_id: mockService.org_id, service_id: SERVICE_ID, name: 'API_KEY', credential_ref: { store: 'signet', credential_id: NEXT_CREDENTIAL_ID, version: 1 }, value: 'api-key-hidden-value', version: 1, created_at: '2026-05-13T12:16:00.000Z', updated_at: '2026-05-13T12:16:00.000Z' }
 ];
 
 function secretRelayFixtures() {
@@ -70,7 +72,7 @@ function secretRelayFixtures() {
       key_version: 'v1', legacy_kind: '32008', schema: CONFIDENTIAL_SCHEMA, t: 'secret-registry' };
     const nonce = new Uint8Array(24);
     nonce[0] = index + 1;
-    const { value, redacted_value, ...metadata } = secret;
+    const { value, ...metadata } = secret;
     const ciphertext = xchacha20poly1305(key, nonce, new TextEncoder().encode(JSON.stringify(associatedData)))
       .encrypt(new TextEncoder().encode(JSON.stringify(metadata)));
     events.push(confidentialCpStateFixture({
@@ -165,6 +167,7 @@ test.describe('Service Secrets Smoke Test', () => {
     await expect(page.getByRole('heading', { name: /Secrets \(2\)/ })).toBeVisible();
     await expect(page.locator('.secret-row:has-text("DATABASE_URL")')).toBeVisible();
     await expect(page.locator('.secret-row:has-text("API_KEY")')).toBeVisible();
+    await expect(page.locator('.secret-row:has-text("DATABASE_URL")')).toContainText(`${CREDENTIAL_ID} · credential v1`);
 
     const pageContent = await page.content();
     expect(pageContent).not.toContain('postgres://hidden.example/db');
@@ -179,19 +182,24 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.getByRole('button', { name: 'Add Secret' }).click();
     await expect(page.getByRole('dialog', { name: 'Add Secret' })).toBeVisible();
     await page.locator('#secret-name').fill('NEW_SECRET');
-    await page.locator('#secret-value').fill('super-secret-value-123');
+    await expect(page.getByRole('dialog', { name: 'Add Secret' })).toContainText(`${mockService.org_id}/${SERVICE_ID}/NEW_SECRET`);
+    await page.locator('#secret-credential-id').fill(CREDENTIAL_ID);
+    await page.locator('#secret-credential-version').fill('2');
     await page.getByRole('dialog', { name: 'Add Secret' }).getByRole('button', { name: 'Create Secret' }).click();
 
     await expect(page.getByRole('dialog', { name: 'Add Secret' })).not.toBeVisible();
     await expect(page.locator('.secret-row:has-text("NEW_SECRET")')).toBeVisible();
-    expect(await page.content()).not.toContain('super-secret-value-123');
+    await expect(page.locator('.secret-row:has-text("NEW_SECRET")')).toContainText(`${CREDENTIAL_ID} · credential v2`);
     await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.length)).toBe(1);
     const trace = await page.evaluate(() => ({ wraps: window.__BAHIA_E2E_INTENT_WRAPS, statuses: window.__BAHIA_E2E_INTENT_STATUS_EVENTS }));
     expect(trace.wraps).toHaveLength(1);
     expect(trace.wraps[0].outer.kind).toBe(1059);
     expect(trace.wraps[0].outer.tags).toContainEqual(['p', E2E_SERVICE_PUBKEY]);
     expect(trace.wraps[0].inner.kind).toBe(30900);
-    expect(trace.wraps[0].inner.content).not.toContain('super-secret-value-123');
+    expect(JSON.parse(trace.wraps[0].inner.content)).toEqual(expect.objectContaining({
+      service_id: SERVICE_ID, name: 'NEW_SECRET', credential_ref: { store: 'signet', credential_id: CREDENTIAL_ID, version: 2 }
+    }));
+    expect(trace.wraps[0].inner.content).not.toMatch(/encrypted_value|"value"/);
     expect(trace.statuses[0].tags).toContainEqual(['status', 'accepted']);
   });
 
@@ -219,15 +227,35 @@ test.describe('Service Secrets Smoke Test', () => {
     await page.getByRole('dialog', { name: 'Reveal Secret Value' }).getByText('Close', { exact: true }).click();
 
     await page.locator('.secret-row:has-text("DATABASE_URL") button:has-text("Update")').click();
-    await page.locator('#secret-update-value').fill('updated-secret-value-xyz');
+    await expect(page.getByRole('dialog', { name: 'Update Secret' })).toContainText(`${mockService.org_id}/${SERVICE_ID}/DATABASE_URL`);
+    await page.locator('#secret-update-credential-id').fill(CREDENTIAL_ID);
+    await page.locator('#secret-update-credential-version').fill('2');
     await page.getByRole('dialog', { name: 'Update Secret' }).getByRole('button', { name: 'Update Secret' }).click();
     await expect(page.getByRole('dialog', { name: 'Update Secret' })).not.toBeVisible();
-    expect(await page.content()).not.toContain('updated-secret-value-xyz');
+    await expect.poll(() => page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.length)).toBe(1);
+    const updateWrap = await page.evaluate(() => window.__BAHIA_E2E_INTENT_WRAPS.at(-1));
+    expect(JSON.parse(updateWrap.inner.content)).toEqual(expect.objectContaining({
+      id: 'secret-1', service_id: SERVICE_ID, name: 'DATABASE_URL', credential_ref: { store: 'signet', credential_id: CREDENTIAL_ID, version: 2 }
+    }));
+    expect(updateWrap.inner.content).not.toMatch(/encrypted_value|"value"/);
 
     await page.locator('.secret-row:has-text("API_KEY") button:has-text("Delete")').click();
     await expect(page.getByRole('dialog', { name: 'Delete Secret' })).toBeVisible();
     await page.getByRole('dialog', { name: 'Delete Secret' }).getByRole('button', { name: 'Delete' }).click();
     await expect(page.locator('.secret-row:has-text("API_KEY")')).not.toBeVisible();
+  });
+
+  test('shows the daemon refusal reason from a 30315 secret status', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.__BAHIA_E2E_INTENT_STATUS_OVERRIDE = { 'secret.create': 'credential is not available to this org and service' };
+    });
+    await page.goto(`/services/${SERVICE_ID}`);
+    await page.getByRole('button', { name: 'Add Secret' }).click();
+    await page.locator('#secret-name').fill('NEW_SECRET');
+    await page.locator('#secret-credential-id').fill(CREDENTIAL_ID);
+    await page.locator('#secret-credential-version').fill('1');
+    await page.getByRole('dialog', { name: 'Add Secret' }).getByRole('button', { name: 'Create Secret' }).click();
+    await expect(page.locator('.intent-notice')).toContainText('credential is not available to this org and service');
   });
 
   test('disables Create Secret with an explanatory NIP-44 tooltip when unavailable', async ({ page }) => {

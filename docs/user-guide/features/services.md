@@ -48,7 +48,7 @@ bahia secrets set <service-id> DATABASE_URL --value-file /run/secrets/database-u
 bahia secrets delete <service-id> <secret-id>
 ```
 
-List returns metadata only. With a secret store configured, secret values live in Signet: the operator imports a value with `signetctl import-credential`, and the secret's record holds only the credential reference. Bahia fetches the value when an authorized operation needs it and never stores it ([Secret store](../../architecture/secret-store.md), [runbook](../../runbooks/signet-secret-store.md)). Without a secret store, values travel in gift-wrapped intents. The web app can reveal a value through a confidential request when the signer has read permission.
+List returns metadata only. In the web app, import or rotate the value in Signet first with the exact label `<org-id>/<service-id>/<name>`, then enter the Signet credential id and version when adding or updating the secret. The signed web intent carries only `credential_ref`; the list shows its id and pinned version. Bahia fetches the value when an authorized operation needs it and never stores it ([Secret store](../../architecture/secret-store.md), [runbook](../../runbooks/signet-secret-store.md)). The web app can reveal a value through an interactive confidential request when the signer has read permission. Rejected changes show the daemon's `30315` reason in the secret status notice.
 
 ## Routing and health
 

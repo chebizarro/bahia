@@ -51,7 +51,7 @@
   } from '$lib/stores/repositories.js';
   import { fetchRepoBranches, isNostrRepository } from '$lib/nostr/branches.js';
   import RouteCanaryOutages from '$lib/components/RouteCanaryOutages.svelte';
-  import { secretFormSchema, secretValueSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
+  import { secretFormSchema, secretReferenceSchema, serviceFormSchema, validateForm } from '$lib/validation/forms.js';
   import {
     buildManagedRuntimeConfig,
     createManagedRuntimeForm,
@@ -221,7 +221,8 @@
   let secretCreateError = $state(null);
   let secretForm = $state({
     name: '',
-    value: ''
+    credential_id: '',
+    credential_version: 1
   });
 
   // Secret update modal state
@@ -229,7 +230,7 @@
   let secretUpdating = $state(false);
   let secretUpdateError = $state(null);
   let secretToUpdate = $state(null);
-  let secretUpdateValue = $state('');
+  let secretUpdateReference = $state({ credential_id: '', credential_version: 1 });
 
   // Secret reveal modal state
   let secretRevealOpen = $state(false);
@@ -833,7 +834,8 @@
   function openSecretCreateModal() {
     secretForm = {
       name: '',
-      value: ''
+      credential_id: '',
+      credential_version: 1
     };
     secretCreateError = null;
     secretCreateOpen = true;
@@ -842,13 +844,14 @@
   function closeSecretCreateModal() {
     secretCreateOpen = false;
     secretCreateError = null;
-    // Clear value immediately for security
-    secretForm.value = '';
   }
 
   function openSecretUpdateModal(secret) {
     secretToUpdate = secret;
-    secretUpdateValue = '';
+    secretUpdateReference = {
+      credential_id: secret.credential_ref?.credential_id || '',
+      credential_version: secret.credential_ref?.version || 1
+    };
     secretUpdateError = null;
     secretUpdateOpen = true;
   }
@@ -857,7 +860,6 @@
     secretUpdateOpen = false;
     secretUpdateError = null;
     secretToUpdate = null;
-    secretUpdateValue = '';
   }
 
   function openSecretRevealModal(secretName, value) {
@@ -914,14 +916,12 @@
 
     try {
       await createServiceSecret(serviceId, {
-        name: secretForm.name.trim(),
-        value: secretForm.value,
+        name: validationResult.data.name,
+        credential_ref: { store: 'signet', credential_id: validationResult.data.credential_id, version: validationResult.data.credential_version },
         org_id: service?.org_id
       });
-      secretForm.value = '';
       closeSecretCreateModal();
     } catch (err) {
-      // Never log the secret value
       secretCreateError = err.message || 'Failed to create secret';
     } finally {
       secretCreating = false;
@@ -931,7 +931,7 @@
   async function handleSecretUpdate() {
     if (!secretToUpdate) return;
 
-    const validationResult = validateForm(secretValueSchema, { value: secretUpdateValue });
+    const validationResult = validateForm(secretReferenceSchema, secretUpdateReference);
     if (!validationResult.success) {
       secretUpdateError = validationResult.error;
       return;
@@ -941,7 +941,10 @@
     secretUpdateError = null;
 
     try {
-      await updateServiceSecret(serviceId, secretToUpdate.id, { value: secretUpdateValue, org_id: service?.org_id });
+      await updateServiceSecret(serviceId, secretToUpdate.id, {
+        credential_ref: { store: 'signet', credential_id: validationResult.data.credential_id, version: validationResult.data.credential_version },
+        org_id: service?.org_id
+      });
       secretValueCache = { ...secretValueCache, [secretToUpdate.id]: undefined };
       closeSecretUpdateModal();
     } catch (err) {
@@ -1257,6 +1260,9 @@
                 <ProtectedIcon size={16} strokeWidth={1.75} ariaHidden="true" className="inline-entity-icon" />
                 <code class="secret-name">{secret.name}</code>
                 {#if secret.version}<span class="secret-version">v{secret.version}</span>{/if}
+                {#if secret.credential_ref}
+                  <span class="secret-scope">Signet: <code>{secret.credential_ref.credential_id}</code> · credential v{secret.credential_ref.version}</span>
+                {/if}
                 {#if secret.pending}<span class="secret-version">{secret.pendingStatus && secret.pendingStatus !== 'pending' ? secret.pendingStatus : 'Pending'}{secret.pendingDelete ? ' deletion' : ''}</span>{/if}
                 {#if secret.environment_id}
                   <span class="secret-scope">env: {secret.environment_id}</span>
@@ -1936,17 +1942,18 @@
       <span class="field-hint">A unique identifier for this secret</span>
     </div>
 
+    <p class="field-hint">Import the value into Signet as a provisioner before creating this reference. Bahia receives only the credential id and version, never the value.</p>
+    {#if secretForm.name.trim() && service?.org_id}
+      <p class="field-hint">Required Signet label for this secret: <code>{service.org_id}/{serviceId}/{secretForm.name.trim()}</code></p>
+      <p class="field-hint">Run <code>signetctl import-credential &lt;owner&gt; --type credential --label "{service.org_id}/{serviceId}/{secretForm.name.trim()}" --stdin</code>, then enter the resulting credential id and version.</p>
+    {/if}
     <div class="form-field">
-      <label for="secret-value">Value *</label>
-      <Textarea
-        id="secret-value"
-        bind:value={secretForm.value}
-        placeholder="Enter the secret value..."
-        rows={6}
-        required
-        disabled={secretCreating}
-      />
-      <span class="field-hint">The secret value will be encrypted and never displayed</span>
+      <label for="secret-credential-id">Signet credential id *</label>
+      <Input id="secret-credential-id" bind:value={secretForm.credential_id} placeholder="cred_…" required disabled={secretCreating} />
+    </div>
+    <div class="form-field">
+      <label for="secret-credential-version">Credential version *</label>
+      <Input id="secret-credential-version" type="number" bind:value={secretForm.credential_version} min="1" step="1" required disabled={secretCreating} />
     </div>
 
     {#if secretCreateError}
@@ -1983,17 +1990,18 @@
       <Input id="secret-update-name" value={secretToUpdate?.name || ''} disabled />
     </div>
 
+    <p class="field-hint">Import or rotate the value in Signet first, then point this secret at its credential version. No value is sent in the intent.</p>
+    {#if secretToUpdate && service?.org_id}
+      <p class="field-hint">Required Signet label: <code>{service.org_id}/{serviceId}/{secretToUpdate.name}</code></p>
+      <p class="field-hint">For a new credential, run <code>signetctl import-credential &lt;owner&gt; --type credential --label "{service.org_id}/{serviceId}/{secretToUpdate.name}" --stdin</code>.</p>
+    {/if}
     <div class="form-field">
-      <label for="secret-update-value">New Value *</label>
-      <Textarea
-        id="secret-update-value"
-        bind:value={secretUpdateValue}
-        placeholder="Enter the new secret value..."
-        rows={6}
-        required
-        disabled={secretUpdating}
-      />
-      <span class="field-hint">The old value cannot be viewed. Save this value securely.</span>
+      <label for="secret-update-credential-id">Signet credential id *</label>
+      <Input id="secret-update-credential-id" bind:value={secretUpdateReference.credential_id} placeholder="cred_…" required disabled={secretUpdating} />
+    </div>
+    <div class="form-field">
+      <label for="secret-update-credential-version">Credential version *</label>
+      <Input id="secret-update-credential-version" type="number" bind:value={secretUpdateReference.credential_version} min="1" step="1" required disabled={secretUpdating} />
     </div>
 
     {#if secretUpdateError}

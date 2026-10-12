@@ -18,9 +18,6 @@ vi.mock('../../src/lib/stores/sensitive-intents.svelte.js', () => ({
   orgIdFor: record => record?.org_id || '0199c749-9300-7444-8444-444444444444',
   submitSensitiveIntent: intentMock
 }));
-vi.mock('../../src/lib/stores/auth.svelte.js', () => ({
-  encryptWithAuth: async (_pubkey, plaintext) => 'encrypted:' + plaintext
-}));
 
 const bootstrapMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const secretReadMock = vi.hoisted(() => vi.fn(() => ({ rows: [], tombstones: [], unreadable: 0 })));
@@ -80,14 +77,15 @@ describe('encrypted route stores', () => {
     const store = await import('../../src/lib/stores/service-secrets.svelte.js');
 
     await expect(store.listServiceSecrets(serviceId)).resolves.toHaveLength(1);
-    // Create now NIP-44 encrypts client-side and sends encrypted_value
-    await expect(store.createServiceSecret(serviceId, { name: 'API_KEY', value: 'super-secret' })).resolves.toMatchObject({ pending: true });
+    const ref = { store: 'signet', credential_id: `cred_${'a'.repeat(64)}`, version: 1 };
+    await expect(store.createServiceSecret(serviceId, { name: 'API_KEY', credential_ref: ref })).resolves.toMatchObject({ pending: true });
     await expect(store.revealServiceSecret(serviceId, secretId)).resolves.toBe('plaintext');
     await expect(store.deleteServiceSecret(serviceId, secretId)).resolves.toMatchObject({ pending: true });
 
     expect(secretReadMock).toHaveBeenCalledWith('secret-registry', 32008);
     expect(intentMock).toHaveBeenCalledWith(expect.objectContaining({ domain: 'secret', op: 'create',
-      content: expect.objectContaining({ encrypted_value: 'encrypted:super-secret' }) }));
+      content: expect.objectContaining({ credential_ref: ref }) }));
+    expect(JSON.stringify(intentMock.mock.calls)).not.toMatch(/encrypted_value|"value"/);
     // Reveal still uses ContextVM
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(1);
     expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledWith(expect.objectContaining({ operation: 'services/secrets-reveal', payload: { service_id: serviceId, secret_id: secretId } }));
