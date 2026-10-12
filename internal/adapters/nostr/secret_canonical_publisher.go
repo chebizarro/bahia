@@ -113,7 +113,8 @@ func SecretDTag(id uuid.UUID) string {
 
 // SecretRegistryRecord builds the tags and content for a secret registry
 // canonical state record. The content contains ONLY ref metadata — never
-// the encrypted value.
+// the encrypted value — and, for a value held by the external secret store,
+// its credential reference.
 func SecretRegistryRecord(ref *domain.SecretRef, deleted bool) (gonostr.Tags, string) {
 	tags := gonostr.Tags{
 		{"service_id", ref.ServiceID.String()},
@@ -124,13 +125,19 @@ func SecretRegistryRecord(ref *domain.SecretRef, deleted bool) (gonostr.Tags, st
 	}
 
 	payload := map[string]any{
-		"id":                ref.ID.String(),
-		"service_id":        ref.ServiceID.String(),
-		"name":              ref.Name,
-		"encryption_method": string(ref.EncryptionMethod),
-		"version":           ref.Version,
-		"created_by":        ref.CreatedBy,
-		"deleted":           deleted,
+		"id":         ref.ID.String(),
+		"service_id": ref.ServiceID.String(),
+		"name":       ref.Name,
+		"version":    ref.Version,
+		"created_by": ref.CreatedBy,
+		"deleted":    deleted,
+	}
+	if ref.EncryptionMethod != "" {
+		payload["encryption_method"] = string(ref.EncryptionMethod)
+	}
+	if ref.CredentialRef != nil {
+		// The external store's reference; the value itself never appears.
+		payload["credential_ref"] = ref.CredentialRef
 	}
 	if ref.EnvironmentID != nil {
 		payload["environment_id"] = ref.EnvironmentID.String()

@@ -63,6 +63,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/pipeline"
 	"github.com/openagentsinc/bahia/internal/reconcile"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
 	"github.com/openagentsinc/bahia/internal/workflow"
@@ -92,6 +93,7 @@ type App struct {
 	RelayFirstRegistry        *service.RelayFirstRegistry
 	SoulFactory               *soulfactory.Reactor
 	soulFactoryCloser         func() error
+	secretStore               *signetAdapter.CredentialStore
 	serviceSigner             *serviceSigner
 	closeServiceKeyer         func()
 	hiveCIInitiator           *giteaAdapter.Initiator
@@ -753,6 +755,26 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Info("deployment-run stale health awaits durable Loom kind-30100 catch-up on every configured relay")
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
+
+	// External secret store (docs/architecture/secret-store.md). Secret values
+	// configured through it never touch PostgreSQL, relays or intents.
+	secretStore, err := openSecretStore(ctx, cfg, servicePubkey, outboundAdmission, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configuring secret store: %w", err)
+	}
+	secretStoreOwned := false
+	defer func() {
+		if secretStore != nil && !secretStoreOwned {
+			secretStore.Close()
+		}
+	}()
+	// secretValues is the seam consumers use; nil when no store is configured.
+	var secretValues secretstore.SecretStore
+	if secretStore != nil {
+		secretValues = secretStore
+		healthProvider.RegisterCheck("secret_store", secretStoreHealthCheck(secretStore))
+		bgManager.RegisterWithOptions(&secretStoreProbeRunner{store: secretStore, timeout: cfg.SecretStore.Signet.RequestTimeout, logger: logger}, RunnerRequired(false))
+	}
 	if staleRunDetector != nil {
 		healthProvider.RegisterCheck("deployment_run_health", func() HealthCheck {
 			if staleRunDetector.LoomStatusComplete() {
@@ -2293,21 +2315,28 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// SecretCanonicalPublisher follows the BackupCanonicalPublisher pattern:
 	// holds a *Projector reference and publishes through the shared signing/outbox
 	// pipeline. Secret values are NEVER included in published events.
-	secretOrgResolver := controlplane.NewServiceBackedSecretOrgResolver(serviceRepo, secretRepo)
-	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretOrgResolver, logger)
+	// The org a secret record is encrypted for, and the current record the
+	// handler reconciles against, come from the daemon's own canonical
+	// records in the local event store, not PostgreSQL.
+	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
+	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
 
 	// Register the secret intent handler when the secret domain is enabled.
-	if enabledDomains["secret"] && secretRepo != nil {
-		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(
-			controlplane.SecretIntentHandlerConfig{
-				Registry:  secretRepo,
-				Encryptor: secretEncryptor,
-				Publisher: secretCanonical,
-				Status:    intentStatus,
-				Logger:    logger,
-			},
-		))
-		logger.Info("secret intent handler registered")
+	// With a secret store it needs no database: intents carry only
+	// credential references. Without one, the legacy value path needs the
+	// PostgreSQL secret store.
+	if enabledDomains["secret"] && (secretValues != nil || secretRepo != nil) {
+		handlerCfg := controlplane.SecretIntentHandlerConfig{
+			Registry:  secretRepo,
+			Encryptor: secretEncryptor,
+			Store:     secretValues,
+			Records:   secretView,
+			Publisher: secretCanonical,
+			Status:    intentStatus,
+			Logger:    logger,
+		}
+		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(handlerCfg))
+		logger.Info("secret intent handler registered", zap.Bool("secret_store", secretValues != nil), zap.Bool("sql_secret_store", secretRepo != nil))
 	}
 
 	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
@@ -2668,17 +2697,19 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			logger.Info("gift-wrap intent ingress wired to ContextVM transport")
 		}
 		encryptedRouteHandlers := controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
-			Secrets:      secretRepo,
-			Encryptor:    secretEncryptor,
-			Runs:         runRepo,
-			RunLogs:      runLogService,
-			Artifacts:    artifactRepo,
-			Signatures:   sigRepo,
-			SignVerifier: signVerifier,
-			Services:     serviceRepo,
-			Intents:      intentRepo,
-			RBAC:         tenantRBAC,
-			Logger:       logger,
+			Secrets:       secretRepo,
+			Encryptor:     secretEncryptor,
+			SecretRecords: secretView,
+			SecretStore:   secretValues,
+			Runs:          runRepo,
+			RunLogs:       runLogService,
+			Artifacts:     artifactRepo,
+			Signatures:    sigRepo,
+			SignVerifier:  signVerifier,
+			Services:      serviceRepo,
+			Intents:       intentRepo,
+			RBAC:          tenantRBAC,
+			Logger:        logger,
 		})
 		// D80: the artifact request op uses the same F74a-wrapped signature
 		// repository as the retained encrypted route, so it publishes once.
@@ -2972,10 +3003,12 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
 		localOutbox:               localOutbox,
+		secretStore:               secretStore,
 	}
 	soulFactoryRuntimeReleased = true
 	localNostrReleased = true
 	serviceKeyerOwned = true
+	secretStoreOwned = true
 	return application, nil
 }
 
@@ -3769,6 +3802,9 @@ func (a *App) RunContext(ctx context.Context) error {
 		if err := a.soulFactoryCloser(); err != nil {
 			a.Logger.Warn("SoulFactory Signet client close failed", zap.Error(err))
 		}
+	}
+	if a.secretStore != nil {
+		a.secretStore.Close()
 	}
 
 	// Shutdown telemetry.

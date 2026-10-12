@@ -64,6 +64,7 @@ type Config struct {
 	RouteCanaries   RouteCanaryConfig         `koanf:"route_canaries" yaml:"route_canaries"`
 	FIPS            FIPSConfig                `koanf:"fips"`
 	SoulFactory     SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
+	SecretStore     SecretStoreConfig         `koanf:"secret_store" yaml:"secret_store"`
 }
 
 // SBOMConfig controls SBOM generation adapters.
@@ -2083,6 +2084,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.validateSupervision(); err != nil {
+		return err
+	}
+	if err := c.SecretStore.validate(); err != nil {
 		return err
 	}
 	mode := strings.ToLower(strings.TrimSpace(c.Mode))
