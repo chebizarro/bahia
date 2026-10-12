@@ -19,7 +19,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -192,7 +194,7 @@ func mcpProjectorSigner(t testing.TB, sk nostr.SecretKey) nostrpool.ProjectorOpt
 		t.Fatal(err)
 	}
 	withSigner := nostrpool.WithProjectorSigner(signer, sk.Public().Hex())
-	withKeys := nostrpool.WithConfidentialStateHashKeys(dedupeKeyring(t))
+	withKeys := nostrpool.WithConfidentialStateHashKeys(systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, 0x5a))
 	return func(p *nostrpool.Projector) {
 		withSigner(p)
 		withKeys(p)

@@ -17,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -456,7 +457,7 @@ func TestConfidentialDedupeKeyChangeRepublishesOncePerCoordinate(t *testing.T) {
 // never publishes a record without its digest.
 func TestConfidentialPublishWaitsForTheDedupeKey(t *testing.T) {
 	script := newRelayScript()
-	ring := unloadedStateHashKeyring()
+	ring := systemkeys.Unloaded(secretstore.PurposeConfidentialDedupe)
 	daemon := startLocalHistoryDaemon(t, t.TempDir(), script, WithConfidentialStateHashKeys(ring))
 	publisher := NewPaymentCanonicalPublisher(daemon.projector, &nonceConfidentialEncryptor{}, zap.NewNop())
 	rec := &domain.PaymentRecord{ID: uuid.New(), DeploymentRunID: uuid.New(), WorkerPubkey: "worker", MintURL: "https://mint", AmountSats: 9, TokenHash: "a", Direction: domain.PaymentDirectionPayment, Status: domain.PaymentStatusPending}
@@ -468,7 +469,7 @@ func TestConfidentialPublishWaitsForTheDedupeKey(t *testing.T) {
 
 	published := make(chan error, 1)
 	go func() { published <- publisher.PublishPaymentRecord(context.Background(), rec) }()
-	require.NoError(t, ring.Load(context.Background(), keyringTestStore{key: make([]byte, secretstore.SystemKeySize)}))
+	require.NoError(t, systemkeys.Load(ring, secretstore.PurposeConfidentialDedupe, 0))
 	require.NoError(t, <-published)
 	require.Equal(t, 2, script.totalCalls())
 

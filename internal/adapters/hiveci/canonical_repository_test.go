@@ -19,7 +19,9 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -56,7 +58,7 @@ func startCanonicalDaemon(t *testing.T, dir string, index repository.HiveCIRepos
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostrAdapter.WithLocalOutbox(outbox, store))
 	history := nostrAdapter.NewLocalEventRepository(store, nil).Authored(pubkey)
 	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey), nostrAdapter.WithConfidentialStateHashKeys(dedupeKeyring(t)))
+	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey), nostrAdapter.WithConfidentialStateHashKeys(systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, 0x5a)))
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	signer, err := controlplane.NewPrivateKeySigner(daemonKeyHex)
 	require.NoError(t, err)

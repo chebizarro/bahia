@@ -1,18 +1,14 @@
 package nostr
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"strings"
-	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
+	"github.com/openagentsinc/bahia/test/testkit/systemkeys"
 	"go.uber.org/zap"
 )
 
@@ -53,40 +49,10 @@ func withTestServiceKey(p *Projector, privateKeyHex string) *Projector {
 // repeats.
 const testStateHashKeyFill = 0x5a
 
-// keyringTestStore delivers one system key to any system scope.
-type keyringTestStore struct{ key []byte }
-
-func (s keyringTestStore) Resolve(_ context.Context, _ domain.SecretCredentialRef, _ secretstore.Scope) (*secretstore.Value, error) {
-	return secretstore.NewValue(append([]byte(nil), s.key...), time.Now().Add(time.Minute)), nil
-}
-
-func (keyringTestStore) Inspect(context.Context, string, secretstore.Scope) (secretstore.Metadata, error) {
-	return secretstore.Metadata{}, secretstore.ErrNotFound
-}
-
-func (keyringTestStore) Health(context.Context) error { return nil }
-
 // testStateHashKeyring is a loaded keyring whose confidential-dedupe key
 // repeats fill.
 func testStateHashKeyring(fill byte) *secretstore.Keyring {
-	ring := unloadedStateHashKeyring()
-	if err := ring.Load(context.Background(), keyringTestStore{key: bytes.Repeat([]byte{fill}, secretstore.SystemKeySize)}); err != nil {
-		panic(err)
-	}
-	return ring
-}
-
-// unloadedStateHashKeyring configures a confidential-dedupe key that has not
-// been resolved.
-func unloadedStateHashKeyring() *secretstore.Keyring {
-	ring, err := secretstore.NewKeyring([]secretstore.SystemKeyRef{{
-		Purpose: secretstore.PurposeConfidentialDedupe, KeyID: "test",
-		Credential: domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_" + strings.Repeat("d", 64), Version: 1},
-	}})
-	if err != nil {
-		panic(err)
-	}
-	return ring
+	return systemkeys.Keyring(secretstore.PurposeConfidentialDedupe, fill)
 }
 
 // newKeyedTestProjector builds a projector signing as the fixture's
