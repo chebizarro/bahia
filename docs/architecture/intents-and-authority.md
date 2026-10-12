@@ -150,15 +150,18 @@ a [secret store](secret-store.md) (`secret_store.backend=signet`):
 }
 ```
 
-The operator imports the value into Signet first; the intent carries only
-the reference. The handler asks the store for the credential's metadata and
-rejects the intent unless it exists, is active and is at exactly the pinned
-version, then reconciles against the current canonical record read from the
-local event store (no PostgreSQL) and publishes the record with the
-reference. The service's canonical org must be the intent's `org`, and a
-secret's `service_id` never changes. A failed canonical publish fails the
-intent: the record is the secret's only home. Re-pointing a secret whose
-value was sealed into PostgreSQL deletes that sealed value. Signet being
+The operator imports the value into Signet first, labelled
+`<org-id>/<service-id>/<name>`; the intent carries only the reference. The
+handler reconciles against the current canonical record read from the local
+event store (no PostgreSQL), requires the service's canonical org to be the
+intent's `org` (a secret's `service_id` never changes), then asks the store
+for the credential's metadata in that org and service: it rejects the intent
+unless the credential's label is in `<org-id>/<service-id>/`, and it exists,
+is active and is at exactly the pinned version. It then publishes the record
+with the reference; a failed canonical publish fails the intent, the record
+being the secret's only home. With PostgreSQL configured, the secret's index
+row first becomes a value-less marker (every retained legacy ciphertext of
+that id scrubbed), so PostgreSQL consumers refuse it rather than omit it. Signet being
 unreachable rejects the intent with the reason (fail closed); re-send it
 once Signet answers.
 

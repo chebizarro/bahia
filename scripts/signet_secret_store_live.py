@@ -14,8 +14,9 @@ docs/runbooks/signet-secret-store.md describes:
 
 It then runs Bahia's opt-in TestLiveSignetCredentialStore (-tags
 signetinterop) from this clean Bahia checkout: resolve the pinned version,
-refuse the old pin after a rotation and resolve the new one, refuse when the
-delivery grant names another client, refuse after revocation.
+refuse another tenant's credential held by the same owner, refuse the old
+pin after a rotation and resolve the new one, refuse when the delivery grant
+names another client, refuse after revocation.
 
 Never accepts an existing identity, relay URL or database. No secret or raw
 test output is written to stdout or stderr; on failure only the failing test
@@ -30,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from signet_live_interop import (  # noqa: E402  (shared guards of the NIP-46 interop runner)
@@ -41,7 +43,6 @@ LIVE_TEST = "TestLiveSignetCredentialStore"
 PACKAGE = "./internal/adapters/signet"
 SOURCE = "credential_store_live_integration_test.go"
 OWNER = "bahia-vault"
-LABEL = "bahia-live/DATABASE_URL"
 
 
 def main(argv=None):
@@ -129,16 +130,25 @@ def main(argv=None):
                 management(ctl, config, env, "grant-provisioner", requester_pk)
                 management(ctl, config, env, "set-policy", OWNER, json.dumps(
                     {"default": "deny", "allow_clients": [requester_pk], "allow_methods": ["credential.deliver"]}))
+                # Bahia binds a credential to its tenant by label:
+                # <org-id>/<service-id>/<name>.
+                org_id, service_id = str(uuid.uuid4()), str(uuid.uuid4())
                 imported = management(ctl, config, env, "import-credential", OWNER, "--type", "credential",
-                                      "--label", LABEL, "--file", str(value_v1))
+                                      "--label", f"{org_id}/{service_id}/DATABASE_URL", "--file", str(value_v1))
                 credential_id = imported.get("credential_id", "")
                 if not credential_id.startswith("cred_") or imported.get("version") != 1:
                     raise RuntimeError("import-credential did not report a version-1 credential id")
+                foreign = management(ctl, config, env, "import-credential", OWNER, "--type", "credential",
+                                     "--label", f"{uuid.uuid4()}/{uuid.uuid4()}/DATABASE_URL", "--file", str(value_v1))
+                foreign_id = foreign.get("credential_id", "")
+                if not foreign_id.startswith("cred_"):
+                    raise RuntimeError("import-credential did not report the other tenant's credential id")
 
                 fixture = root / "fixture.json"
                 private_file(fixture, json.dumps(dict(
                     disposable=True, signet_commit=signet_commit, relay_url=relay_url, signet_pubkey=bunker_pk,
                     requester_secret_key_hex=requester_sk, owner=OWNER, credential_id=credential_id,
+                    org_id=org_id, service_id=service_id, foreign_credential_id=foreign_id,
                     value_v1_file=str(value_v1), value_v2_file=str(value_v2), signetctl=str(ctl),
                     signet_config=str(config), other_client_pubkey=other_pk)) + "\n")
                 test_env = env.copy()

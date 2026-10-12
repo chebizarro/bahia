@@ -29,7 +29,9 @@ Three identities are involved; keep them distinct:
    signetctl provision bahia-vault
    ```
 
-2. Create the requester key on the Bahia host (64 hex, owner-only):
+2. Create the requester key on the Bahia host (64 hex, a regular file that
+   only its owner can read; the daemon refuses a symlink or a group- or
+   world-accessible file):
 
    ```bash
    install -m 0400 /dev/null /run/secrets/bahia-secret-store.key
@@ -69,10 +71,15 @@ Three identities are involved; keep them distinct:
 
 ## Store a secret
 
+Name every credential `<org-id>/<service-id>/<name>`: the label binds it to
+its tenant. The daemon refuses (and never delivers) a credential whose label
+is not in the secret's org and service, so a credential labelled for one
+service cannot be referenced from another, even within the same org. The
+label is unique per owner and Signet derives the credential id from it.
+
 ```bash
-# The label is unique per owner; Signet derives the credential id from it.
 signetctl import-credential bahia-vault --type credential \
-  --label "<service-id>/DATABASE_URL" --file /run/operator/database-url
+  --label "<org-id>/<service-id>/DATABASE_URL" --file /run/operator/database-url
 signetctl list-credentials bahia-vault          # credential_id, version, status
 bahia secrets set <service-id> DATABASE_URL \
   --credential-id cred_<64 hex> --credential-version 1
@@ -102,7 +109,8 @@ signetctl delete-credential cred_<64 hex> --confirm
 ## Migrate an existing secret
 
 Values that went through a secret intent or the PostgreSQL store are
-compromised; do not copy them. For each secret: issue a new value at its
+compromised; do not copy them. Until bahia-cd0wr.4.7, a re-pointed secret
+can be revealed but deploys that inject it fail loudly. For each secret: issue a new value at its
 source and revoke the old one there, import the new value (above), then run
 `bahia secrets set … --credential-id … --credential-version 1` for the same
 service and name. The daemon re-points the existing secret and deletes its
@@ -124,6 +132,13 @@ Create the new key file, run step 3 for its pubkey, point
 | `no relay accepted the Signet request` | every relay refused the gift wrap (the message lists each relay's reason), or outbound admission refused it (`budget exhausted`, circuit breaker, kill switch) |
 | `refused (no_capability)` | the owner's delivery policy does not name this requester |
 | `refused (not_owner)` / `credential is not owned by …` | the credential belongs to another owner |
+| `credential is not labelled <org-id>/<service-id>/<name>` | the credential's label is not in the secret's org and service; import it under the right label |
+| `… reply subscription is not caught up …; reconnecting` | every relay ended the reply subscription; it is reopened with backoff and requests fail closed until a relay serves it |
+
+A deploy (or other consumer) failing with `secret value is held by the
+secret store and this consumer still reads PostgreSQL` names a store-backed
+secret whose consumer moves to the secret store in bahia-cd0wr.4.7; until
+then such secrets can be revealed but not injected.
 
 Each secret resolve publishes three gift wraps on the outbound `priority`
 lane, shared with operator results and ContextVM replies; size
