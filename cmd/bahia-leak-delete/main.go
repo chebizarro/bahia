@@ -6,6 +6,8 @@
 //	delete       plans NIP-09 deletion requests naming those events by id only
 //	             (e and k tags); with --execute signs them as the leaked
 //	             identity and publishes them, recording every relay's answer
+//	purge-local  removes the events from the daemon's local event store,
+//	             outbox and PostgreSQL nostr_events (dry run by default)
 //
 // It never builds or publishes an a-tag (coordinate) deletion: the coordinate
 // <kind>:<pubkey>:<d> of a leaked event contains the leaked key. It never
@@ -45,6 +47,8 @@ const usage = `usage:
       [--page-limit 100] [--page-timeout 30s] [--concurrency 4] [SIGNER FLAGS]
   bahia-leak-delete delete --old-pubkey PUBKEY --report PATH [--relay URL ...]
       [--batch-size 50] [--execute SIGNER FLAGS] [--max-attempts 5]
+  bahia-leak-delete purge-local --old-pubkey PUBKEY [--event-store PATH] [--outbox PATH]
+      [--db-config PATH] [--execute]
 
 signer flags (the leaked identity; --signer-timeout applies to every method):
   --signer local  --key-file PATH
@@ -86,6 +90,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return runScan(ctx, args[1:], stdout, stderr, d)
 	case "delete":
 		return runDelete(ctx, args[1:], stdout, stderr, d)
+	case "purge-local":
+		return runPurge(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return exitOK
@@ -366,6 +372,45 @@ func runDelete(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 	}
 	if !complete {
 		return exitIncomplete
+	}
+	return exitOK
+}
+
+func runPurge(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := newFlagSet("purge-local", stderr)
+	oldFlag := flags.String("old-pubkey", "", "the leaked service pubkey (64 hex or npub)")
+	eventStore := flags.String("event-store", "", "the daemon's local event store (nostr.local_store.path)")
+	outbox := flags.String("outbox", "", "the daemon's outbox (nostr.local_store.outbox_path)")
+	dbConfig := flags.String("db-config", "", "Bahia config file whose db section names the PostgreSQL database")
+	execute := flags.Bool("execute", false, "remove; without it, only list")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return exitFailure
+	}
+	if *eventStore == "" && *outbox == "" && *dbConfig == "" {
+		fmt.Fprint(stderr, usage)
+		return exitFailure
+	}
+	oldPubkey, err := parsePubkey(*oldFlag)
+	if err != nil {
+		return fail(stderr, "--old-pubkey: %v", err)
+	}
+	if *eventStore != "" {
+		if err := purgeEventStore(stdout, *eventStore, oldPubkey, *execute); err != nil {
+			return fail(stderr, "%v", err)
+		}
+	}
+	if *outbox != "" {
+		if err := purgeOutbox(stdout, *outbox, oldPubkey, *execute); err != nil {
+			return fail(stderr, "%v", err)
+		}
+	}
+	if *dbConfig != "" {
+		if err := purgePostgres(ctx, stdout, *dbConfig, oldPubkey, *execute); err != nil {
+			return fail(stderr, "%v", err)
+		}
+	}
+	if !*execute {
+		fmt.Fprintln(stdout, "dry run: nothing was removed; add --execute to remove")
 	}
 	return exitOK
 }

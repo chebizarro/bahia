@@ -993,6 +993,83 @@ func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
 	return removed, nil
 }
 
+// PurgeEvents removes, in one transaction, every entry whose signed event match
+// selects (pending, published or failed) with its state index row and its
+// package coordinate row, and returns the removed event ids in key order. It
+// is for offline remediation of signed events that must not survive anywhere
+// (cmd/bahia-leak-delete removes status events whose d tag carried a leaked
+// key); the daemon never calls it. An entry pinned by an unresolved backup-run
+// admission, or holding a delivery proof, is refused and nothing is removed:
+// those records are the only evidence that a run or config reached quorum.
+// bbolt keeps freed pages in the file, so a caller that must not leave the
+// removed bytes on disk compacts the file afterwards.
+func (o *Outbox) PurgeEvents(match func(nostr.Event) bool) ([]nostr.ID, error) {
+	if o.shared.readOnly {
+		return nil, ErrReadOnly
+	}
+	var removed []nostr.ID
+	err := o.shared.db.Update(func(tx *bbolt.Tx) error {
+		entries := tx.Bucket(outboxEntriesBucket)
+		if entries == nil {
+			return nil
+		}
+		var victims []OutboxEntry
+		if err := entries.ForEach(func(key, raw []byte) error {
+			var entry OutboxEntry
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return fmt.Errorf("decode outbox entry %x: %w", key, err)
+			}
+			if match(entry.Event) {
+				victims = append(victims, entry)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		pinsIndexed := tx.Bucket(backupRunEventsBucket) != nil || tx.Bucket(backupRunStatusEventsBucket) != nil
+		proofs := tx.Bucket(outboxDeliveryProofsBucket)
+		coordinates := tx.Bucket(outboxCoordinatesBucket)
+		for _, entry := range victims {
+			id := entry.Event.ID
+			if pinsIndexed {
+				pinned, err := backupRunAdmissionUnresolved(tx, id)
+				if err != nil {
+					return err
+				}
+				if pinned {
+					return fmt.Errorf("outbox entry %s is pinned by an unresolved backup-run admission", id.Hex())
+				}
+			}
+			if proofs != nil && proofs.Get(id[:]) != nil {
+				return fmt.Errorf("outbox entry %s holds a delivery proof", id.Hex())
+			}
+			index, key := tx.Bucket(outboxPendingBucket), pendingKey(entry.Target, entry.EnqueuedAt, id)
+			if entry.State != OutboxPending {
+				index, key = tx.Bucket(settledBucket(entry.State)), settledKey(entry.SettledAt, id)
+			}
+			if index != nil {
+				if err := index.Delete(key); err != nil {
+					return err
+				}
+			}
+			if coordinate := outboxCoordinateKey(entry.Target, entry.Event); coordinate != nil && coordinates != nil {
+				if err := coordinates.Delete(coordinate); err != nil {
+					return err
+				}
+			}
+			if err := entries.Delete(id[:]); err != nil {
+				return err
+			}
+			removed = append(removed, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("purge outbox entries: %w", err)
+	}
+	return removed, nil
+}
+
 // Retry resets a failed entry back to pending for re-delivery, clearing its
 // relay state and round count so the outbox worker treats it as fresh.
 // Returns the reset entry.
