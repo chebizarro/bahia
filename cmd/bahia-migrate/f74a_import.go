@@ -43,6 +43,10 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	if err != nil {
 		return reportError(stderr, "f74a-import relay policy: %v", err)
 	}
+	guard, err := serviceRelayGuard(ctx, cfg.Nostr, signer, relays)
+	if err != nil {
+		return reportError(stderr, "f74a-import relays: %v", err)
+	}
 	logger, err := zap.NewProduction()
 	if err != nil {
 		return reportError(stderr, "creating logger: %v", err)
@@ -61,7 +65,7 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	if moved := outbox.MovedAside(); moved != "" {
 		return reportError(stderr, "local outbox corruption moved %s aside; recover it before importing", moved)
 	}
-	poolRelays := nostradapter.NewRelayPool(relays, logger, nostradapter.WithAuthSigner(signer))
+	poolRelays := nostradapter.NewRelayPool(relays, logger, nostradapter.WithAuthSigner(signer), nostradapter.WithControlPlaneRelayGuard(guard))
 	defer poolRelays.Close()
 	poolRelays.Connect(ctx)
 	pub := nostradapter.NewPublisher(cfg.Nostr, poolRelays, nil, logger,

@@ -174,7 +174,7 @@ func TestD80RelayPolicyDesiredStateAcceptedReplayConflictRejected(t *testing.T) 
 	actor := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
 	servicePubkey := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
 	projection := testProjection(t, servicePubkey, "existing-head", time.Unix(3_000, 0), RelayPolicyState{Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://old.example"}})
-	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{}, ProjectionStore: &memoryRelayPolicyProjectionStore{projection: projection}, ServicePubkey: servicePubkey, Logger: zap.NewNop()})
+	h := NewRelaySettingsHandlers(RelaySettingsHandlerConfig{Config: &config.Config{Nostr: config.NostrConfig{ControlledRelays: []string{"wss://new.example"}}}, ProjectionStore: &memoryRelayPolicyProjectionStore{projection: projection}, ServicePubkey: servicePubkey, Logger: zap.NewNop()})
 	publisher := &mockEncryptedPublisher{}
 	signer, err := NewPrivateKeySigner(testServiceKey)
 	require.NoError(t, err)
@@ -195,6 +195,18 @@ func TestD80RelayPolicyDesiredStateAcceptedReplayConflictRejected(t *testing.T) 
 	require.ErrorContains(t, p.ProcessInProcess(t.Context(), &conflict), "projection changed")
 	require.Equal(t, "conflict", tagValueNostr(statuses.events[1].Tags, "status"))
 	require.Len(t, publisher.events, count)
+	// A policy the daemon would refuse is never signed: public relays and
+	// relays outside nostr.controlled_relays are rejected up front.
+	for relay, reason := range map[string]string{
+		"wss://relay.damus.io":       "public relay",
+		"wss://uncontrolled.example": "not in nostr.controlled_relays",
+	} {
+		refused := *intent
+		refused.IntentID = uuid.NewString()
+		refused.Content = map[string]interface{}{"service_relays": []any{relay}, "expected_projection": map[string]any{"event_id": projection.EventID}}
+		require.ErrorContains(t, p.ProcessInProcess(t.Context(), &refused), reason)
+		require.Len(t, publisher.events, count, "a refused relay policy must not be published")
+	}
 	denied := *intent
 	denied.IntentID = uuid.NewString()
 	denied.Actor = "known-non-fleet-principal"

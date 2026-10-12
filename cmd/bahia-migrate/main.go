@@ -279,7 +279,11 @@ func runNostrMigration(ctx context.Context, cfg *config.Config, pool *pgxpool.Po
 		if err != nil {
 			return reportError(stderr, "nostr migration: %v", err)
 		}
-		poolOptions = append(poolOptions, nostradapter.WithAuthSigner(authSigner))
+		guard, err := serviceRelayGuard(ctx, cfg.Nostr, authSigner, relayURLs)
+		if err != nil {
+			return reportError(stderr, "nostr migration: %v", err)
+		}
+		poolOptions = append(poolOptions, nostradapter.WithAuthSigner(authSigner), nostradapter.WithControlPlaneRelayGuard(guard))
 	}
 	relayPool := nostradapter.NewRelayPool(relayURLs, logger, poolOptions...)
 	defer relayPool.Close()

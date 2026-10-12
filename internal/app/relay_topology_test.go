@@ -142,36 +142,41 @@ func TestRelayPolicyHydrationRelayURLsRetainsStoredPolicyRelaysAcrossUpgrade(t *
 	}
 }
 
-func TestInteropRelayURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
+func TestServiceRelayPoolURLsMirrorExternalUsesSidecarBoundary(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.Relays = []string{"wss://upstream.example"}
 	cfg.Loom.Relays = []string{"wss://loom.example"}
 	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.BackendURL = "ws://relay:3334"
 	cfg.Nostr.Sidecar.MirrorExternal = true
 
-	got := interopRelayURLs(cfg, []string{"ws://relay:3334"})
+	got := serviceRelayPoolURLs(cfg.Nostr, cfg.Nostr.Relays, cfg.Loom.Relays)
 	want := []string{"ws://relay:3334", "wss://loom.example"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("interopRelayURLs() = %v, want %v", got, want)
+		t.Fatalf("serviceRelayPoolURLs() = %v, want %v", got, want)
 	}
 }
 
-func TestInteropRelayURLsWithoutMirrorKeepsSidecarAndUpstreamRelays(t *testing.T) {
+func TestServiceRelayPoolURLsWithoutMirrorKeepsSidecarAndServiceRelays(t *testing.T) {
 	cfg := config.Defaults()
-	cfg.Nostr.Relays = []string{"wss://upstream.example"}
 	cfg.Loom.Relays = []string{"wss://loom.example"}
 	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.BackendURL = "ws://relay:3334"
+	cfg.Nostr.Sidecar.PublicURL = "wss://bahia.example/relay"
 	cfg.Nostr.Sidecar.MirrorExternal = false
 
-	got := interopRelayURLs(cfg, []string{"ws://relay:3334"})
+	// The sidecar's public URL names the sidecar: it is reached once, by its
+	// backend URL.
+	got := serviceRelayPoolURLs(cfg.Nostr, []string{"wss://bahia.example/relay", "wss://upstream.example"}, cfg.Loom.Relays)
 	want := []string{"ws://relay:3334", "wss://upstream.example", "wss://loom.example"}
 	if !slices.Equal(got, want) {
-		t.Fatalf("interopRelayURLs() = %v, want %v", got, want)
+		t.Fatalf("serviceRelayPoolURLs() = %v, want %v", got, want)
 	}
 }
 
 func TestRelayTopologyCoordinatorReconfiguresPoolsFromCanonicalSnapshot(t *testing.T) {
 	cfg := config.Defaults()
+	cfg.Nostr.ControlledRelays = []string{"wss://old-service.example", "wss://old-contextvm.example", "wss://new-service.example", "wss://new-contextvm.example"}
 	cfg.Nostr.Relays = []string{"wss://old-service.example"}
 	cfg.Nostr.ServiceRelays = []string{"wss://old-service.example"}
 	cfg.Nostr.ContextVMRelays = []string{"wss://old-contextvm.example"}
@@ -216,6 +221,7 @@ func TestRelayTopologyCoordinatorReconfiguresPoolsFromCanonicalSnapshot(t *testi
 
 func TestRelayTopologyCoordinatorPreservesSidecarPrecedence(t *testing.T) {
 	cfg := config.Defaults()
+	cfg.Nostr.ControlledRelays = []string{"wss://old-upstream.example", "wss://external-service.example", "wss://external-contextvm.example"}
 	cfg.Nostr.Relays = []string{"wss://old-upstream.example"}
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.BackendURL = "ws://relay:3334"
@@ -289,6 +295,7 @@ func TestRelayTopologyCoordinatorDoesNotCollapseRuntimePoolsForTopologyEmptySnap
 
 func TestRelayTopologyCoordinatorDoesNotCollapseServicePoolWhenSnapshotOnlyMovesContextVM(t *testing.T) {
 	cfg := config.Defaults()
+	cfg.Nostr.ControlledRelays = []string{"wss://new-contextvm.example"}
 	controlPlanePool := nostrAdapter.NewRelayPool([]string{"wss://old-contextvm.example"}, zap.NewNop())
 	servicePool := nostrAdapter.NewRelayPool([]string{"wss://old-service.example"}, zap.NewNop())
 	coordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{
