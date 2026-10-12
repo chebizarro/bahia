@@ -45,6 +45,19 @@ func (s *resolvingSecretStore) Resolve(_ context.Context, ref domain.SecretCrede
 	return v, nil
 }
 
+func (s *resolvingSecretStore) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
+	var out []*secretstore.Value
+	for i, r := range reqs {
+		v, err := s.Resolve(ctx, r.Ref, r.Scope)
+		if err != nil {
+			secretstore.ZeroizeAll(out)
+			return nil, &secretstore.BatchError{Index: i, Err: err}
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 func (s *resolvingSecretStore) Inspect(context.Context, string, secretstore.Scope) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrNotFound
 }

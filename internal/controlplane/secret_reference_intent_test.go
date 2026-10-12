@@ -97,6 +97,10 @@ func (s *memSecretStore) Resolve(context.Context, domain.SecretCredentialRef, se
 	return nil, errors.New("the intent handler never resolves values")
 }
 
+func (s *memSecretStore) ResolveAll(context.Context, []secretstore.Request) ([]*secretstore.Value, error) {
+	return nil, errors.New("the intent handler never resolves values")
+}
+
 func (s *memSecretStore) Health(context.Context) error { return s.err }
 
 type referenceFixture struct {
