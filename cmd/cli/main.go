@@ -769,6 +769,7 @@ func adoptCommands() *cobra.Command {
 	var importSelections []string
 	var importAll bool
 	var importOrgID string
+	var importNonSecretEnv []string
 	importCmd := &cobra.Command{
 		Use:   "import",
 		Short: "Import selected or all discovered containers into Bahia",
@@ -785,7 +786,7 @@ func adoptCommands() *cobra.Command {
 				return fmt.Errorf("specify --all or at least one --select alias/containerID")
 			}
 			retryKey, _ := cmd.Flags().GetString("idempotency-key")
-			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey}
+			req := client.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: importAll, OrgID: strings.TrimSpace(importOrgID), IdempotencyKey: retryKey, NonSecretEnvKeys: importNonSecretEnv}
 			result, err := runAdoptionImportIntent(cmd, req)
 			if err != nil {
 				return err
@@ -798,6 +799,7 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
+	importCmd.Flags().StringArrayVar(&importNonSecretEnv, "non-secret-env", nil, "Environment key that is not a secret despite its name (repeatable); adoption keeps it instead of refusing the container")
 	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
 	importCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for retrying this import")
 

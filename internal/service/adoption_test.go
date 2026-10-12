@@ -13,6 +13,7 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	runtimeAdapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -1537,4 +1538,63 @@ func cloneMockAdoptedIdentityRepo(src *mockAdoptedIdentityRepo) *mockAdoptedIden
 		clone.identities[fingerprint] = identity
 	}
 	return clone
+}
+
+// The classifier recognises secret names by whole tokens and connection
+// strings by their value; ordinary configuration whose name merely contains
+// a secret-like substring is kept.
+func TestAdoptionSecretClassifierUsesTokenBoundaries(t *testing.T) {
+	secrets := map[string]string{
+		"DB_PASSWORD": "x", "POSTGRES_PASSWD": "x", "MYSQL_PWD": "x", "JWT_SECRET": "x", "CLIENT_SECRET": "x",
+		"GITHUB_TOKEN": "x", "AWS_SESSION_TOKEN": "x", "AWS_SECRET_ACCESS_KEY": "x",
+		"STRIPE_API_KEY": "x", "SENDGRID_APIKEY": "x", "TLS_PRIVATE_KEY": "x", "JWT_SIGNING_KEY": "x",
+		"GCP_CREDENTIALS": "x", "SSH_PASSPHRASE": "x", "FLEET_CURATOR_BUNKER_URL": "bunker://pub?secret=s",
+		"DATABASE_URL":      "postgres://user:pass@db/prod",
+		"SENTRY_DSN":        "https://key:secret@sentry.example/1",
+		"CONNECTION_STRING": "Server=db;User Id=app;Password=hunter2;",
+		"REDIS_URL":         "redis://:hunter2@cache:6379/0",
+	}
+	plain := map[string]string{
+		"COMPASS_URL": "https://compass.example", "OAUTH_ISSUER": "https://issuer.example", "SESSION_TIMEOUT": "30m",
+		"SORT_KEY": "created_at", "AWS_REGION": "eu-west-1", "PUBLIC_KEY_URL": "https://keys.example", "BYPASS_CACHE": "1",
+		"AUTHOR": "ops", "AWS_ACCESS_KEY_ID": "AKIA0000", "DATABASE_URL": "postgres://db/prod", "REDIS_URL": "redis://cache:6379/0", "PASSWORD_MIN_LENGTH": "12",
+	}
+	for key, value := range secrets {
+		if !isSensitiveEnvironmentEntry(key, value) {
+			t.Errorf("%s is a secret", key)
+		}
+	}
+	for key, value := range plain {
+		if key == "PASSWORD_MIN_LENGTH" {
+			// A whole PASSWORD token stays a secret name: refusing is the
+			// safe side, and the operator can exempt the key.
+			continue
+		}
+		if isSensitiveEnvironmentEntry(key, value) {
+			t.Errorf("%s=%s is not a secret", key, value)
+		}
+	}
+	classified := classifyDiscoveredSensitiveData(runtime.DiscoveredContainer{Environment: map[string]string{"PASSWORD_MIN_LENGTH": "12", "DB_PASSWORD": "x"}}, "PASSWORD_MIN_LENGTH")
+	if len(classified.SensitiveEnvironmentKeys) != 1 || classified.SensitiveEnvironmentKeys[0] != "DB_PASSWORD" || classified.SafeEnvironment["PASSWORD_MIN_LENGTH"] != "12" {
+		t.Fatalf("operator exemption: %+v", classified)
+	}
+}
+
+// The operator may declare keys non-secret; once every flagged key is
+// exempted or absent the container imports and keeps those values.
+func TestAdoptionServiceImportHonoursNonSecretEnvKeys(t *testing.T) {
+	ctx := context.Background()
+	server := newSensitiveAdoptionDockerServer(t)
+	defer server.Close()
+	canonical := newFakeAdoptionCanonical()
+	adoption := newTestAdoption(canonical, &events.NoopPublisher{})
+	req := localTarget(server)
+	req.NonSecretEnvKeys = []string{"DB_PASSWORD"}
+	results, err := adoption.Import(ctx, req)
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if len(results) != 1 || results[0].Status != adoptionStatusFailed || strings.Contains(results[0].Error, "DB_PASSWORD") || !strings.Contains(results[0].Error, "AWS_SECRET_ACCESS_KEY") {
+		t.Fatalf("partial exemption = %#v", results)
+	}
 }
