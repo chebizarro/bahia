@@ -972,7 +972,7 @@ func (p *Projector) publishSystemDiscovery(ctx context.Context) error {
 // events that already match. The relay settings coordinator calls it when
 // the canonical relay settings catch up and whenever they change.
 func (p *Projector) PublishAdvertisedRelays(ctx context.Context) error {
-	if p.relaySource == nil {
+	if !p.Enabled() || p.relaySource == nil {
 		return nil
 	}
 	relays, ok := p.relaySource.AdvertisedRelays()

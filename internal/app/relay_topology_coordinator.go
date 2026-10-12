@@ -39,6 +39,10 @@ var errRelayPolicyRefused = errors.New("canonical relay settings refused")
 // service publisher's write set (and so its quorum accounting), the advertised
 // relay-set and NIP-65 events, and the relay_topology health check.
 type relayTopologyCoordinator struct {
+	// applyMu serializes snapshot application (pool reconfiguration, which
+	// may connect relays); mu guards the state below and is never held
+	// across relay I/O, so publishers and health checks never wait on it.
+	applyMu               sync.Mutex
 	mu                    sync.Mutex
 	controlPlanePool      *nostrAdapter.RelayPool
 	contextVMRequestPool  *nostrAdapter.RelayPool
@@ -174,12 +178,15 @@ func (c *relayTopologyCoordinator) ApplySnapshot(ctx context.Context, state cont
 		return fmt.Errorf("%w: %v", errRelayPolicyRefused, err)
 	}
 
-	c.mu.Lock()
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
 	applyCtx, cancel := context.WithTimeout(ctx, relayTopologyApplyTimeout)
 	if relayPolicySnapshotHasRuntimeTopology(state) {
-		c.reconfigurePoolsLocked(applyCtx, state)
+		c.reconfigurePools(applyCtx, state)
 	}
 	cancel()
+
+	c.mu.Lock()
 	if len(state.ServiceRelays) > 0 {
 		c.serviceWrite = c.nostrConfig.ServiceWriteRelays(state.ServiceRelays)
 	}
@@ -225,9 +232,9 @@ func (c *relayTopologyCoordinator) runAdvertiser(ctx context.Context, advertise 
 	}
 }
 
-// reconfigurePoolsLocked moves the pools to the lists the canonical settings
+// reconfigurePools moves the pools to the lists the canonical settings
 // provide; a pool whose list the settings leave empty keeps its relays.
-func (c *relayTopologyCoordinator) reconfigurePoolsLocked(ctx context.Context, state controlplane.RelayPolicyState) {
+func (c *relayTopologyCoordinator) reconfigurePools(ctx context.Context, state controlplane.RelayPolicyState) {
 	controlPlaneRelays, reconfigureControlPlane := c.controlPlaneRelaysForSnapshot(state)
 	contextVMRelays, reconfigureContextVM := c.contextVMRelaysForSnapshot(state)
 	serviceRelays, reconfigureService := c.serviceRelaysForSnapshot(state)
