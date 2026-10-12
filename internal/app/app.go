@@ -223,7 +223,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		nostrAdapter.WithControlPlaneRelayGuard(controlPlaneRelayGuard),
 		closedRetryBudgetOption(cfg.Nostr),
 	}
-	controlPlaneRelays := controlPlaneRelayURLs(cfg.Nostr)
+	controlPlaneRelays := ControlPlaneRelayURLs(cfg.Nostr)
 	contextVMRequestRelays := contextVMRelayURLs(cfg.Nostr)
 	contextVMResponseRelays := append([]string(nil), contextVMRequestRelays...)
 	// Pools that carry the control plane also keep gift wraps on controlled
@@ -4510,7 +4510,10 @@ func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
 	return cfg.Enabled
 }
 
-func controlPlaneRelayURLs(cfg config.NostrConfig) []string {
+// ControlPlaneRelayURLs is the control-plane pool's relay set: the sidecar
+// backend (or public URL) when the sidecar runs, else the ContextVM relay
+// policy. Assistant events are published there.
+func ControlPlaneRelayURLs(cfg config.NostrConfig) []string {
 	if cfg.Sidecar.Enabled {
 		if cfg.Sidecar.BackendURL != "" {
 			return []string{cfg.Sidecar.BackendURL}

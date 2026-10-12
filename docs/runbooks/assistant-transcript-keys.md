@@ -48,9 +48,14 @@ rotation. `bahia-assistant-reencrypt` re-establishes it under the current
 identity and the system key; it is never run by the daemon.
 
 What it does: reads the retired identity's checkpoints, transcripts and
-assistant session projections from the relays (REQ through EOSE on every
-relay; any incomplete read aborts), opens them with the key derived from the
-retired private key, and re-seals:
+assistant session projections from every relay the daemon publishes
+assistant events to (the control-plane relays and the service write relays,
+taken from the configuration), one relay at a time, in REQ pages bounded by
+`until` through each EOSE. It does not trust a relay to advertise or honour
+a limit. A relay that does not answer, or that holds more events in one
+second than it returns at once (when it is shown to cap its answers), makes
+the read incomplete and the run stops. It opens the history with the key
+derived from the retired private key and re-seals:
 
 - each checkpoint chain root to head, re-pointing every predecessor link at
   the re-sealed predecessor (event ids change; `created_at` is kept);
@@ -59,7 +64,10 @@ retired private key, and re-seals:
   projection only for a session without a v2 projection.
 
 With `--execute` it signs them as the current service identity and publishes
-them in that order to the relays you name, which must be in
+them in that order. An event counts as re-established only once
+`nostr.publish_quorum` of those relays hold it: a publish accepted by fewer
+stops the run, and a re-run first brings every re-established event that
+fewer relays hold back to quorum. All relays must be in
 `nostr.controlled_relays`. It refuses to run while `nostr.signer` is still
 the retired identity.
 
@@ -74,7 +82,9 @@ Steps:
 
 1. Put the retired key in a file exactly as the daemon was configured with it
    (`nostr.private_key`, 64 hex; the derived key depends on the exact text),
-   owner-only:
+   a regular file owned by the operator running the tool, mode 0600 or
+   stricter (the tool checks the descriptor it reads, refuses symlinks, and
+   clears the key and the derived key when it exits):
 
    ```bash
    install -m 0600 /dev/null /run/operator/retired-service.key
@@ -85,13 +95,13 @@ Steps:
 
    ```bash
    bahia-assistant-reencrypt --config /etc/bahia/config.yaml \
-     --old-key-file /run/operator/retired-service.key \
-     --relay wss://relay-a.example --relay wss://relay-b.example
+     --old-key-file /run/operator/retired-service.key
    ```
 
-   It prints how many checkpoints, transcripts and session projections it
-   will publish, how many are already re-established, and every item it
-   cannot open (`cannot re-establish …`, event ids only, never content).
+   It prints the relays and quorum it uses, how many checkpoints, transcripts
+   and session projections it will publish, how many are already
+   re-established, how many re-established events are below quorum, and
+   every item it cannot open (`cannot re-establish …`, event ids only, never content).
 
 3. Run it with `--execute`. Events are paced by the outbound `bulk` lane (5
    per minute by default); for a large history raise
