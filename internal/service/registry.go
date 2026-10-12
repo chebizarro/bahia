@@ -61,6 +61,37 @@ type RegistryService struct {
 	logger                          *zap.Logger
 }
 
+// MissingRegistryRepositoryError identifies a registry dependency that is
+// unavailable when PostgreSQL is not attached.
+type MissingRegistryRepositoryError struct{ Repository string }
+
+func (e *MissingRegistryRepositoryError) Error() string {
+	return "registry repository unavailable: " + e.Repository
+}
+
+// ProjectionSource refuses to expose a partially wired SQL registry to a
+// background reader. The registry itself may still be used behind HTTP's
+// repository gates while the optional index is offline.
+func (s *RegistryService) ProjectionSource() (*RegistryService, error) {
+	if s == nil {
+		return nil, &MissingRegistryRepositoryError{Repository: "registry"}
+	}
+	for _, dependency := range []struct {
+		name string
+		ok   bool
+	}{
+		{"services", s.services != nil}, {"environments", s.environments != nil},
+		{"builds", s.builds != nil}, {"artifacts", s.artifacts != nil},
+		{"intents", s.intents != nil}, {"runs", s.runs != nil},
+		{"observations", s.observations != nil}, {"state", s.state != nil},
+	} {
+		if !dependency.ok {
+			return nil, &MissingRegistryRepositoryError{Repository: dependency.name}
+		}
+	}
+	return s, nil
+}
+
 // BuildDeployStatePublisher publishes the canonical cp-state record for
 // build/artifact/deployment-intent/deployment-run entities.
 // the mutation site publishes directly, fingerprint-deduped, through the
@@ -238,6 +269,9 @@ func (s *RegistryService) GetServiceByName(ctx context.Context, name string) (*d
 }
 
 func (s *RegistryService) ListServices(ctx context.Context) ([]domain.Service, error) {
+	if s == nil || s.services == nil {
+		return nil, &MissingRegistryRepositoryError{Repository: "services"}
+	}
 	svcs, err := s.services.List(ctx)
 	if err != nil {
 		return nil, err

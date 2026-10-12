@@ -103,6 +103,8 @@ func TestOptionalPostgresStartupAndRecoveryMatrix(t *testing.T) {
 	assertBoot := func(label string, cfgDB config.DBConfig, expectDB bool, afterBoot func(*App)) {
 		t.Run(label, func(t *testing.T) {
 			cfg := startupTestConfig("full")
+			cfg.Nostr.PublishEnabled = true
+			cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
 			cfg.Nostr.PrivateKey = key.Hex()
 			cfg.Nostr.LocalStore.Path = filepath.Join(t.TempDir(), "events.bolt")
 			cfg.DB = cfgDB
@@ -131,6 +133,7 @@ func TestOptionalPostgresStartupAndRecoveryMatrix(t *testing.T) {
 				}
 			})
 			require.Equal(t, expectDB, instance.DB != nil, "optional index attachment")
+			require.True(t, appHasRunner(instance, "nostr-projector"), "publishing remains enabled across optional PostgreSQL states")
 			require.Less(t, elapsed, 8*time.Second, "ordinary startup must not wait unboundedly on the optional index")
 			for _, route := range []string{"/health", "/ready"} {
 				response := httptest.NewRecorder()

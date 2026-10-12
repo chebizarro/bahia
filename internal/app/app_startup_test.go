@@ -17,6 +17,7 @@ import (
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
@@ -68,6 +69,25 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 		}
 	}
 	require.True(t, autoApplyWarning, "operators must see the auto_apply safety hold")
+}
+
+func TestNewWiresPublishingWithoutDatabaseSection(t *testing.T) {
+	cfg := startupTestConfig("emergency")
+	cfg.DB = config.DBConfig{}
+	cfg.Nostr.PublishEnabled = true
+	cfg.Nostr.BrowserRelays = []string{"wss://browser.example"}
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+	defer closeWithNoError(t, app.localEventStore.Close)
+	defer closeWithNoError(t, app.localOutbox.Close)
+	require.Nil(t, app.DB)
+	require.True(t, appHasRunner(app, "nostr-projector"))
+	app.Publisher.Publish(context.Background(), events.Event{Type: events.EventDeploymentRunCreated, EntityID: "00000000-0000-4000-8000-000000000001"})
+	_, sourceErr := app.Registry.ProjectionSource()
+	var missing *service.MissingRegistryRepositoryError
+	require.ErrorAs(t, sourceErr, &missing)
 }
 
 func TestNewWiresDBLessRouteAndManagedSupervision(t *testing.T) {
