@@ -199,6 +199,7 @@ func TestBackupRunHistoryLocalPreledgerCoordinateVetoesEmptyRelay(t *testing.T) 
 
 func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
 	closeREQ := make(chan struct{})
+	closedObserved := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Accept") == "application/nostr+json" {
 			w.Header().Set("Content-Type", "application/nostr+json")
@@ -232,7 +233,13 @@ func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
 			case <-r.Context().Done():
 				return
 			}
-			_ = conn.Write(r.Context(), websocket.MessageText, []byte(`["CLOSED",`+string(frame[1])+`,"blocked: policy refusal"]`))
+			if err := conn.Write(r.Context(), websocket.MessageText, []byte(`["CLOSED",`+string(frame[1])+`,"blocked: policy refusal"]`)); err != nil {
+				return
+			}
+			select {
+			case <-closedObserved:
+			case <-r.Context().Done():
+			}
 			return
 		}
 	}))
@@ -251,6 +258,7 @@ func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
 	close(closeREQ)
 	select {
 	case closed := <-proof.sub.Closed:
+		close(closedObserved)
 		require.True(t, closed.Terminal)
 	case <-ctx.Done():
 		t.Fatal("terminal CLOSED was not observed")
