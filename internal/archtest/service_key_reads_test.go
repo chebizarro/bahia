@@ -37,12 +37,6 @@ var serviceKeyReadAllowlist = map[string]string{
 	// Reload compares the configured key text to decide whether a candidate
 	// may keep the running signer session; it never signs or derives with it.
 	"internal/servicesigner/same.go|SameSigner": "seam (reload comparison)",
-	// (b) assistant transcript key = SHA-256 over the nsec; signature fixed by
-	// assistant_wrapped_startup.go/assistant_wrapped_keys.go (bahia-cd0wr.4.8).
-	"internal/app/app.go|assistantTranscriptKeyProvider": "(b) bahia-cd0wr.4.8",
-	// (b) the wrapped-key manifest re-derives the deployed v1 key; owned by the
-	// signer-factory slice (bahia-cd0wr.4.8).
-	"internal/app/assistant_wrapped_keys.go|createAssistantWrappedKeyManifest": "(b) bahia-cd0wr.4.8",
 	// (c) offline operator tools.
 	"cmd/bahia-policy-census/main.go|run":            "(c)",
 	"cmd/bahia-migrate/f74a_import.go|runF74aImport": "(c)",

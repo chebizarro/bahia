@@ -201,10 +201,7 @@ func buildTestAssistantExecutionWith(t *testing.T, cfg *config.Config, relay *me
 		t.Fatal(err)
 	}
 	signer := keyer.NewPlainKeySigner([32]byte(secret))
-	keys, err := assistantTranscriptKeyProvider(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := testTranscriptKeys(t)
 	identity := service.AssistantIdentity{AgentID: "assistant-wiring", Pubkey: secret.Public().Hex()}
 	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, Identity: identity, KeyProvider: keys, ServicePubkey: secret.Public().Hex()})
 	deps := assistantExecutionDeps{
@@ -332,10 +329,7 @@ func TestAssistantExecutionWiringRejectsBatchDefaultWithoutModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	signer := keyer.NewPlainKeySigner([32]byte(secret))
-	keys, err := assistantTranscriptKeyProvider(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := testTranscriptKeys(t)
 	transcript := service.NewAssistantTranscriptStore(service.AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: keys})
 	_, err = buildAssistantExecution(assistantExecutionDeps{Config: cfg, MCPServer: newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{}), ModelClient: wiringAgent{}, Publisher: relay, Subscriber: relay, Signer: signer, Transcript: transcript, KeyProvider: keys})
 	if err == nil || !strings.Contains(err.Error(), "assistant.llm_model") {

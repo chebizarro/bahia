@@ -790,6 +790,7 @@ func TestAssistantBatchProposerModelRequirement(t *testing.T) {
 			cfg.Assistant.LLMModel = tc.llmModel
 			cfg.Assistant.Agentic.Model = tc.agenticModel
 			cfg.Nostr.PrivateKey = "test-secret-key"
+			withAssistantTranscriptKey(cfg)
 			err := cfg.validate()
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
@@ -832,6 +833,7 @@ func TestLoadMasterEraAgenticOnlyAssistantConfig(t *testing.T) {
     model: "agentic-model"
 nostr:
   private_key: "test-secret-key"
+` + assistantTranscriptKeyYAML + `
 `)
 		if err := os.WriteFile(path, content, 0o644); err != nil {
 			t.Fatalf("writing temp config: %v", err)
@@ -846,7 +848,11 @@ nostr:
 		t.Setenv("BAHIA_ASSISTANT_ENABLED", "true")
 		t.Setenv("BAHIA_ASSISTANT_AGENTIC_MODEL", "agentic-model")
 		t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "test-secret-key")
-		cfg, err := Load("")
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(assistantTranscriptKeyYAML), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
 		if err != nil {
 			t.Fatalf("Load() error: %v", err)
 		}
@@ -901,6 +907,7 @@ func TestLoadAssistantAgenticConfigFromYAMLAndEnv(t *testing.T) {
       backfill_limit: 75
 nostr:
   private_key: "test-secret-key"
+` + assistantTranscriptKeyYAML + `
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
@@ -952,6 +959,7 @@ func TestLoadAssistantAgenticInheritsLegacyLLMConfig(t *testing.T) {
   llm_api_key: "legacy-key"
 nostr:
   private_key: "test-secret-key"
+` + assistantTranscriptKeyYAML + `
 `)
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		t.Fatalf("writing temp config: %v", err)
@@ -982,6 +990,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Enabled = false
 		cfg.Assistant.LLMModel = "legacy-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("legacy assistant config should validate with agentic disabled: %v", err)
 		}
@@ -995,6 +1004,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Assistant.Agentic.Provider = "unknown"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.provider") {
 			t.Fatalf("validate() error = %v, want iterative provider validation regardless of default", err)
 		}
@@ -1009,6 +1019,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Model = "agentic-model"
 		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate() error = %v", err)
 		}
@@ -1025,6 +1036,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Model = "agentic-model"
 		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.provider") {
 			t.Fatalf("validate() error = %v, want provider rejection", err)
 		}
@@ -1038,6 +1050,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Model = "agentic-model"
 		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate() error = %v", err)
 		}
@@ -1054,6 +1067,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Model = "agentic-model"
 		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "assistant.agentic.tool_mode") {
 			t.Fatalf("validate() error = %v, want tool_mode rejection", err)
 		}
@@ -1068,6 +1082,7 @@ func TestAssistantAgenticValidation(t *testing.T) {
 		cfg.Assistant.Agentic.Model = "agentic-model"
 		cfg.Assistant.LLMModel = "planner-model"
 		cfg.Nostr.PrivateKey = "test-secret-key"
+		withAssistantTranscriptKey(cfg)
 		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "tool_mode=prompted requires") {
 			t.Fatalf("validate() error = %v, want provider/tool_mode rejection", err)
 		}

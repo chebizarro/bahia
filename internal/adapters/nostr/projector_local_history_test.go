@@ -28,7 +28,7 @@ type localHistoryDaemon struct {
 
 // startLocalHistoryDaemon builds a projector and control-plane publisher the
 // way app.go does, over the outbox and event store files in dir.
-func startLocalHistoryDaemon(t *testing.T, dir string, script *relayScript) *localHistoryDaemon {
+func startLocalHistoryDaemon(t *testing.T, dir string, script *relayScript, opts ...ProjectorOption) *localHistoryDaemon {
 	t.Helper()
 	store, err := localstore.Open(filepath.Join(dir, "daemon.bolt"))
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func startLocalHistoryDaemon(t *testing.T, dir string, script *relayScript) *loc
 	servicePubkey, err := publicKeyHexFromPrivateKeyHex(projectorTestConfig().PrivateKey)
 	require.NoError(t, err)
 	history := NewLocalEventRepository(store, nil).Authored(servicePubkey)
-	projector := newKeyedTestProjector(projectorTestConfig(), newFakeProjectionSource(), publisher, history, zap.NewNop())
+	projector := newKeyedTestProjector(projectorTestConfig(), newFakeProjectionSource(), publisher, history, zap.NewNop(), opts...)
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	return &localHistoryDaemon{projector: projector, publisher: publisher, store: store, outbox: outbox}
 }

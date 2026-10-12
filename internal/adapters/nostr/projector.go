@@ -18,6 +18,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/version"
 	"go.uber.org/zap"
 )
@@ -164,10 +165,9 @@ type Projector struct {
 	dnsPublishedPolicies map[string]dnsPublishedPolicy
 	dnsCacheHydrated     bool
 
-	// Confidential-state digest key, derived from the signer's raw key
-	// material; confidentialStateHashErr is set instead when it has none.
-	confidentialStateHashKey []byte
-	confidentialStateHashErr error
+	// stateHashKeys lends the confidential-dedupe system key; without it
+	// confidential records are not published.
+	stateHashKeys *secretstore.Keyring
 
 	// F4 warm-start: readiness gate and migrated domain list.
 	readiness     ReadinessWaiter
@@ -185,6 +185,13 @@ type Projector struct {
 
 // ProjectorOption configures a projector.
 type ProjectorOption func(*Projector)
+
+// WithConfidentialStateHashKeys supplies the keyring holding the
+// confidential-dedupe system key that keys every confidential record's
+// state_hash digest.
+func WithConfidentialStateHashKeys(keys *secretstore.Keyring) ProjectorOption {
+	return func(p *Projector) { p.stateHashKeys = keys }
+}
 
 // WithProjectorSigner supplies the injected service Keyer and its pubkey for
 // projection events. Without it the projector is disabled.
@@ -302,7 +309,6 @@ func NewProjector(cfg config.NostrConfig, source ProjectionSource, publisher Pro
 		p.relaySource = staticAdvertisedRelays{cfg: p.systemConfig.Nostr}
 	}
 	p.enabled = cfg.PublishEnabled && p.signer != nil && source != nil && publisher != nil
-	p.confidentialStateHashKey, p.confidentialStateHashErr = confidentialStateHashKeyFor(p.signer)
 	return p
 }
 

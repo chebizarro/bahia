@@ -119,16 +119,16 @@ func TestServiceSignerValidation(t *testing.T) {
 	}
 }
 
-func TestRemoteSignerAssistantRequiresWrappedKeys(t *testing.T) {
+func TestAssistantRequiresTranscriptSystemKey(t *testing.T) {
 	cfg := &Config{Nostr: NostrConfig{PublicKey: testServicePubkey, Signer: NostrSignerConfig{Method: NostrSignerNIP46, BunkerURI: testBunkerURI, ClientSecretKey: testClientSecret}}}
 	cfg.Assistant = AssistantConfig{Enabled: true, LLMBaseURL: "https://llm.example", LLMModel: "m"}
-	if err := cfg.validateAssistant(); err == nil || !strings.Contains(err.Error(), "wrapped_read_only is required") {
-		t.Fatalf("remote signer with legacy_v1 assistant keys = %v", err)
+	if err := cfg.validateAssistant(); err == nil || !strings.Contains(err.Error(), "secret_store.system_keys.assistant_transcript is required") {
+		t.Fatalf("assistant without a transcript system key = %v", err)
 	}
 }
 
-func TestRemovedWrappedKeySignerSettingsAreRejected(t *testing.T) {
-	for _, key := range []string{"signet_bunker_uri", "owner_client_secret_key", "connect_timeout"} {
+func TestRemovedAssistantWrappedKeysAreRejected(t *testing.T) {
+	for _, key := range []string{"mode", "manifest_path", "signet_bunker_uri"} {
 		t.Run(key, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.yaml")
 			body := fmt.Sprintf("assistant:\n  wrapped_keys:\n    %s: x\n", key)
@@ -136,7 +136,7 @@ func TestRemovedWrappedKeySignerSettingsAreRejected(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, err := Load(path)
-			if err == nil || !strings.Contains(err.Error(), "assistant.wrapped_keys."+key+" has been removed") || !strings.Contains(err.Error(), "nostr.signer") {
+			if err == nil || !strings.Contains(err.Error(), "assistant.wrapped_keys has been removed") || !strings.Contains(err.Error(), "secret_store.system_keys.assistant_transcript") {
 				t.Fatalf("Load() = %v", err)
 			}
 		})

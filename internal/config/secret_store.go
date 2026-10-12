@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,6 +23,66 @@ type SecretStoreConfig struct {
 	// Backend is "" or "signet".
 	Backend string                  `koanf:"backend" yaml:"backend" secret:"false"`
 	Signet  SecretStoreSignetConfig `koanf:"signet" yaml:"signet"`
+	// SystemKeys references the daemon's own data keys, held in the store
+	// under bahia-system/<purpose>/<key-id> labels and resolved at startup.
+	SystemKeys SystemKeysConfig `koanf:"system_keys" yaml:"system_keys"`
+}
+
+// SystemKeysConfig lists, per purpose, the store credentials holding the
+// daemon's data keys. The first entry of a purpose is its active key; later
+// entries are read-only keys that still decrypt older data.
+type SystemKeysConfig struct {
+	// AssistantTranscript encrypts assistant transcripts and execution
+	// checkpoints. Required when assistant.enabled is true.
+	AssistantTranscript []SystemKeyConfig `koanf:"assistant_transcript" yaml:"assistant_transcript"`
+	// ConfidentialDedupe keys the state_hash HMAC of confidential cp-state
+	// records; at most one. Without it confidential records are not
+	// published.
+	ConfidentialDedupe []SystemKeyConfig `koanf:"confidential_dedupe" yaml:"confidential_dedupe"`
+}
+
+// SystemKeyConfig references one system data key: Signet credential
+// CredentialID at Version, labelled bahia-system/<purpose>/<KeyID>.
+type SystemKeyConfig struct {
+	KeyID        string `koanf:"key_id" yaml:"key_id" secret:"false"`
+	CredentialID string `koanf:"credential_id" yaml:"credential_id" secret:"false"`
+	Version      int    `koanf:"version" yaml:"version" secret:"false"`
+}
+
+var (
+	systemKeyIDPattern        = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	signetCredentialIDPattern = regexp.MustCompile(`^cred_[0-9a-f]{64}$`)
+)
+
+func (s *SystemKeysConfig) validate(backend string) error {
+	if backend == "" && (len(s.AssistantTranscript) > 0 || len(s.ConfidentialDedupe) > 0) {
+		return fmt.Errorf("config validation failed: secret_store.system_keys require secret_store.backend=signet")
+	}
+	if len(s.ConfidentialDedupe) > 1 {
+		return fmt.Errorf("config validation failed: secret_store.system_keys.confidential_dedupe takes one key; replacing it republishes each confidential record once")
+	}
+	for purpose, keys := range map[string][]SystemKeyConfig{"assistant_transcript": s.AssistantTranscript, "confidential_dedupe": s.ConfidentialDedupe} {
+		seen := map[string]struct{}{}
+		for i := range keys {
+			key := &keys[i]
+			key.KeyID = strings.TrimSpace(key.KeyID)
+			key.CredentialID = strings.ToLower(strings.TrimSpace(key.CredentialID))
+			if !systemKeyIDPattern.MatchString(key.KeyID) {
+				return fmt.Errorf("config validation failed: secret_store.system_keys.%s[%d].key_id must match %s", purpose, i, systemKeyIDPattern)
+			}
+			if _, dup := seen[key.KeyID]; dup {
+				return fmt.Errorf("config validation failed: secret_store.system_keys.%s key_id %q is listed twice", purpose, key.KeyID)
+			}
+			seen[key.KeyID] = struct{}{}
+			if !signetCredentialIDPattern.MatchString(key.CredentialID) {
+				return fmt.Errorf("config validation failed: secret_store.system_keys.%s[%d].credential_id must be a Signet credential id (cred_ and 64 hex)", purpose, i)
+			}
+			if key.Version < 1 {
+				return fmt.Errorf("config validation failed: secret_store.system_keys.%s[%d].version must be >= 1", purpose, i)
+			}
+		}
+	}
+	return nil
 }
 
 // SecretStoreSignetConfig addresses Signet's credential management plane.
@@ -51,6 +112,9 @@ func (s *SecretStoreConfig) validate() error {
 	sig.Relays = normalizeRelayList(sig.Relays)
 	sig.ClientKeyFile = strings.TrimSpace(sig.ClientKeyFile)
 	sig.Owner = strings.TrimSpace(sig.Owner)
+	if err := s.SystemKeys.validate(s.Backend); err != nil {
+		return err
+	}
 	switch s.Backend {
 	case "":
 		if sig.Pubkey != "" || len(sig.Relays) > 0 || sig.ClientKeyFile != "" || sig.Owner != "" || sig.RequestTimeout != 0 {

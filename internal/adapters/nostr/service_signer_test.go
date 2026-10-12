@@ -9,7 +9,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/config"
-	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -49,8 +49,9 @@ func (k *remoteServiceKeyer) Decrypt(ctx context.Context, ciphertext string, fro
 }
 
 // TestRemoteServiceKeyerSignsEveryPath proves that with a non-local Keyer the
-// publisher, projector and relay AUTH all sign through it, and the
-// confidential-state digest, which needs the raw key, fails closed.
+// publisher, projector and relay AUTH all sign through it, and that the
+// confidential-state digest depends only on the confidential-dedupe system
+// key, never on the signer's key material.
 func TestRemoteServiceKeyerSignsEveryPath(t *testing.T) {
 	ctx := context.Background()
 	remote := newRemoteServiceKeyer()
@@ -78,18 +79,17 @@ func TestRemoteServiceKeyerSignsEveryPath(t *testing.T) {
 	require.EqualValues(t, len(paths), remote.signs.Load())
 
 	err = projection.publishCanonicalFirst(ctx, KindSecretRegistry, "d", false, nil, "plain", "cipher", "secret.projection", nil)
-	require.ErrorIs(t, err, nostrutil.ErrServiceKeyMaterialRequired)
-	require.EqualValues(t, len(paths), remote.signs.Load(), "a blocked digest must not sign")
-}
+	require.ErrorIs(t, err, secretstore.ErrNotConfigured)
+	require.EqualValues(t, len(paths), remote.signs.Load(), "a record without its digest key must not sign")
 
-// TestLocalServiceKeyerKeepsConfidentialDigest pins the v1 state_hash key to
-// the deployed derivation over the configured key text.
-func TestLocalServiceKeyerKeepsConfidentialDigest(t *testing.T) {
-	key := "1111111111111111111111111111111111111111111111111111111111111111"
-	got, err := confidentialStateHashKeyFor(mustLocalKeyer(key))
-	require.NoError(t, err)
-	require.Equal(t, deriveConfidentialStateHashKey(key), got)
-	require.Equal(t, "state_hash", confidentialStateHash(got, `{"a":1}`)[0])
+	// With the confidential-dedupe system key the digest needs nothing from
+	// the signer: a remote signer publishes once and dedupes the repeat.
+	keyed := NewProjector(cfg, newFakeProjectionSource(), &fakeProjectionPublisher{}, nil, zap.NewNop(),
+		WithProjectorSigner(remote, pubkey.Hex()), WithConfidentialStateHashKeys(testStateHashKeyring(testStateHashKeyFill)))
+	for range 2 {
+		require.NoError(t, keyed.publishCanonicalFirst(ctx, KindSecretRegistry, "d", false, nil, `{"a":1}`, "cipher-"+gonostr.Generate().Public().Hex(), "secret.projection", nil))
+	}
+	require.EqualValues(t, len(paths)+1, remote.signs.Load(), "unchanged plaintext under randomized ciphertext signs once")
 }
 
 func TestServiceSignerRefusalLeavesEventUnsigned(t *testing.T) {

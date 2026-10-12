@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -56,7 +59,7 @@ func TestOperatorAllowlistRecordReadableOnlyWithFleetOCK(t *testing.T) {
 	otherKey.Key[0] ^= 0xff
 
 	sink := &allowlistSink{}
-	projector := nostradapter.NewProjector(config.NostrConfig{PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop(), localServiceSigner(t))
+	projector := nostradapter.NewProjector(config.NostrConfig{PublishEnabled: true}, &paritySource{}, sink, nil, zap.NewNop(), localServiceSigner(t), nostradapter.WithConfidentialStateHashKeys(dedupeKeyring(t)))
 	require.True(t, projector.Enabled())
 	publisher := nostradapter.NewOperatorAllowlistPublisher(projector, fleetOCKEncryptor{key: fleetKey}, zap.NewNop())
 
@@ -92,4 +95,27 @@ func TestOperatorAllowlistRecordReadableOnlyWithFleetOCK(t *testing.T) {
 	// another scope's allowlist even by a key holder.
 	_, err = controlplane.DecryptConfidentialContent(fleetKey, event.Content, controlplane.ConfidentialRecordContext{LegacyKind: recordCtx.LegacyKind, DTag: "operators:soul-factory", Topic: recordCtx.Topic})
 	require.Error(t, err)
+}
+
+// oneKeyStore delivers one system key to any system scope.
+type oneKeyStore struct{ key []byte }
+
+func (s oneKeyStore) Resolve(context.Context, domain.SecretCredentialRef, secretstore.Scope) (*secretstore.Value, error) {
+	return secretstore.NewValue(append([]byte(nil), s.key...), time.Now().Add(time.Minute)), nil
+}
+func (oneKeyStore) Inspect(context.Context, string, secretstore.Scope) (secretstore.Metadata, error) {
+	return secretstore.Metadata{}, secretstore.ErrNotFound
+}
+func (oneKeyStore) Health(context.Context) error { return nil }
+
+// dedupeKeyring is a loaded keyring holding a confidential-dedupe key.
+func dedupeKeyring(t *testing.T) *secretstore.Keyring {
+	t.Helper()
+	ring, err := secretstore.NewKeyring([]secretstore.SystemKeyRef{{
+		Purpose: secretstore.PurposeConfidentialDedupe, KeyID: "test",
+		Credential: domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_" + strings.Repeat("d", 64), Version: 1},
+	}})
+	require.NoError(t, err)
+	require.NoError(t, ring.Load(context.Background(), oneKeyStore{key: make([]byte, secretstore.SystemKeySize)}))
+	return ring
 }
