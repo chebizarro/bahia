@@ -26,6 +26,7 @@ const assistantStoreMock = vi.hoisted(() => ({
   publishAssistantCancellation: vi.fn(),
   publishAssistantReconciliation: vi.fn(),
   assistantWorkflowAvailable: vi.fn(() => true),
+  assistantTransportAvailable: vi.fn(() => true),
   downstreamRequestsForTurn: (item) => item?.downstreamRequestId ? [item.downstreamRequestId] : []
 }));
 
@@ -114,6 +115,7 @@ describe('assistant components', () => {
     assistantStoreMock.activeAssistantSession.mockReturnValue(null);
     assistantStoreMock.assistantWorkflowAvailable.mockReset();
     assistantStoreMock.assistantWorkflowAvailable.mockReturnValue(true);
+    assistantStoreMock.assistantTransportAvailable.mockReturnValue(true);
     assistantStoreMock.setActiveAssistantSession.mockReset();
     assistantStoreMock.publishAssistantActionDecision.mockResolvedValue({ ok: true });
     assistantStoreMock.publishAssistantApproval.mockResolvedValue({ ok: true });
@@ -124,6 +126,18 @@ describe('assistant components', () => {
     assistantStoreMock.assistantUi.activeSessionId = '';
     for (const key of Object.keys(assistantStoreMock.pendingAssistantRequests)) delete assistantStoreMock.pendingAssistantRequests[key];
   });
+  it('keeps prompts local until signed discovery advertises encrypted requests', async () => {
+    assistantStoreMock.assistantTransportAvailable.mockReturnValue(false);
+    const target = renderComponent(AssistantComposer, {});
+    await setTextAreaValue(target, 'Inspect the fleet');
+    expect(target.querySelector('textarea').disabled).toBe(true);
+    expect(target.querySelector('button[type="submit"]').disabled).toBe(true);
+    expect(textOf(target)).toContain('Waiting for signed assistant discovery');
+    target.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await flush();
+    expect(assistantStoreMock.publishAssistantPrompt).not.toHaveBeenCalled();
+  });
+
   it('shows route-derived docs refs in the composer and submits them through selectedRefs', async () => {
     const routeContext = { route: '/services', params: {} };
     const target = renderComponent(AssistantComposer, {

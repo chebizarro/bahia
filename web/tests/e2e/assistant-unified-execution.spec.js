@@ -38,8 +38,8 @@ async function openPanel(page) {
 
 async function sendPrompt(panel, workflow, prompt) {
   await panel.getByRole('combobox', { name: 'Assistant workflow' }).selectOption(workflow);
-  await panel.getByPlaceholder('Ask the Bahia assistant…').fill(prompt);
-  await panel.getByRole('button', { name: 'Send' }).click();
+  await panel.getByPlaceholder('Ask the Bahia assistant…').fill(prompt, { timeout: backendTimeout });
+  await panel.getByRole('button', { name: 'Send' }).click({ timeout: backendTimeout });
 }
 
 test.describe('joined assistant unified execution', () => {
@@ -115,6 +115,7 @@ test.describe('joined assistant unified execution', () => {
     await expect(card).toHaveCount(0, { timeout: backendTimeout });
     await expect(panel).not.toContainText('Approval refers to superseded state');
     await expect(panel).not.toContainText('Approval rejected by the assistant service');
+    await expect(execution).toHaveAttribute('data-phase', 'completed', { timeout: backendTimeout });
     if (restartCommand) execSync(restartCommand, { stdio: 'inherit', timeout: backendTimeout });
     await expect(execution).toHaveAttribute('data-phase', 'completed', { timeout: backendTimeout });
     await expect(execution).toHaveAttribute('data-run-id', runId);

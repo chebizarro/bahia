@@ -118,6 +118,11 @@ not replayable) the client retries with the **same** key so the daemon's
 request ledger replays the stored response; `-32600` is fixed and retried with
 a new key; `-32603` is retried with the same key, surfacing after two failures.
 
+The assistant composer does not submit a prompt until signed relay discovery
+advertises `features.encrypted_nostr_requests`, a service pubkey and a usable
+browser or ContextVM relay set. A generic subscription's "live" badge is not
+evidence that this protected discovery subscription has completed NIP-42 AUTH.
+
 Payment history and security views read the OCK-encrypted `30900` records
 (`payment-record`, `security-*` topics) from the store like every other
 collection.
