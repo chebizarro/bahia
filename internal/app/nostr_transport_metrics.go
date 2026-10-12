@@ -21,6 +21,7 @@ type nostrTransportMetricsRunner struct {
 	pgOutbox    repository.NostrEventOutboxRepository
 	storage     nostrEventStorageStatsSource
 	pools       []*nostrAdapter.RelayPool
+	guard       interface{ Refusals() uint64 }
 	interval    time.Duration
 	logger      *zap.Logger
 	// failedIndexWarned limits the missing failed-row index warning to once;
@@ -117,6 +118,9 @@ func (r *nostrTransportMetricsRunner) Run(ctx context.Context) error {
 func (r *nostrTransportMetricsRunner) refresh(ctx context.Context) {
 	if r.metrics == nil {
 		return
+	}
+	if r.guard != nil {
+		r.metrics.SetNostrControlPlaneGuardRefusals(int64(r.guard.Refusals()))
 	}
 	type relayMetrics struct {
 		healthy, degraded                               bool

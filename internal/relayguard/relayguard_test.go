@@ -67,7 +67,9 @@ func TestCheckRefusesServiceControlPlaneEventsOutsideControlledRelays(t *testing
 		{"readiness status to an unlisted relay", "wss://relay.example.com", nostr.Event{PubKey: service, Kind: kinds.BahiaReadinessStatus}, true},
 		{"cp-state to a controlled relay, normalized", "wss://RELAY.sharegap.net", nostr.Event{PubKey: service, Kind: kinds.CASControlState}, false},
 		{"cp-state signed by another key", "wss://relay.damus.io", nostr.Event{PubKey: other, Kind: kinds.CASControlState}, false},
-		{"service gift wrap", "wss://relay.damus.io", nostr.Event{PubKey: service, Kind: kinds.ContextVMGiftWrap}, false},
+		{"plaintext ContextVM response to an unlisted relay", "wss://relay.example.com", nostr.Event{PubKey: service, Kind: kinds.ContextVMMessage}, true},
+		{"service deletion request to a public relay", "wss://relay.damus.io", nostr.Event{PubKey: service, Kind: nostr.KindDeletion}, true},
+		{"gift wrap outside a control-plane pool", "wss://relay.damus.io", nostr.Event{PubKey: other, Kind: kinds.ContextVMGiftWrap}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -93,5 +95,51 @@ func TestNilGuardAllowsEverything(t *testing.T) {
 	var guard *Guard
 	if err := guard.Check("wss://relay.damus.io", nostr.Event{Kind: kinds.CASControlState}); err != nil {
 		t.Fatalf("nil guard Check = %v", err)
+	}
+}
+
+func TestCheckControlPlanePoolConfinesGiftWraps(t *testing.T) {
+	service := nostr.Generate().Public()
+	guard, err := New(service, []string{"wss://bahia.sharegap.net/relay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ephemeral := nostr.Generate().Public()
+	for _, kind := range []nostr.Kind{kinds.ContextVMGiftWrap, kinds.ContextVMEphemeralGiftWrap} {
+		ev := nostr.Event{PubKey: ephemeral, Kind: kind}
+		if err := guard.CheckControlPlanePool("wss://relay.damus.io", ev); err == nil {
+			t.Fatalf("control-plane pool sent gift wrap kind %d to a public relay", kind)
+		}
+		if err := guard.CheckControlPlanePool("wss://bahia.sharegap.net/relay", ev); err != nil {
+			t.Fatalf("gift wrap kind %d to a controlled relay: %v", kind, err)
+		}
+	}
+	if err := guard.CheckControlPlanePool("wss://relay.damus.io", nostr.Event{PubKey: service, Kind: kinds.CASAudit}); err == nil {
+		t.Fatal("CheckControlPlanePool must also apply Check")
+	}
+}
+
+func TestRefusalsAreCountedAndReportedOncePerRelayKind(t *testing.T) {
+	service := nostr.Generate().Public()
+	guard, err := New(service, []string{"wss://bahia.sharegap.net/relay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev := nostr.Event{PubKey: service, Kind: kinds.CASControlState}
+	var first []bool
+	for range 3 {
+		var refused *RefusedError
+		if !errors.As(guard.Check("wss://relay.damus.io", ev), &refused) {
+			t.Fatal("expected a refusal")
+		}
+		first = append(first, refused.FirstForRelayKind)
+	}
+	var other *RefusedError
+	errors.As(guard.Check("wss://nos.lol", ev), &other)
+	if !first[0] || first[1] || first[2] || !other.FirstForRelayKind {
+		t.Fatalf("first-report flags = %v, other relay = %v", first, other.FirstForRelayKind)
+	}
+	if guard.Refusals() != 4 {
+		t.Fatalf("Refusals() = %d, want 4", guard.Refusals())
 	}
 }

@@ -138,6 +138,7 @@ type Metrics struct {
 	NostrRelayClosedRetryExhausted map[string]int64            // key: relay_url
 	NostrOutboxDepth               int64
 	NostrOutboxFailed              int64 // -1 until the failed-row index exists
+	NostrControlPlaneGuardRefusals int64
 	NostrEventStoreTotalBytes      int64
 	NostrEventStoreHeapBytes       int64
 	NostrEventStoreIndexBytes      int64
@@ -924,6 +925,21 @@ func (m *Metrics) SetNostrOutboxFailed(failed int64) {
 	}
 }
 
+// nostrControlPlaneGuardRefusalsHelp describes
+// bahia_nostr_control_plane_guard_refusals_total.
+const nostrControlPlaneGuardRefusalsHelp = "EVENT frames the control-plane relay guard refused: control-plane events for relays outside nostr.controlled_relays"
+
+// SetNostrControlPlaneGuardRefusals records the relay guard's refusal count
+// since process start.
+func (m *Metrics) SetNostrControlPlaneGuardRefusals(refusals int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.NostrControlPlaneGuardRefusals = refusals
+	if m.otel != nil {
+		m.otel.nostrControlPlaneGuardRefusals.Record(context.Background(), refusals)
+	}
+}
+
 // SetNostrEventStorage records catalog-backed event-store lifecycle gauges.
 func (m *Metrics) SetNostrEventStorage(totalBytes, heapBytes, indexBytes, liveRows, deadRows, oldestUnix int64, batches map[string]int64) {
 	m.mu.Lock()
@@ -1380,6 +1396,10 @@ func (p *Provider) legacyMetricsHandler() http.HandlerFunc {
 		writer.printf("# HELP bahia_nostr_outbox_failed %s\n", nostrOutboxFailedHelp)
 		writer.println("# TYPE bahia_nostr_outbox_failed gauge")
 		writer.printf("bahia_nostr_outbox_failed %d\n", m.NostrOutboxFailed)
+
+		writer.printf("# HELP bahia_nostr_control_plane_guard_refusals_total %s\n", nostrControlPlaneGuardRefusalsHelp)
+		writer.println("# TYPE bahia_nostr_control_plane_guard_refusals_total counter")
+		writer.printf("bahia_nostr_control_plane_guard_refusals_total %d\n", m.NostrControlPlaneGuardRefusals)
 
 		writer.println("# HELP bahia_nostr_event_store_bytes PostgreSQL Nostr event relation bytes by component")
 		writer.println("# TYPE bahia_nostr_event_store_bytes gauge")

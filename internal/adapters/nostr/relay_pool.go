@@ -59,6 +59,9 @@ type RelayPool struct {
 	// relayGuard refuses service-signed control-plane events to relays
 	// outside nostr.controlled_relays (nil: no guard).
 	relayGuard *relayguard.Guard
+	// controlPlanePurpose marks a pool that carries the control plane: the
+	// guard also confines gift wraps (relayguard.CheckControlPlanePool).
+	controlPlanePurpose bool
 	// now and newReconnectBackoff pace reconnects to failing relays; both are
 	// replaceable in tests.
 	now                 func() time.Time
@@ -242,6 +245,35 @@ func WithOutboundAdmission(admission *nostrout.Admission) RelayPoolOption {
 // as that relay's permanent rejection.
 func WithControlPlaneRelayGuard(guard *relayguard.Guard) RelayPoolOption {
 	return func(p *RelayPool) { p.relayGuard = guard }
+}
+
+// WithControlPlanePurpose marks the pool as carrying Bahia's control plane
+// (control-plane, ContextVM and service pools). With a relay guard, it also
+// keeps NIP-59 gift wraps, whose ephemeral signer cannot show what they
+// carry, off relays outside the controlled set.
+func WithControlPlanePurpose() RelayPoolOption {
+	return func(p *RelayPool) { p.controlPlanePurpose = true }
+}
+
+// checkRelayGuard applies the pool's relay guard to one EVENT frame and
+// reports each refused (relay, kind) once at error level.
+func (p *RelayPool) checkRelayGuard(relayURL string, ev nostr.Event) error {
+	var err error
+	if p.controlPlanePurpose {
+		err = p.relayGuard.CheckControlPlanePool(relayURL, ev)
+	} else {
+		err = p.relayGuard.Check(relayURL, ev)
+	}
+	var refused *relayguard.RefusedError
+	if errors.As(err, &refused) {
+		fields := []zap.Field{zap.String("relay", refused.Relay), zap.Int("kind", int(ev.Kind)), zap.String("event_id", ev.ID.Hex())}
+		if refused.FirstForRelayKind {
+			p.logger.Error("refused to publish a control-plane event to a relay outside nostr.controlled_relays; further refusals of this kind to this relay are logged at debug level", fields...)
+		} else {
+			p.logger.Debug("refused to publish a control-plane event to a relay outside nostr.controlled_relays", fields...)
+		}
+	}
+	return err
 }
 
 // RelayPoolReconfigureResult describes an in-place relay topology update.
@@ -684,14 +716,9 @@ func (p *RelayPool) PublishToRelaysWithResults(ctx context.Context, ev nostr.Eve
 	refused := make([]bool, len(relays))
 	urls := make([]string, 0, len(relays))
 	for i, mr := range relays {
-		if err := p.relayGuard.Check(mr.url, ev); err != nil {
+		if err := p.checkRelayGuard(mr.url, ev); err != nil {
 			refused[i] = true
 			results[i] = PublishResult{RelayURL: mr.url, Reason: err.Error()}
-			p.logger.Error("refused to publish a service control-plane event to a relay outside nostr.controlled_relays",
-				zap.String("relay", mr.url),
-				zap.String("event_id", ev.ID.Hex()),
-				zap.Int("kind", int(ev.Kind)),
-			)
 			continue
 		}
 		urls = append(urls, mr.url)

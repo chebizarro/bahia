@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -68,14 +70,22 @@ func IsWellKnownPublic(relayURL string) bool {
 	return false
 }
 
-// IsControlPlaneKind reports whether kind is one of Bahia's control-plane
-// kinds: canonical cp-state (30900, including OCK envelopes and NIP-44
-// confidential payloads), audit (4903), intent status (30315), identity,
-// replay and readiness records (31410, 31411, 30360), relay and discovery
-// lists, and the other kinds only the service key publishes
-// (kinds.IsBahiaProjectionKind).
+// IsControlPlaneKind reports whether kind, signed by the service key, is
+// Bahia control plane: canonical cp-state (30900, including OCK envelopes and
+// NIP-44 confidential payloads), audit (4903), intent status (30315),
+// identity, replay and readiness records (31410, 31411, 30360), relay and
+// discovery lists and the other kinds only the service key publishes
+// (kinds.IsBahiaProjectionKind), plaintext ContextVM messages (25910) and
+// NIP-09 deletion requests (5) for any of them.
 func IsControlPlaneKind(kind nostr.Kind) bool {
-	return kinds.IsBahiaProjectionKind(int(kind))
+	return kinds.IsBahiaProjectionKind(int(kind)) || kind == kinds.ContextVMMessage || kind == nostr.KindDeletion
+}
+
+// IsGiftWrapKind reports whether kind is a NIP-59 gift wrap. Gift wraps are
+// signed by ephemeral keys, so their author cannot show they carry Bahia's
+// control plane; pools that carry it (CheckControlPlanePool) confine them.
+func IsGiftWrapKind(kind nostr.Kind) bool {
+	return kind == kinds.ContextVMGiftWrap || kind == kinds.ContextVMEphemeralGiftWrap
 }
 
 // Guard refuses to publish service-signed control-plane events to relays
@@ -84,6 +94,14 @@ func IsControlPlaneKind(kind nostr.Kind) bool {
 type Guard struct {
 	service    nostr.PubKey
 	controlled map[string]struct{}
+
+	refusals atomic.Uint64
+	reported sync.Map // refusalKey -> struct{}: refusals already reported once
+}
+
+type refusalKey struct {
+	relay string
+	kind  nostr.Kind
 }
 
 // New builds a guard for the service identity. controlled is the set of
@@ -122,7 +140,36 @@ func (g *Guard) Check(relayURL string, ev nostr.Event) error {
 	if g == nil || ev.PubKey != g.service || !IsControlPlaneKind(ev.Kind) || g.Allows(relayURL) {
 		return nil
 	}
-	return &RefusedError{Relay: Normalize(relayURL), Kind: ev.Kind}
+	return g.refuse(relayURL, ev.Kind, "service control-plane kind")
+}
+
+// CheckControlPlanePool is Check for a pool that carries the control plane
+// (control-plane, ContextVM and service pools): gift wraps, whose ephemeral
+// signer Check cannot attribute, also go only to controlled relays.
+func (g *Guard) CheckControlPlanePool(relayURL string, ev nostr.Event) error {
+	if g == nil {
+		return nil
+	}
+	if IsGiftWrapKind(ev.Kind) && !g.Allows(relayURL) {
+		return g.refuse(relayURL, ev.Kind, "control-plane pool gift wrap kind")
+	}
+	return g.Check(relayURL, ev)
+}
+
+func (g *Guard) refuse(relayURL string, kind nostr.Kind, what string) error {
+	g.refusals.Add(1)
+	refused := &RefusedError{Relay: Normalize(relayURL), Kind: kind, what: what}
+	_, reported := g.reported.LoadOrStore(refusalKey{relay: refused.Relay, kind: kind}, struct{}{})
+	refused.FirstForRelayKind = !reported
+	return refused
+}
+
+// Refusals is the number of EVENT frames the guard has refused.
+func (g *Guard) Refusals() uint64 {
+	if g == nil {
+		return 0
+	}
+	return g.refusals.Load()
 }
 
 // RefusedError is the guard's refusal. Its Reason is a NIP-01 "blocked:"
@@ -131,11 +178,19 @@ func (g *Guard) Check(relayURL string, ev nostr.Event) error {
 type RefusedError struct {
 	Relay string
 	Kind  nostr.Kind
+	// FirstForRelayKind is true for the guard's first refusal of this kind
+	// to this relay, so callers report each (relay, kind) once.
+	FirstForRelayKind bool
+	what              string
 }
 
 func (e *RefusedError) Error() string { return e.Reason() }
 
 // Reason is the OK-style rejection message for the refused relay.
 func (e *RefusedError) Reason() string {
-	return fmt.Sprintf("blocked: %s is not a controlled relay (nostr.controlled_relays); service control-plane kind %d is never published there", e.Relay, e.Kind)
+	what := e.what
+	if what == "" {
+		what = "service control-plane kind"
+	}
+	return fmt.Sprintf("blocked: %s is not a controlled relay (nostr.controlled_relays); %s %d is never published there", e.Relay, what, e.Kind)
 }

@@ -71,10 +71,21 @@ func TestRelayGuardKeepsServiceControlPlaneOffPublicRelays(t *testing.T) {
 	require.NotNil(t, blocked, "the refused relay must be reported")
 	require.True(t, IsBlockedReason(blocked.Reason), "refusal reason %q must be a blocked: rejection", blocked.Reason)
 
-	// A non-control-plane kind is not the guard's concern.
-	_, err = pool.PublishWithResults(t.Context(), gonostr.Event{PubKey: secret.Public(), Kind: kinds.ContextVMGiftWrap})
+	// A control-plane pool keeps gift wraps, whose ephemeral signer cannot
+	// show what they carry, off the public relay as well.
+	pool.controlPlanePurpose = true
+	wrap := gonostr.Event{PubKey: gonostr.Generate().Public(), Kind: kinds.ContextVMGiftWrap}
+	_, err = pool.PublishWithResults(t.Context(), wrap)
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{guardControlledRelay, guardControlledRelay, guardPublicRelay}, frames.sent())
+	require.Equal(t, []string{guardControlledRelay, guardControlledRelay}, frames.sent())
+	require.Equal(t, uint64(2), guard.Refusals())
+
+	// A pool without the control-plane purpose (e.g. a Loom or FIPS pool)
+	// does not confine gift wraps; service control-plane kinds stay guarded.
+	pool.controlPlanePurpose = false
+	_, err = pool.PublishWithResults(t.Context(), wrap)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{guardControlledRelay, guardControlledRelay, guardControlledRelay, guardPublicRelay}, frames.sent())
 }
 
 // Quorum is counted over the publisher's write relays only: a Loom relay that
