@@ -183,12 +183,18 @@ type legacyDNSEndpointLister interface {
 }
 
 // mcpProjectorSigner injects the fixture's local service key as the
-// projector's Keyer, as the daemon does.
+// projector's Keyer and the confidential-dedupe system key, as the daemon
+// does.
 func mcpProjectorSigner(t testing.TB, sk nostr.SecretKey) nostrpool.ProjectorOption {
 	t.Helper()
 	signer, err := nostrutil.NewLocalKeyer(sk.Hex())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return nostrpool.WithProjectorSigner(signer, sk.Public().Hex())
+	withSigner := nostrpool.WithProjectorSigner(signer, sk.Public().Hex())
+	withKeys := nostrpool.WithConfidentialStateHashKeys(dedupeKeyring(t))
+	return func(p *nostrpool.Projector) {
+		withSigner(p)
+		withKeys(p)
+	}
 }

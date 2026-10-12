@@ -56,7 +56,7 @@ func startCanonicalDaemon(t *testing.T, dir string, index repository.HiveCIRepos
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostrAdapter.WithLocalOutbox(outbox, store))
 	history := nostrAdapter.NewLocalEventRepository(store, nil).Authored(pubkey)
 	registry := service.NewRegistryService(nil, nil, nil, nil, nil, nil, nil, nil, nil, events.NewInProcessPublisher(zap.NewNop()), zap.NewNop())
-	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey))
+	projector := nostrAdapter.NewProjector(cfg, registry, publisher, history, zap.NewNop(), nostrAdapter.WithProjectorSigner(fixtureKeyer, pubkey), nostrAdapter.WithConfidentialStateHashKeys(dedupeKeyring(t)))
 	publisher.OnDeliveryAbandoned(projector.ForgetAbandonedProjection)
 	signer, err := controlplane.NewPrivateKeySigner(daemonKeyHex)
 	require.NoError(t, err)
