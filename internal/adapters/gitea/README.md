@@ -10,8 +10,8 @@ the same source event is refused.
 The initiation journal (`CanonicalInitiationStore`) is a confidential
 `30900` cp-state record per source event (`legacy_kind=32024`,
 `d=hiveci:initiation:<source-event-id>`, `t=hiveci-initiation`), published
-through the local outbox before any index is written and read back from the
-daemon's own retained records in the local event store. The document (stage,
+through the local outbox and read back from the daemon's own retained records
+in the local event store; it is the only record of an initiation. The document (stage,
 request fingerprint, prepared signed events, pinned job arguments, mirror
 read-credential *reference*) is fleet-OCK encrypted; the per-run publisher
 key is in the envelope's `service_inner` layer, NIP-44 encrypted to the
@@ -46,35 +46,25 @@ unknown outcome; restore/inspect the original relay evidence first.
 
 ## Credential boundary
 
-Initiation has exactly one database dependency: resolving the upstream
-repository credential (`CredentialRef`) and the fleet mirror-read password
-(`MirrorReadCredentialRef`). Both are secret **values**, not metadata. The
-canonical secret registry (`30900` secret-registry records) carries
-references only; the values exist solely in the PostgreSQL secret store,
-encrypted with the service key, and the daemon has no canonical path that
-could yield them. The initiator is therefore wired whenever the journal
-exists, and `app.go` substitutes `SecretStoreUnavailable` for the resolver
-when the store is absent (WARN `hiveci_credential_store_unavailable`; health
-check `hiveci.initiator_credential_store=false`). A new initiation then fails
-closed at credential resolution with `ErrSecretStoreUnavailable`, before any
-mirror call or publication, and its journal record stays at `claimed`, so the
-same signed request prepares once the store is reachable
-(`initiator_secret_store_test.go`). Journaling, build identity, replay of a
-completed initiation and resume of a prepared one never touch the store.
-
-`hiveci_initiations` (`PgInitiationStore`) is an optional, encrypted SQL
-index of the journal. It is written after each journal publish (failures are
-logged), rebuilt from the journal after the local store's warm start, and
-in-flight SQL-era initiations are journaled once at upgrade
-(`BackfillFromIndex`). Nothing reads it on the initiation path.
+Initiation resolves two secret **values**: the upstream repository
+credential (`CredentialRef`) and the fleet mirror-read password
+(`MirrorReadCredentialRef`). The canonical secret registry carries only
+credential references; the values live in the secret store
+(docs/architecture/secret-store.md) and resolve through
+`secretstore.TextResolver`, both in one paced batch when Loom dispatch needs
+the mirror password. The initiator is wired whenever the journal exists;
+without a secret store (WARN `hiveci_credential_store_unavailable`; health
+check `hiveci.initiator_credential_store=false`) a new initiation fails
+closed at credential resolution with `secretstore.ErrNotConfigured`, before
+any mirror call or publication, and its journal record stays at `claimed`, so
+the same signed request prepares once the store answers
+(`initiator_secret_store_test.go`). A credential whose value Bahia once
+sealed itself is refused (`domain.ErrLegacySecretValue`). Journaling, build
+identity, replay of a completed initiation and resume of a prepared one never
+touch the store.
 
 Proof runs over a real local event store, outbox, projector and fleet-OCK
 encryptor in a temp dir (`initiation_canonical_test.go`): every durable
 boundary resumes after a daemon restart, 32 concurrent initiations of one
-signed request dispatch once, the prepared operation and per-run key are
-recovered without plaintext secrets, and the SQL index may fail or be lost.
-The PostgreSQL index conformance remains runnable with a disposable database:
-
-```sh
-BAHIA_HIVECI_TEST_DATABASE_URL=postgres://... go test -tags=integration -p 1 ./internal/adapters/gitea
-```
+signed request dispatch once, and the prepared operation and per-run key are
+recovered without plaintext secrets.

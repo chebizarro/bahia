@@ -245,13 +245,11 @@ Config fabric desired state is published directly to relays as NIP-51/NIP-78 eve
 
 ```bash
 bahia secrets list <service-id>                                     # metadata only
-bahia secrets set  <service-id> DATABASE_URL postgres://…  [--environment <env-id>]
-bahia secrets set  <service-id> DATABASE_URL --value-file /run/secrets/db   # owner-only absolute path
-bahia secrets set  <service-id> DATABASE_URL --credential-id cred_<64 hex> --credential-version 2
+bahia secrets set  <service-id> DATABASE_URL --credential-id cred_<64 hex> --credential-version 2 [--environment <env-id>]
 bahia secrets delete <service-id> <secret-id>
 ```
 
-With the daemon's secret store configured (`secret_store.backend: signet`), import the value into Signet (`signetctl import-credential`) and set the secret with `--credential-id` and `--credential-version`: the intent carries only the reference, and a value or `--value-file` is refused by the daemon. After rotating the credential in Signet, run the same command with the new version. Without a secret store, values travel inside gift-wrapped intents. The CLI never prints values; reveal is available in the web app. See [Secret store](../architecture/secret-store.md).
+Secret values live only in the daemon's secret store (Signet). Import the value first, labelled `<org-id>/<service-id>/<name>` (`signetctl import-credential <owner> --type credential --label <org-id>/<service-id>/DATABASE_URL --stdin`), then set the secret with `--credential-id` and `--credential-version`, both required: the intent carries only the reference, never a value. After rotating the credential in Signet, run the same command with the new version. A daemon without a secret store refuses the intent. The CLI never prints values; reveal is available in the web app. See [Secret store](../architecture/secret-store.md) and the [runbook](../runbooks/signet-secret-store.md).
 
 ### orgs
 

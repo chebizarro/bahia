@@ -115,8 +115,11 @@ The intent-author set is pushed by the daemon through the NIP-86
 `setintentauthors` method whenever its TrustSet changes (fleet operators,
 org members, bootstrap owners). This requires
 `nostr.relay_administration.enabled: true` with a `bahia_owned` target for
-this sidecar and a resolvable `administrator_private_key_ref`; otherwise the
-daemon logs `intent authors syncer disabled: …`.
+this sidecar and an `administrator_private_key_ref` naming a secret in the
+[secret store](architecture/secret-store.md) (otherwise the daemon logs
+`intent authors syncer disabled: …`). The key resolves on the first sync and
+is held for the process; until it resolves, each sync fails closed and
+retries with backoff (1s to 60s).
 
 Search (`NIP-50`) is not implemented and such filters are refused; every
 other NIP-01 filter, including one without `kinds`, is accepted.

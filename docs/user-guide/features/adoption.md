@@ -18,6 +18,8 @@ An `adoption` `import` intent (`bahia adopt import --org "$ORG" --target prod=pr
 
 An interrupted import resumes from its binding records after a daemon restart; retrying with the same `--idempotency-key` is safe.
 
+Adoption never copies a secret value. A container whose environment carries secret values inline (keys such as `*_PASSWORD`, `*_TOKEN`, `*_SECRET`, `DATABASE_URL`) is refused, and the result names the keys, never the values. Move those values out of the container (for example into mounted files), or import each into the [secret store](../../runbooks/signet-secret-store.md) and deploy the service through Bahia instead of adopting it. Non-secret environment values are kept on the adopted service.
+
 ## Configuration
 
 ```yaml
@@ -27,7 +29,7 @@ adoption:
   allow_raw_docker_hosts: false                # permit --raw-target alias=dockerHost
 ```
 
-The signer must be listed in `adoption.allowed_pubkeys`. Server-managed endpoint references are the normal target form; raw Docker hosts are accepted only when `allow_raw_docker_hosts` is set.
+The signer must be listed in `adoption.allowed_pubkeys`. Server-managed endpoint references are the normal target form; raw Docker hosts are accepted only when `allow_raw_docker_hosts` is set. Adoption works with any service signer (`nostr.signer`: local, NIP-46 or NIP-55L).
 
 ## Related
 
