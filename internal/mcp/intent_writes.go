@@ -393,7 +393,8 @@ func isFinalIntentWriteTool(name string) bool {
 	case "bahia_ml_import_model", "bahia_ml_run_recipe", "bahia_ml_deploy", "bahia_ml_rollback",
 		"bahia_assistant_ml_deploy", "bahia_assistant_ml_approve_deployment", "bahia_assistant_ml_rollback",
 		"bahia_tool_provision_approve", "bahia_tool_provision_reject",
-		"bahia_verify_signatures", "bahia_ingest_sbom", "bahia_test_notification_channel":
+		"bahia_verify_signatures", "bahia_ingest_sbom", "bahia_test_notification_channel",
+		"bahia_create_secret", "bahia_update_secret", "bahia_delete_secret":
 		return true
 	default:
 		return false
@@ -437,14 +438,17 @@ func mcpIntentEntityID(args map[string]interface{}, intentID string) (uuid.UUID,
 // secretCredentialArgs reads credential_id and credential_version: the
 // reference to a value held by the daemon's secret store. It returns nil
 // when neither is given; a value and a reference are mutually exclusive.
+// errSecretValueArg refuses a secret tool call that carries a value.
+var errSecretValueArg = fmt.Errorf("secret values are never sent to Bahia: import the value into the secret store labelled <org-id>/<service-id>/<name> and pass credential_id and credential_version")
+
 func secretCredentialArgs(args map[string]interface{}) (*domain.SecretCredentialRef, error) {
+	if _, ok := args["value"]; ok {
+		return nil, errSecretValueArg
+	}
 	id := strings.TrimSpace(stringArg(args, "credential_id"))
 	rawVersion, hasVersion := args["credential_version"]
 	if id == "" && !hasVersion {
 		return nil, nil
-	}
-	if stringArg(args, "value") != "" {
-		return nil, fmt.Errorf("value and credential_id are mutually exclusive: a credential reference replaces the value")
 	}
 	version, ok := rawVersion.(float64)
 	if !ok || version != float64(int(version)) {
@@ -990,8 +994,8 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 		if e != nil {
 			return w, e
 		}
-		if strings.TrimSpace(stringArg(args, "name")) == "" || (credential == nil && stringArg(args, "value") == "") {
-			return w, fmt.Errorf("name and value (or credential_id and credential_version) are required")
+		if strings.TrimSpace(stringArg(args, "name")) == "" || credential == nil {
+			return w, fmt.Errorf("name, credential_id and credential_version are required")
 		}
 		w = intentWrite{domain: "secret", op: "create", coordinate: id.String(), family: nostrpool.KindSecretRegistry, stateKey: "id", stateValue: id.String()}
 		w.orgID, err = s.intentOrgFromState(ctx, nil, nostrpool.KindServiceRegistry, "id", serviceID.String())
@@ -1006,12 +1010,11 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 		if envID != uuid.Nil {
 			envPtr = &envID
 		}
-		if credential != nil {
-			w.content = controlplane.BuildSecretReferenceIntentContent(serviceID, id, stringArg(args, "name"), envPtr, *credential)
-		} else {
-			w.content = controlplane.BuildSecretIntentContent(serviceID, id, stringArg(args, "name"), stringArg(args, "value"), envPtr, domain.EncryptionNIP44)
-		}
+		w.content = controlplane.BuildSecretReferenceIntentContent(serviceID, id, stringArg(args, "name"), envPtr, *credential)
 	case "bahia_update_secret", "bahia_delete_secret":
+		if _, ok := args["value"]; ok && name == "bahia_update_secret" {
+			return w, errSecretValueArg
+		}
 		id, e := parseRequiredUUIDArg(args, "secret_id")
 		if e != nil {
 			return w, e
@@ -1036,8 +1039,8 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 			if e != nil {
 				return w, e
 			}
-			if credential == nil && stringArg(args, "value") == "" {
-				return w, fmt.Errorf("value (or credential_id and credential_version) is required")
+			if credential == nil {
+				return w, fmt.Errorf("credential_id and credential_version are required")
 			}
 			w.op = "update"
 			var envPtr *uuid.UUID
@@ -1048,11 +1051,7 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 				}
 				envPtr = &envID
 			}
-			if credential != nil {
-				w.content = controlplane.BuildSecretReferenceIntentContent(serviceID, id, stringFromRecord(current, "name"), envPtr, *credential)
-			} else {
-				w.content = controlplane.BuildSecretIntentContent(serviceID, id, stringFromRecord(current, "name"), stringArg(args, "value"), envPtr, domain.EncryptionNIP44)
-			}
+			w.content = controlplane.BuildSecretReferenceIntentContent(serviceID, id, stringFromRecord(current, "name"), envPtr, *credential)
 			if value, ok := args["expected_updated_at"]; ok {
 				w.content["expected_updated_at"] = value
 			}

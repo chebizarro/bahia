@@ -2385,14 +2385,12 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 
 	// Register the secret intent handler when the secret domain is enabled.
-	// With a secret store it needs no database: intents carry only
-	// credential references. Without one, the legacy value path needs the
-	// PostgreSQL secret store.
-	if enabledDomains["secret"] && (secretValues != nil || secretRepo != nil) {
+	// Intents carry only credential references and need no database; without
+	// a secret store creates and updates are refused with the reason.
+	if enabledDomains["secret"] {
 		handlerCfg := controlplane.SecretIntentHandlerConfig{
 			Registry:   secretRepo,
 			StoreIndex: secretIndexOrNil(secretIndex),
-			Encryptor:  secretEncryptor,
 			Store:      secretValues,
 			Records:    secretView,
 			Publisher:  secretCanonical,
@@ -2400,7 +2398,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			Logger:     logger,
 		}
 		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(handlerCfg))
-		logger.Info("secret intent handler registered", zap.Bool("secret_store", secretValues != nil), zap.Bool("sql_secret_store", secretRepo != nil))
+		logger.Info("secret intent handler registered", zap.Bool("secret_store", secretValues != nil), zap.Bool("sql_secret_index", secretRepo != nil))
 	}
 
 	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,

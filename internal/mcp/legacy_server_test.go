@@ -369,7 +369,8 @@ func (s *Server) handleGetRun(ctx context.Context, args map[string]interface{}) 
 }
 
 func (s *Server) handleListSecrets(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
-	if s.secretsRepo == nil {
+	secretsRepo := legacyFor(s).Secrets
+	if secretsRepo == nil {
 		return errorResult("secret management tools are not configured"), nil
 	}
 
@@ -380,7 +381,7 @@ func (s *Server) handleListSecrets(ctx context.Context, args map[string]interfac
 		return errorResult(fmt.Sprintf("invalid service_id: %v", err)), nil
 	}
 
-	secrets, err := s.secretsRepo.ListByService(ctx, serviceID)
+	secrets, err := secretsRepo.ListByService(ctx, serviceID)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list secrets: %v", err)), nil
 	}

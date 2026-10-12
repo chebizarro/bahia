@@ -134,7 +134,6 @@ func newReferenceFixture(t *testing.T, withRegistry bool) *referenceFixture {
 		f.repo = newMemSecretRepo()
 		cfg.Registry = f.repo
 		cfg.StoreIndex = f.repo
-		cfg.Encryptor = &testEncryptor{}
 	}
 	f.processor.RegisterHandler("secret", NewSecretIntentHandler(cfg))
 	return f
@@ -199,15 +198,16 @@ func TestSecretReferenceIntentRejections(t *testing.T) {
 		mutate func(*referenceFixture, map[string]interface{})
 		want   string
 	}{
-		{"value with the store configured", nil, func(f *referenceFixture, c map[string]interface{}) {
+		{"encrypted value", nil, func(f *referenceFixture, c map[string]interface{}) {
 			delete(c, "credential_ref")
 			c["encrypted_value"] = "nip44-ciphertext"
-		}, "not accepted in intents while the secret store is configured"},
-		{"plaintext with the store configured", nil, func(f *referenceFixture, c map[string]interface{}) {
+		}, "never carry a value"},
+		{"plaintext value", nil, func(f *referenceFixture, c map[string]interface{}) {
 			delete(c, "credential_ref")
 			c["value"] = "hunter2"
-		}, "not accepted in intents while the secret store is configured"},
-		{"reference and value", nil, func(f *referenceFixture, c map[string]interface{}) { c["encrypted_value"] = "x" }, "either credential_ref or a value"},
+		}, "never carry a value"},
+		{"reference and value", nil, func(f *referenceFixture, c map[string]interface{}) { c["encrypted_value"] = "x" }, "never carry a value"},
+		{"no reference", nil, func(f *referenceFixture, c map[string]interface{}) { delete(c, "credential_ref") }, "needs credential_ref"},
 		{"unknown backend", nil, func(f *referenceFixture, c map[string]interface{}) {
 			c["credential_ref"] = map[string]interface{}{"store": "vault", "credential_id": f.credID, "version": 2}
 		}, "invalid secret store reference"},
@@ -309,7 +309,7 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 }
 
 // requireStoreMarker asserts PostgreSQL holds a value-less marker, so its
-// consumers fail with ErrSecretInStore rather than omit the secret.
+// consumers list the secret and resolve it through the store.
 func requireStoreMarker(t *testing.T, repo *memSecretRepo, id uuid.UUID) {
 	t.Helper()
 	row, _ := repo.GetByID(context.Background(), id)
@@ -347,7 +347,7 @@ func TestSecretReferenceIntentRefusesAnotherTenantsCredential(t *testing.T) {
 	}
 }
 
-func TestSecretValueIntentWithoutStoreOrPostgresIsRefused(t *testing.T) {
+func TestSecretIntentWithoutStoreIsRefused(t *testing.T) {
 	_, ownerPub := testNostrKeypair()
 	trustSet := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): ownerPub}))
 	processor := NewIntentProcessor(trustSet, nil, nil, IntentProcessorConfig{EnabledDomains: map[string]bool{"secret": true}}, zap.NewNop())
@@ -363,8 +363,8 @@ func TestSecretValueIntentWithoutStoreOrPostgresIsRefused(t *testing.T) {
 	delete(content, "credential_ref")
 	content["encrypted_value"] = "x"
 	err = processor.ProcessRelayIntent(context.Background(), makeTestSecretIntent(t, "create", content, uuid.NewString(), ownerPub))
-	if err == nil || !strings.Contains(err.Error(), "need the PostgreSQL secret store") {
-		t.Fatalf("value intent without PostgreSQL = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "never carry a value") {
+		t.Fatalf("value intent without a store = %v", err)
 	}
 }
 

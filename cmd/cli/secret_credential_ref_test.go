@@ -14,11 +14,13 @@ func TestSecretsSetCredentialReferenceFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		"reference and value":      {[]string{"set", "svc", "DB", "hunter2", "--credential-id", valid, "--credential-version", "1"}, "drop [value]"},
-		"reference and value file": {[]string{"set", "svc", "DB", "--value-file", "/tmp/x", "--credential-id", valid, "--credential-version", "1"}, "drop [value]"},
-		"missing version":          {[]string{"set", "svc", "DB", "--credential-id", valid}, "version must be >= 1"},
-		"version without id":       {[]string{"set", "svc", "DB", "--credential-version", "2"}, "credential_id must be"},
-		"nothing to set":           {[]string{"set", "svc", "DB"}, "--credential-id is required"},
+		"a value argument":   {[]string{"set", "svc", "DB", "hunter2", "--credential-id", valid, "--credential-version", "1"}, "accepts 2 arg(s)"},
+		"a value file":       {[]string{"set", "svc", "DB", "--value-file", "/tmp/x", "--credential-id", valid, "--credential-version", "1"}, "unknown flag: --value-file"},
+		"missing version":    {[]string{"set", "svc", "DB", "--credential-id", valid}, `required flag(s) "credential-version" not set`},
+		"version without id": {[]string{"set", "svc", "DB", "--credential-version", "2"}, `required flag(s) "credential-id" not set`},
+		"zero version":       {[]string{"set", "svc", "DB", "--credential-id", valid, "--credential-version", "0"}, "version must be >= 1"},
+		"malformed id":       {[]string{"set", "svc", "DB", "--credential-id", "not a token", "--credential-version", "1"}, "credential_id must be"},
+		"nothing to set":     {[]string{"set", "svc", "DB"}, "required flag(s)"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := secretsCommands()

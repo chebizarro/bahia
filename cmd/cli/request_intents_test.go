@@ -167,7 +167,7 @@ func TestCLIRequestIntentsThroughD79Handlers(t *testing.T) {
 	starter, builds := &cliBuildStarter{}, &cliBuildRegistry{}
 	buildHandler := controlplane.NewEncryptedBuildHandlers(controlplane.EncryptedBuildHandlersConfig{
 		Starter: starter, Registry: builds, Builds: builds, Services: registry,
-		Secrets: cliBuildCredentials{secret: &domain.ServiceSecret{ID: credentialID, ServiceID: serviceID}},
+		Secrets: cliBuildCredentials{secret: &domain.ServiceSecret{ID: credentialID, ServiceID: serviceID, EncryptionMethod: domain.EncryptionStoreRef}},
 		RBAC:    auth.NewRBAC(cliBuildMembers{}),
 	})
 	processor.RegisterHandler("build", controlplane.NewBuildIntentHandler(buildHandler))
