@@ -146,6 +146,26 @@ sealed under the old version would become unreadable). See
 | `system keys are not resolved … retrying: …` | Signet is unreachable or refused one of the keys: `credential is not labelled bahia-system/<purpose>/<key-id>` (wrong credential or label), `version does not match` (configured version is not the active one), `is N bytes, want 32` (not a 32-byte key), `refused (no_capability)` (delivery grant) |
 | `confidential records cannot be published: … confidential_dedupe is not configured` (fails readiness) | publishing is on but no dedupe key is configured; every confidential write fails closed |
 
+## Dev compose stack
+
+`docker-compose.yml` runs a disposable Signet (service `signet`, image
+`bahia-signet-dev:local`, `deploy/signet-dev`) so the dev stack publishes
+confidential state and can run the assistant. It needs a nostrc checkout with
+Signet >= 0.7.0 (`NOSTRC_DIR`); the image builds `signetd` and `signetctl`
+from it. On first start `scripts/signet_dev_seed.py` generates every key
+(kept in the `signetdata` volume), provisions the owner `bahia-vault`,
+grants the requester exactly `credential.deliver` and imports
+`bahia-system/assistant-transcript/dev` and
+`bahia-system/confidential-dedupe/dev`, checking that Signet reports the
+credential ids `config.compose.yaml` names. `bahia` and `relay` start once it
+is healthy, through `deploy/signet-dev/with-signet-env.sh`, which passes the
+Signet pubkey (`BAHIA_SECRET_STORE_SIGNET_PUBKEY`) and an owner-only copy of
+the requester key. The keys are throwaway; `docker volume rm` of
+`signetdata` starts over (and makes dev assistant history sealed under the
+old transcript key unreadable). The joined assistant e2e harness runs the
+same image. The live proof (`Live proof` below) seeds through the same
+module.
+
 ## Rotate
 
 ```bash

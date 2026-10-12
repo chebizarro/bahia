@@ -11,10 +11,13 @@ DNS, Soul Factory and runtime integrations are enabled independently.
 
 ## Local Docker Compose
 
-Requirements: Docker Engine with Compose, a 64-hex or `nsec` service key, and
-the host Docker socket group ID.
+Requirements: Docker Engine with Compose, a 64-hex or `nsec` service key, the
+host Docker socket group ID, and a nostrc checkout with Signet >= 0.7.0 for
+the disposable dev Signet that holds the daemon's system keys
+([runbook](runbooks/signet-secret-store.md#dev-compose-stack)).
 
 ```bash
+export NOSTRC_DIR=<nostrc checkout>
 export BAHIA_NOSTR_PRIVATE_KEY=<service-private-key>
 export BAHIA_NOSTR_AUTHORIZED_PUBKEYS=<comma-separated-operator-pubkeys>
 export PUBLIC_BAHIA_SERVICE_PUBKEYS=<service-pubkey-hex>
@@ -30,6 +33,7 @@ The stack exposes:
 | Daemon | `http://localhost:8080` | `/health` liveness, `/ready` readiness |
 | Relay | `ws://localhost:3334/relay` | NIP-11 at the same HTTP URL |
 | PostgreSQL | `localhost:5432` | `pg_isready` |
+| Signet (dev) | `ws://signet:7777` inside the stack | healthy once seeded |
 
 Both Go services mount `config.compose.yaml`. The daemon also mounts the host
 Docker socket and joins `DOCKER_SOCKET_GID`; using a group name would resolve
@@ -166,6 +170,17 @@ or anonymous pull CIDRs. See the exact route behavior in the
 
 ## Edge deployment workflow
 
+**Prerequisite.** A daemon that publishes (`nostr.publish_enabled`) needs the
+confidential-dedupe system key, and one with `assistant.enabled` needs the
+assistant-transcript key: production configuration must carry
+`secret_store` (backend `signet`, a reachable Signet, the requester key file,
+the owner) and `secret_store.system_keys` before publishing or the assistant
+is enabled. Without the dedupe key every confidential write (orgs, members,
+secrets, payments, security, operator allowlists) fails and `/ready` fails
+`system_keys`; `assistant.enabled` without the transcript key is refused at
+config load. Create the credentials first
+([runbook](runbooks/signet-secret-store.md#system-credentials)).
+
 `.github/workflows/deploy-edge.yml` is a manually dispatched deployment on a
 runner labelled `self-hosted`, `edge-01`, `docker`. Required input
 `release_revision` selects the full commit. Optional inputs set release-tree
@@ -200,7 +215,8 @@ curl -fsS -H 'Accept: application/nostr+json' https://bahia.example/relay
 
 Confirm that `/ready` reports passing `relay_quorum`, `bootstrap_ready`,
 `background_runners`, `intent_readiness`, `ock_rotation` and
-`canonical_delivery` checks, plus every enabled subsystem check. Validate one
+`canonical_delivery` checks, plus `system_keys` and every enabled subsystem
+check. Validate one
 REQ/EOSE subscription, one signed intent and its relay `OK`, requester-scoped
 `30315` status, and canonical record before considering the deployment
 operational.
