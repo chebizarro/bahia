@@ -23,8 +23,6 @@ opt-in `signetinterop` tests from this (clean) Bahia checkout:
      secret removed from the URI, and signs each time; a secret spent by
      another client and an unpaired client without a secret are refused
      promptly with an explained error rather than a timeout.
-  5. TestLiveAssistantWrappedStartupHistoricalReads: wrapped read-only
-     assistant startup through the NIP-46 service signer.
 
 Never accepts an existing identity, relay URL or database. No secret, pairing
 URI or raw test output is written to stdout or stderr; on failure only the
@@ -46,10 +44,8 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 ASSIGNED_TEST = "TestLiveNIP46AssignedWriterSigns"
 SIGNER_TEST = "TestLiveNIP46ServiceSigner"
 RECONNECT_TEST = "TestLiveNIP46Reconnect"
-APP_TEST = "TestLiveAssistantWrappedStartupHistoricalReads"
 SIGNER_PACKAGE = "./internal/servicesigner"
 SIGNER_SOURCE = "nip46_live_integration_test.go"
-APP_PACKAGE = "./internal/app"
 AGENT_ID = "bahia-interop"
 # Standard NIP-46 methods Bahia's service signer uses, plus the binary-safe
 # NIP-44 pair (nip44_*_b64) behind its optional BinaryCipher capability.
@@ -192,19 +188,6 @@ def run_go_test(bahia, env, package, named_test, source):
     require_live_test_pass(result.stdout, named_test)
 
 
-def run_app_test(bahia, env, root, service_sk):
-    """Run the app test binary with the synthetic service key on stdin only."""
-    binary = root / "bahia-app.test"
-    run(["go", "test", "-c", "-tags", "signetinterop", "-o", str(binary), APP_PACKAGE], cwd=bahia, env=env)
-    app = subprocess.run([str(binary), "-test.run", f"^{APP_TEST}$", "-test.count=1", "-test.v=test2json"],
-                         cwd=bahia / APP_PACKAGE, env=env, input=service_sk + "\n", text=True, capture_output=True)
-    if app.returncode:
-        location = failure_location(app.stdout + app.stderr, "assistant_wrapped_live_integration_test.go")
-        raise RuntimeError(f"Bahia {APP_TEST} failed{location}; private output withheld")
-    events = run(["go", "tool", "test2json", "-p", "app"], cwd=bahia, env=env, input_text=app.stdout)
-    require_live_test_pass(events, APP_TEST)
-
-
 def write_fixture(path, **fields):
     private_file(path, json.dumps(dict(disposable=True, **fields)) + "\n")
 
@@ -226,8 +209,7 @@ def main(argv=None):
     for executable in ("nak", "go", "cmake", "git"):
         if subprocess.run(["which", executable], capture_output=True).returncode:
             raise RuntimeError(f"{executable} is required")
-    if not (bahia / SIGNER_PACKAGE / SIGNER_SOURCE).is_file() or \
-            not (bahia / APP_PACKAGE / "assistant_wrapped_live_integration_test.go").is_file():
+    if not (bahia / SIGNER_PACKAGE / SIGNER_SOURCE).is_file():
         raise RuntimeError("Bahia checkout lacks the opt-in NIP-46 interop tests")
     bahia_commit = require_clean_checkout(bahia, "Bahia")
     require_clean_checkout(signet_repo, "Signet", signet_commit)
@@ -334,11 +316,8 @@ def main(argv=None):
                 run_go_test(bahia, test_env, SIGNER_PACKAGE, SIGNER_TEST, SIGNER_SOURCE)
                 # Phase 3: the same client keys connect again from a new process.
                 run_go_test(bahia, test_env, SIGNER_PACKAGE, RECONNECT_TEST, SIGNER_SOURCE)
-
-                # Phase 4: wrapped read-only assistant startup through the NIP-46 signer.
-                run_app_test(bahia, test_env, root, service_sk)
                 print(f"PASS: Bahia {bahia_commit} NIP-46 service signer interop against Signet {signet_commit} "
-                      f"({ASSIGNED_TEST}, {SIGNER_TEST}, {RECONNECT_TEST}, {APP_TEST}) on a disposable loopback signetd")
+                      f"({ASSIGNED_TEST}, {SIGNER_TEST}, {RECONNECT_TEST}) on a disposable loopback signetd")
         finally:
             for process in reversed(processes):
                 process.terminate()

@@ -10,12 +10,16 @@ docs/runbooks/signet-secret-store.md describes:
   - an owner agent (provision) that nobody connects to;
   - a requester key, granted provisioner rights and named as the single
     client of the owner's credential.deliver policy;
-  - one imported credential.
+  - one imported tenant credential and another tenant's;
+  - two system credentials (32 random bytes each) labelled
+    bahia-system/assistant-transcript/k1 and bahia-system/confidential-dedupe/k1.
 
 It then runs Bahia's opt-in TestLiveSignetCredentialStore (-tags
 signetinterop) from this clean Bahia checkout: resolve the pinned version,
-refuse another tenant's credential held by the same owner, refuse the old
-pin after a rotation and resolve the new one, refuse when the delivery grant
+refuse another tenant's credential held by the same owner, resolve the
+system keys through the system scope (and refuse system/tenant crossovers and
+a key configured under the wrong purpose), refuse the old pin after a
+rotation and resolve the new one, refuse when the delivery grant
 names another client, refuse after revocation.
 
 Never accepts an existing identity, relay URL or database. No secret or raw
@@ -144,13 +148,28 @@ def main(argv=None):
                 if not foreign_id.startswith("cred_"):
                     raise RuntimeError("import-credential did not report the other tenant's credential id")
 
+                system_keys = {}
+                for purpose in ("assistant-transcript", "confidential-dedupe"):
+                    key_file = root / f"{purpose}.key"
+                    with open(os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
+                        handle.write(secrets.token_bytes(32))
+                    imported_key = management(ctl, config, env, "import-credential", OWNER, "--type", "credential",
+                                              "--label", f"bahia-system/{purpose}/k1", "--file", str(key_file))
+                    if not imported_key.get("credential_id", "").startswith("cred_") or imported_key.get("version") != 1:
+                        raise RuntimeError(f"import-credential did not report the {purpose} system credential")
+                    system_keys[purpose] = (imported_key["credential_id"], str(key_file))
+
                 fixture = root / "fixture.json"
                 private_file(fixture, json.dumps(dict(
                     disposable=True, signet_commit=signet_commit, relay_url=relay_url, signet_pubkey=bunker_pk,
                     requester_secret_key_hex=requester_sk, owner=OWNER, credential_id=credential_id,
                     org_id=org_id, service_id=service_id, foreign_credential_id=foreign_id,
                     value_v1_file=str(value_v1), value_v2_file=str(value_v2), signetctl=str(ctl),
-                    signet_config=str(config), other_client_pubkey=other_pk)) + "\n")
+                    signet_config=str(config), other_client_pubkey=other_pk,
+                    transcript_credential_id=system_keys["assistant-transcript"][0],
+                    transcript_key_file=system_keys["assistant-transcript"][1],
+                    dedupe_credential_id=system_keys["confidential-dedupe"][0],
+                    dedupe_key_file=system_keys["confidential-dedupe"][1])) + "\n")
                 test_env = env.copy()
                 test_env["BAHIA_SIGNET_SECRET_STORE_CONFIG"] = str(fixture)
                 run_go_test(bahia, test_env, PACKAGE, LIVE_TEST, SOURCE)
