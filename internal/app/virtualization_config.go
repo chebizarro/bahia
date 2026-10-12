@@ -28,7 +28,7 @@ func (s virtualizationPlaneSigner) Sign(ctx context.Context, e *nostr.Event) err
 type virtualizationConfigurationDependencies struct {
 	events       repository.NostrEventRepository
 	secrets      repository.SecretRepository
-	resolver     service.VMAuditedSecretResolver
+	resolver     service.SecretValues
 	services     repository.ServiceRepository
 	environments repository.EnvironmentRepository
 	units        repository.DeploymentUnitRepository

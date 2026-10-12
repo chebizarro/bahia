@@ -3,11 +3,9 @@ package gitea
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -77,50 +75,6 @@ func (d *journalDaemon) close() {
 	_ = d.store.Close()
 }
 
-// memoryInitiationIndex stands in for the PostgreSQL index; it can be told to
-// fail or be wiped, as a lost database would be.
-type memoryInitiationIndex struct {
-	mu   sync.Mutex
-	rows map[string]InitiationRecord
-	fail bool
-}
-
-func newMemoryInitiationIndex() *memoryInitiationIndex {
-	return &memoryInitiationIndex{rows: map[string]InitiationRecord{}}
-}
-
-func (m *memoryInitiationIndex) Upsert(_ context.Context, rec *InitiationRecord) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail {
-		return errors.New("database unavailable")
-	}
-	m.rows[rec.SourceEventID] = *rec
-	return nil
-}
-
-func (m *memoryInitiationIndex) ListInFlight(context.Context) ([]*InitiationRecord, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.fail {
-		return nil, errors.New("database unavailable")
-	}
-	var out []*InitiationRecord
-	for _, rec := range m.rows {
-		if rec.Stage != StageEvidencePublished {
-			copied := rec
-			out = append(out, &copied)
-		}
-	}
-	return out, nil
-}
-
-func (m *memoryInitiationIndex) wipe() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.rows = map[string]InitiationRecord{}
-}
-
 // Every durable boundary of an initiation resumes from the journal in the
 // local event store after a restart: a fresh daemon process over the same
 // store files, no SQL.
@@ -128,10 +82,10 @@ func TestCanonicalInitiationResumeEveryDurableBoundary(t *testing.T) {
 	proveInitiationResume(t, func(t *testing.T) (InitiationStore, func() InitiationStore) {
 		dir := t.TempDir()
 		daemon := startJournalDaemon(t, dir)
-		return NewCanonicalInitiationStore(daemon.journal, nil, nil), func() InitiationStore {
+		return NewCanonicalInitiationStore(daemon.journal, nil), func() InitiationStore {
 			daemon.close()
 			daemon = startJournalDaemon(t, dir)
-			return NewCanonicalInitiationStore(daemon.journal, nil, nil)
+			return NewCanonicalInitiationStore(daemon.journal, nil)
 		}
 	})
 }
@@ -141,7 +95,7 @@ func TestCanonicalInitiationResumeEveryDurableBoundary(t *testing.T) {
 // Loom job and one evidence record.
 func TestCanonicalConcurrentInitiationSingleDispatch(t *testing.T) {
 	daemon := startJournalDaemon(t, t.TempDir())
-	store := NewCanonicalInitiationStore(daemon.journal, nil, nil)
+	store := NewCanonicalInitiationStore(daemon.journal, nil)
 	proveConcurrentInitiation(t, func() InitiationStore { return store })
 }
 
@@ -150,7 +104,7 @@ func TestCanonicalConcurrentInitiationSingleDispatch(t *testing.T) {
 func TestCanonicalInitiationBuildIdentityIsDerivedFromTheSourceEvent(t *testing.T) {
 	ctx := context.Background()
 	daemon := startJournalDaemon(t, t.TempDir())
-	store := NewCanonicalInitiationStore(daemon.journal, nil, nil)
+	store := NewCanonicalInitiationStore(daemon.journal, nil)
 	req := arcanaStartRequest(uuid.New())
 	derived := controlplane.BuildIDForSourceEvent(req.SourceEventID)
 	require.Equal(t, derived, req.BuildID)
@@ -186,7 +140,7 @@ func TestCanonicalInitiationKeepsThePreparedOperationWithoutPlaintextSecrets(t *
 	ctx := context.Background()
 	dir := t.TempDir()
 	daemon := startJournalDaemon(t, dir)
-	store := NewCanonicalInitiationStore(daemon.journal, nil, nil)
+	store := NewCanonicalInitiationStore(daemon.journal, nil)
 	server := httptest.NewServer((&fakeGitea{}).handler(t))
 	defer server.Close()
 	original, _, _, credential, _ := newConformanceInitiator(t, server)
@@ -226,7 +180,7 @@ func TestCanonicalInitiationKeepsThePreparedOperationWithoutPlaintextSecrets(t *
 	// operation: the journaled 5401 is published, not a second one.
 	daemon.close()
 	daemon = startJournalDaemon(t, dir)
-	resumed := NewCanonicalInitiationStore(daemon.journal, nil, nil)
+	resumed := NewCanonicalInitiationStore(daemon.journal, nil)
 	result, err := restartInitiator(t, original, resumed, relay).StartHiveCIBuild(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, req.BuildID, result.BuildID)
@@ -236,73 +190,6 @@ func TestCanonicalInitiationKeepsThePreparedOperationWithoutPlaintextSecrets(t *
 	require.NoError(t, err)
 	require.Equal(t, StageEvidencePublished, final.Stage)
 	require.Empty(t, final.PublisherNsec, "the per-run key is dropped once the job is dispatched")
-}
-
-// The SQL index is derived: it may fail or be lost mid-initiation and the
-// initiation still completes from the journal; the index is rebuilt from it.
-func TestCanonicalInitiationSurvivesIndexFailureAndLoss(t *testing.T) {
-	ctx := context.Background()
-	daemon := startJournalDaemon(t, t.TempDir())
-	index := newMemoryInitiationIndex()
-	store := NewCanonicalInitiationStore(daemon.journal, index, nil)
-	server := httptest.NewServer((&fakeGitea{}).handler(t))
-	defer server.Close()
-	original, _, _, credential, _ := newConformanceInitiator(t, server)
-	req := arcanaStartRequest(credential)
-	relay := newInitiationRelay(t)
-
-	index.fail = true
-	_, err := restartInitiator(t, original, &crashInitiationStore{store, StageRequestPublished, false}, relay).StartHiveCIBuild(ctx, req)
-	require.ErrorIs(t, err, errSimulatedCrash)
-	index.fail = false
-	index.wipe()
-
-	result, err := restartInitiator(t, original, store, relay).StartHiveCIBuild(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, req.BuildID, result.BuildID)
-	relay.assertOneBuild(t)
-	require.NoError(t, store.RebuildIndex(ctx))
-	index.mu.Lock()
-	indexed, ok := index.rows[req.SourceEventID]
-	index.mu.Unlock()
-	require.True(t, ok, "the index is rebuilt from the journal")
-	require.Equal(t, StageEvidencePublished, indexed.Stage)
-}
-
-// An initiation that only the SQL index knows (claimed before the journal was
-// canonical) is journaled once, keeping its stage and prepared operation, and
-// then resumes from the journal.
-func TestCanonicalInitiationBackfillsInFlightSQLInitiations(t *testing.T) {
-	ctx := context.Background()
-	daemon := startJournalDaemon(t, t.TempDir())
-	index := newMemoryInitiationIndex()
-	server := httptest.NewServer((&fakeGitea{}).handler(t))
-	defer server.Close()
-	original, _, _, credential, _ := newConformanceInitiator(t, server)
-	req := arcanaStartRequest(credential)
-	relay := newInitiationRelay(t)
-
-	// The SQL-era store claims and prepares, then the process dies.
-	legacy := NewMemoryInitiationStore()
-	_, err := restartInitiator(t, original, &crashInitiationStore{legacy, StageRequestReady, false}, relay).StartHiveCIBuild(ctx, req)
-	require.ErrorIs(t, err, errSimulatedCrash)
-	rec, err := legacy.Get(ctx, req.SourceEventID)
-	require.NoError(t, err)
-	require.NoError(t, index.Upsert(ctx, rec))
-
-	store := NewCanonicalInitiationStore(daemon.journal, index, nil)
-	require.NoError(t, store.BackfillFromIndex(ctx, daemon.outbox))
-	journaled, err := store.Get(ctx, req.SourceEventID)
-	require.NoError(t, err)
-	require.Equal(t, StageRequestReady, journaled.Stage)
-	require.Equal(t, rec.PublisherNsec, journaled.PublisherNsec)
-	require.Equal(t, rec.RunEvent.ID, journaled.RunEvent.ID)
-	require.NoError(t, store.BackfillFromIndex(ctx, daemon.outbox), "the backfill runs once")
-
-	result, err := restartInitiator(t, original, store, relay).StartHiveCIBuild(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, rec.RunEvent.ID.Hex(), result.CIRunID)
-	relay.assertOneBuild(t)
 }
 
 func tagged(ev nostr.Event, key string) string {

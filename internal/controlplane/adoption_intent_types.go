@@ -19,6 +19,29 @@ type adoptionImportEventRequest struct {
 	Selections []adoptionEventSelection `json:"selections,omitempty"`
 	ImportAll  bool                     `json:"import_all,omitempty"`
 	OrgID      string                   `json:"org_id,omitempty"`
+	// NonSecretEnvKeys are environment keys the operator declares are not
+	// secrets (adoption keeps them instead of refusing the container).
+	NonSecretEnvKeys []string `json:"non_secret_env_keys,omitempty"`
+}
+
+// maxNonSecretEnvKeys bounds non_secret_env_keys.
+const maxNonSecretEnvKeys = 256
+
+func validateNonSecretEnvKeys(keys []string) error {
+	if len(keys) > maxNonSecretEnvKeys {
+		return fmt.Errorf("non_secret_env_keys lists %d keys; at most %d", len(keys), maxNonSecretEnvKeys)
+	}
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if strings.TrimSpace(key) != key || key == "" || len(key) > 256 || strings.ContainsAny(key, "=\x00\r\n") {
+			return fmt.Errorf("non_secret_env_keys entries must be environment variable names")
+		}
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("non_secret_env_keys lists %q twice", key)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
 }
 
 type adoptionEventTarget struct {

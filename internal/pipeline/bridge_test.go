@@ -496,7 +496,7 @@ func TestBuildRequestReplayPreservesCanonical5401CorrelationFor5402(t *testing.T
 		Starter:  starter,
 		Registry: requestRegistry, Builds: builds, Services: services,
 		Secrets: replayBuildCredential{secret: &domain.ServiceSecret{
-			ID: credentialID, ServiceID: serviceID, Name: "git-repository",
+			ID: credentialID, ServiceID: serviceID, Name: "git-repository", EncryptionMethod: domain.EncryptionStoreRef,
 		}},
 		RBAC: auth.NewRBAC(replayBuildMembers{}),
 	})

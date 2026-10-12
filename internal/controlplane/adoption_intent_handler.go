@@ -93,10 +93,13 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	if request.OrgID != "" && request.OrgID != intent.OrgID.String() {
 		return fmt.Errorf("adoption org_id does not match intent organization")
 	}
+	if err := validateNonSecretEnvKeys(request.NonSecretEnvKeys); err != nil {
+		return err
+	}
 	// The intent id keys the resources minted per request, so re-processing
 	// this intent after a crash or a failed publish resumes onto the same
 	// canonical coordinates.
-	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: request.ImportAll, OrgID: intent.OrgID, RequestID: intent.IntentID})
+	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: request.ImportAll, OrgID: intent.OrgID, RequestID: intent.IntentID, NonSecretEnvKeys: request.NonSecretEnvKeys})
 	if results != nil {
 		intent.Result = map[string]any{"imports": dto.AdoptionImportResultResponsesFromService(results)}
 		intent.StatusData = adoptionImportStatusData(dto.AdoptionImportResultResponsesFromService(results))

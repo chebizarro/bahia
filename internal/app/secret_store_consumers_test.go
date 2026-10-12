@@ -21,28 +21,42 @@ type markerSecretRepo struct {
 	secret domain.ServiceSecret
 }
 
-func (r markerSecretRepo) GetByID(context.Context, uuid.UUID) (*domain.ServiceSecret, error) {
+func (r *markerSecretRepo) GetByID(context.Context, uuid.UUID) (*domain.ServiceSecret, error) {
 	v := r.secret
 	return &v, nil
 }
 
-// A VM plane secret whose value lives in the secret store is refused by name;
-// the plane still reads PostgreSQL until bahia-cd0wr.4.7.
-func TestVirtualizationPlaneSecretRefusesStoreBackedSecret(t *testing.T) {
-	org, secretID := uuid.New(), uuid.New()
+// A VM plane secret is admitted when its value lives in the secret store and
+// refused by name when it still holds a value sealed with the retired
+// service key.
+func TestVirtualizationPlaneSecretAdmitsStoreBackedAndRefusesLegacy(t *testing.T) {
+	org, secretID, serviceID := uuid.New(), uuid.New(), uuid.New()
 	key := strings.Repeat("ab", 32)
+	secrets := &markerSecretRepo{secret: domain.ServiceSecret{ID: secretID, ServiceID: serviceID, Name: "PLANE_TOKEN", EncryptionMethod: domain.EncryptionStoreRef}}
 	policy := &virtualizationPolicy{
 		config:   config.VirtualizationConfig{Hosts: []config.VirtualizationHostPolicy{{OrgID: org, PlaneSecretRefs: []uuid.UUID{secretID}}}},
 		rbac:     auth.NewRBAC(vmAppMembers{org}),
-		secrets:  markerSecretRepo{secret: domain.ServiceSecret{ID: secretID, ServiceID: uuid.New(), Name: "PLANE_TOKEN", EncryptionMethod: domain.EncryptionStoreRef}},
-		services: vmNoServices{},
+		secrets:  secrets,
+		services: vmOneService{svc: domain.Service{ID: serviceID, OrgID: org}},
 	}
-	err := policy.AuthorizePlaneSecret(context.Background(), &auth.Principal{Subject: key, PubKey: key, Method: auth.MethodNIP98}, org, domain.SecretRef{ID: secretID})
-	require.True(t, errors.Is(err, domain.ErrSecretInStore), "err = %v", err)
+	principal := &auth.Principal{Subject: key, PubKey: key, Method: auth.MethodNIP98}
+	require.NoError(t, policy.AuthorizePlaneSecret(context.Background(), principal, org, domain.SecretRef{ID: secretID}))
+
+	secrets.secret.EncryptionMethod = domain.EncryptionMethod("aes256gcm")
+	err := policy.AuthorizePlaneSecret(context.Background(), principal, org, domain.SecretRef{ID: secretID})
+	require.True(t, errors.Is(err, domain.ErrLegacySecretValue), "err = %v", err)
 	require.ErrorContains(t, err, "PLANE_TOKEN")
 }
 
-type vmNoServices struct{ repository.ServiceRepository }
+type vmOneService struct {
+	repository.ServiceRepository
+	svc domain.Service
+}
+
+func (s vmOneService) GetByID(context.Context, uuid.UUID) (*domain.Service, error) {
+	v := s.svc
+	return &v, nil
+}
 
 type storeBackedList []domain.SecretRef
 

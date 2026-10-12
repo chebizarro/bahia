@@ -22,12 +22,27 @@ import (
 
 type mapResolver map[string]string
 
-func (m mapResolver) ResolveSecret(_ context.Context, ref string) (string, error) {
-	value, ok := m[ref]
-	if !ok {
-		return "", fmt.Errorf("missing secret %s", ref)
+func (m mapResolver) ResolveSecrets(ctx context.Context, refs []string) ([]string, time.Time, error) {
+	return resolveEach(ctx, refs, func(_ context.Context, ref string) (string, error) {
+		value, ok := m[ref]
+		if !ok {
+			return "", fmt.Errorf("missing secret %s", ref)
+		}
+		return value, nil
+	})
+}
+
+// resolveEach resolves refs one by one under a one-minute lease.
+func resolveEach(ctx context.Context, refs []string, one func(context.Context, string) (string, error)) ([]string, time.Time, error) {
+	values := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		value, err := one(ctx, ref)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		values = append(values, value)
 	}
-	return value, nil
+	return values, time.Now().Add(time.Minute), nil
 }
 
 func TestProductionFactoryRejectsFilesystemMockButDirectTestsCanUseIt(t *testing.T) {
@@ -165,7 +180,7 @@ func TestBuildBackendWithSecretsReturnsClearErrors(t *testing.T) {
 			name: "missing auth ref",
 			cfg:  config.PackageBackendConfig{Type: "nexus", BaseURL: "https://nexus.example.com", AuthSecretRef: "missing"},
 			res:  mapResolver{},
-			want: `resolve auth_secret_ref`,
+			want: `resolve package backend secret refs`,
 		},
 		{
 			name: "invalid auth payload",

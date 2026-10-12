@@ -188,8 +188,10 @@ func (h *EncryptedBuildHandlers) requestBuild(ctx context.Context, event *nostr.
 	if secret == nil || secret.ServiceID != payload.ServiceID {
 		return nil, fmt.Errorf("repository credential reference must belong to the selected service")
 	}
-	if secret.EncryptionMethod == domain.EncryptionStoreRef {
-		return nil, domain.SecretInStoreError(secret.ID, secret.Name)
+	if secret.EncryptionMethod != domain.EncryptionStoreRef {
+		// The value was sealed with the retired service key; the initiator
+		// would refuse it anyway, before any mirror call.
+		return nil, domain.LegacySecretValueError(secret.ID, secret.Name)
 	}
 
 	result, err := h.starter.StartHiveCIBuild(ctx, HiveCIBuildStartRequest{

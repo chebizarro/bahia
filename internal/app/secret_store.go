@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
@@ -17,6 +20,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -229,4 +233,161 @@ func (r *secretIndexRunner) healthCheck() HealthCheck {
 		check.Status, check.Message = HealthStatusWarn, "waiting for the projector warm start to index store-backed secrets"
 	}
 	return check
+}
+
+// heldSecret is a daemon credential that configuration names by secret id
+// (edge_routing.api_token_ref, nostr.relay_administration
+// .administrator_private_key_ref). It is resolved through the secret store on
+// first use rather than at startup, so the daemon starts while the store or
+// the canonical record is not yet available, and the feature fails closed
+// until it is. The text is held only until the store's delivery lease ends;
+// the next use resolves again (one round trip with expected_version), which
+// notices a revoked or expired credential. Every use also compares the
+// canonical reference (a local read): a re-pointed secret resolves the new
+// version, and a deleted secret or one that cannot be read drops the held
+// text. Any failure drops it. Concurrent uses share one resolve, without
+// holding the lock across it.
+type heldSecret struct {
+	resolver *secretstore.TextResolver
+	ref      string
+	reason   string
+	now      func() time.Time
+
+	mu         sync.Mutex
+	pin        domain.SecretCredentialRef
+	text       string
+	validUntil time.Time
+	flight     *heldFlight
+}
+
+type heldFlight struct {
+	done chan struct{}
+	text string
+	err  error
+}
+
+func newHeldSecret(resolver *secretstore.TextResolver, ref, reason string) *heldSecret {
+	return &heldSecret{resolver: resolver, ref: ref, reason: reason, now: time.Now}
+}
+
+// dropLocked forgets the held text (Go strings cannot be overwritten; the
+// reference is dropped so nothing serves it).
+func (h *heldSecret) dropLocked() {
+	h.pin, h.text, h.validUntil = domain.SecretCredentialRef{}, "", time.Time{}
+}
+
+// get returns the credential text.
+func (h *heldSecret) get(ctx context.Context) (string, error) {
+	current, refErr := h.resolver.CurrentReference(ctx, h.ref)
+	h.mu.Lock()
+	if refErr != nil {
+		h.dropLocked()
+		h.mu.Unlock()
+		return "", fmt.Errorf("%s: %w", h.reason, refErr)
+	}
+	if h.text != "" && current == h.pin && h.now().Before(h.validUntil) {
+		text := h.text
+		h.mu.Unlock()
+		return text, nil
+	}
+	flight := h.flight
+	leader := flight == nil
+	if leader {
+		flight = &heldFlight{done: make(chan struct{})}
+		h.flight = flight
+	}
+	h.mu.Unlock()
+	if !leader {
+		select {
+		case <-flight.done:
+			return flight.text, flight.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	held, err := h.resolver.ResolveHeld(ctx, []string{h.ref}, domain.SecretResolveOptions{Actor: "bahia", Reason: h.reason})
+	if err == nil && strings.TrimSpace(held.Values[0]) == "" {
+		err = errors.New("the secret is empty")
+	}
+	h.mu.Lock()
+	if err != nil {
+		h.dropLocked()
+		flight.err = fmt.Errorf("%s: %w", h.reason, err)
+	} else {
+		h.pin, h.text, h.validUntil = held.Pins[0], held.Values[0], held.ValidUntil
+		flight.text = held.Values[0]
+	}
+	h.flight = nil
+	h.mu.Unlock()
+	close(flight.done)
+	return flight.text, flight.err
+}
+
+// heldRelayAdmin is the NIP-86 relay administration client, signing with
+// the administrator key nostr.relay_administration
+// .administrator_private_key_ref names. The client is built on first use
+// and rebuilt when the key is re-pointed; until the key resolves every call
+// fails closed.
+type heldRelayAdmin struct {
+	key     *heldSecret
+	targets []relayadmin.Target
+
+	mu      sync.Mutex
+	keyText string
+	client  *relayadmin.Client
+}
+
+func newHeldRelayAdmin(secrets *secretstore.TextResolver, ref string, targets []relayadmin.Target) *heldRelayAdmin {
+	return &heldRelayAdmin{key: newHeldSecret(secrets, ref, "relay administrator key (nostr.relay_administration.administrator_private_key_ref)"), targets: targets}
+}
+
+func (h *heldRelayAdmin) current(ctx context.Context) (*relayadmin.Client, error) {
+	text, err := h.key.get(ctx)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err != nil {
+		// The client holds a signer over the key: drop it with the key.
+		h.keyText, h.client = "", nil
+		return nil, err
+	}
+	if h.client != nil && h.keyText == text {
+		return h.client, nil
+	}
+	signer, err := nostrutil.NewLocalKeyer(text)
+	if err != nil {
+		return nil, fmt.Errorf("relay administrator private key is invalid")
+	}
+	client, err := relayadmin.NewClient(relayadmin.Config{Enabled: true, Signer: signer, Targets: h.targets, HTTPClient: &http.Client{Timeout: 30 * time.Second}})
+	if err != nil {
+		return nil, fmt.Errorf("relay administration client: %w", err)
+	}
+	h.keyText, h.client = text, client
+	return client, nil
+}
+
+// Call implements controlplane.RelayAdminCaller.
+func (h *heldRelayAdmin) Call(ctx context.Context, targetRef, method string, params []any) (*relayadmin.Response, error) {
+	client, err := h.current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Call(ctx, targetRef, method, params)
+}
+
+// SupportedMethods implements controlplane.RelayAdminCaller.
+func (h *heldRelayAdmin) SupportedMethods(ctx context.Context, targetRef string) ([]string, error) {
+	client, err := h.current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.SupportedMethods(ctx, targetRef)
+}
+
+// SetIntentAuthors implements controlplane.IntentAuthorsAdmin.
+func (h *heldRelayAdmin) SetIntentAuthors(ctx context.Context, targetRef string, pubkeys []string) error {
+	client, err := h.current(ctx)
+	if err != nil {
+		return err
+	}
+	return client.SetIntentAuthors(ctx, targetRef, pubkeys)
 }

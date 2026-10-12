@@ -452,7 +452,7 @@ func TestMCPConfidentialSecretMetadataStoreReadsMatchRepositoryFixture(t *testin
 	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: uuid.New(), Name: "api-token", Version: 2, CreatedBy: "operator", CreatedAt: created, UpdatedAt: created}
 	repo := newTestSecretRepo()
 	repo.secrets[secret.ID] = &secret
-	repositoryServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{SecretsRepo: repo})
+	repositoryServer := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{Secrets: repo})
 	require.NoError(t, publisher.PublishSecretRef(ctx, secret.ToRef()))
 	storeServer := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{StateStore: store, ServicePubkey: sk.Public().Hex(), ConfidentialReader: encryptor})
 	args := map[string]any{"service_id": secret.ServiceID.String()}

@@ -129,10 +129,40 @@ type SecretStore interface {
 	// It fails with ErrVersionMismatch unless the delivered value is exactly
 	// ref.Version. The caller owns the Value and must Zeroize it.
 	Resolve(ctx context.Context, ref domain.SecretCredentialRef, scope Scope) (*Value, error)
+	// ResolveAll resolves several references for one operation, all or
+	// nothing: on any failure it zeroizes every value already resolved and
+	// returns a *BatchError naming the failing request. Its round trips are
+	// paced as one declared outbound operation instead of being refused by
+	// the burst budget. The caller owns the Values and must Zeroize them.
+	ResolveAll(ctx context.Context, reqs []Request) ([]*Value, error)
 	// Inspect returns metadata for one credential of scope.
 	Inspect(ctx context.Context, credentialID string, scope Scope) (Metadata, error)
 	// Health performs an authenticated, payload-free round trip to the store.
 	Health(ctx context.Context) error
+}
+
+// Request is one reference to resolve and the scope it must belong to.
+type Request struct {
+	Ref   domain.SecretCredentialRef
+	Scope Scope
+}
+
+// BatchError is the failure of request Index of a ResolveAll.
+type BatchError struct {
+	Index int
+	Err   error
+}
+
+func (e *BatchError) Error() string { return fmt.Sprintf("request %d: %v", e.Index, e.Err) }
+func (e *BatchError) Unwrap() error { return e.Err }
+
+// ZeroizeAll zeroizes every non-nil value.
+func ZeroizeAll(values []*Value) {
+	for _, v := range values {
+		if v != nil {
+			v.Zeroize()
+		}
+	}
 }
 
 // ValidateRef checks the backend-independent shape of a reference.

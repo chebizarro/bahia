@@ -380,10 +380,12 @@ free-form failure text is not relay content.
 
 `t=secret-registry`, `d=<secret-uuid>`, content OCK ciphertext of
 `{"id","service_id","environment_id"?,"name","version","created_by","created_at","updated_at","deleted"}`
-plus `credential_ref` `{"store","credential_id","version"}` for a value held
-by the secret store, or `encryption_method` for a value Bahia sealed itself.
-No record ever carries a value. `version` is the record's revision;
-`credential_ref.version` pins the credential version.
+plus `credential_ref` `{"store","credential_id","version"}` naming the value
+in the secret store. A record with `encryption_method` and no
+`credential_ref` names a legacy value Bahia once sealed itself; consumers
+refuse it until the secret is re-pointed. No record ever carries a value.
+`version` is the record's revision; `credential_ref.version` pins the
+credential version.
 
 ### Config Fabric status
 

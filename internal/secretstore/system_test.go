@@ -87,6 +87,21 @@ func (s *labelStore) Inspect(context.Context, string, Scope) (Metadata, error) {
 }
 func (s *labelStore) Health(context.Context) error { return nil }
 
+func (s *labelStore) ResolveAll(ctx context.Context, reqs []Request) ([]*Value, error) {
+	values := make([]*Value, 0, len(reqs))
+	for _, req := range reqs {
+		value, err := s.Resolve(ctx, req.Ref, req.Scope)
+		if err != nil {
+			for _, v := range values {
+				v.Zeroize()
+			}
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
 func credRef(c byte) domain.SecretCredentialRef {
 	return domain.SecretCredentialRef{Store: BackendSignet, CredentialID: "cred_" + strings.Repeat(string(c), 64), Version: 1}
 }

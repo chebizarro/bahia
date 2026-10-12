@@ -58,6 +58,21 @@ func (s *systemKeyStore) Inspect(context.Context, string, secretstore.Scope) (se
 
 func (s *systemKeyStore) Health(context.Context) error { return nil }
 
+func (s *systemKeyStore) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
+	values := make([]*secretstore.Value, 0, len(reqs))
+	for _, req := range reqs {
+		value, err := s.Resolve(ctx, req.Ref, req.Scope)
+		if err != nil {
+			for _, v := range values {
+				v.Zeroize()
+			}
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
 func credentialID(c byte) string { return "cred_" + strings.Repeat(string(c), 64) }
 
 // testTranscriptKeys is a loaded assistant-transcript key provider.

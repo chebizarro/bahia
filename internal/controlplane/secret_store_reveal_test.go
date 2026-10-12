@@ -45,6 +45,19 @@ func (s *resolvingSecretStore) Resolve(_ context.Context, ref domain.SecretCrede
 	return v, nil
 }
 
+func (s *resolvingSecretStore) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
+	var out []*secretstore.Value
+	for i, r := range reqs {
+		v, err := s.Resolve(ctx, r.Ref, r.Scope)
+		if err != nil {
+			secretstore.ZeroizeAll(out)
+			return nil, &secretstore.BatchError{Index: i, Err: err}
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 func (s *resolvingSecretStore) Inspect(context.Context, string, secretstore.Scope) (secretstore.Metadata, error) {
 	return secretstore.Metadata{}, secretstore.ErrNotFound
 }
@@ -213,4 +226,26 @@ func TestRevealSecretUsesCanonicalOrgWhenPostgresDiffers(t *testing.T) {
 			t.Fatalf("store-only reveal = %+v / %+v", response.Result, response.Error)
 		}
 	})
+}
+
+// A secret whose canonical record has no credential reference still holds a
+// value Bahia sealed with the retired service key: reveal refuses it by name
+// and decrypts nothing.
+func TestRevealSecretRefusesLegacySealedValue(t *testing.T) {
+	serviceID, orgID, secretID := uuid.New(), uuid.New(), uuid.New()
+	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{
+		secretID: {ID: secretID, ServiceID: serviceID, Name: "OLD_TOKEN", Version: 3, EncryptionMethod: domain.EncryptionMethod("aes256gcm")},
+	}, serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
+	store := &resolvingSecretStore{value: "never", lease: time.Minute}
+	services, rbac := encryptedAuthDeps(t, serviceID, orgID, domain.RoleAdmin)
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretStore: store, Services: services, RBAC: rbac, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+	transport.HandleEvent(context.Background(), uniqueRevealRequest(t, serviceID, secretID))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error == nil || !strings.Contains(response.Error.Message, "OLD_TOKEN") || !strings.Contains(response.Error.Message, "rotate") {
+		t.Fatalf("reveal of a legacy secret = %+v", response)
+	}
+	if len(store.refs) != 0 {
+		t.Fatal("the store was asked for a legacy secret")
+	}
 }

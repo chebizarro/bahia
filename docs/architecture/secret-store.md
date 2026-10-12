@@ -7,8 +7,10 @@ short store-issued lease, holds it in memory and zeroizes it. A leaked
 service key therefore exposes no secret value, and losing PostgreSQL loses
 none either.
 
-Code: `internal/secretstore` (the seam), `internal/adapters/signet/credential_store.go`
-(the Signet implementation), `internal/app/secret_store.go` (wiring),
+Code: `internal/secretstore` (the seam, and `Resolver`/`TextResolver` that
+consumers use), `internal/adapters/signet/credential_store.go`
+(the Signet implementation), `internal/app/secret_store.go` (wiring and
+process-held configuration credentials),
 `internal/adapters/nostr/secret_canonical_view.go` (canonical reads),
 `internal/controlplane/secret_intent_handler.go` (intents). Operator
 procedures: [`docs/runbooks/signet-secret-store.md`](../runbooks/signet-secret-store.md).
@@ -94,7 +96,7 @@ type SecretStore interface {
 | `ErrUnavailable` | Signet did not answer, no relay accepted the request, rate limiting or an internal Signet failure |
 | `ErrInvalidRef` | malformed reference or another backend |
 | `ErrNotFound`, `ErrRevoked`, `ErrExpired` | the credential's own state |
-| `ErrDenied` | Signet refused this requester (no delivery grant, not the owner, deny-listed, not a provisioner), or the credential is outside the caller's scope |
+| `ErrDenied` | Signet refused this requester (no delivery grant, not the owner, deny-listed), or the credential is outside the caller's scope |
 | `ErrVersionMismatch` | the active version is not the pinned one |
 
 ### Use-time values and process-held keys
@@ -210,34 +212,49 @@ value and gets it back; no state is read through it.
   check reports it down and reconnecting meanwhile.
 - Only the method and Signet's stable reason code (`error.data`) reach
   callers; Signet's free-text message does not.
-- `credential/deliver` returns `{credential_id, agent_id, payload_b64,
-  lease_id, lease_expires_at}`; Signet mints and burns a 60-second lease in
-  the same audited transaction.
-- Every request is one gift wrap on the process-wide outbound `priority`
-  lane ([outbound admission](../runbooks/nostr-outbound-admission.md)): a
-  `Resolve` costs three, an `Inspect` or `Health` one, plus the reply
-  subscription's NIP-42 AUTH. Admission fails fast; an exhausted budget is
-  `ErrUnavailable` and the request is not queued or retried.
+- `credential/deliver` returns `{credential_id, agent_id, version,
+  payload_b64, lease_id, lease_expires_at}` and accepts `expected_version`;
+  Signet mints and burns a 60-second lease in the same audited transaction.
+- Signet refuses management requests whose timestamp is more than 120 s
+  from its clock (`request_time_skew`, `ErrUnavailable`).
+- Every request is one gift wrap ([outbound
+  admission](../runbooks/nostr-outbound-admission.md)): an `Inspect` or
+  `Health` costs one, a `Resolve` one to three (below), plus the reply
+  subscription's NIP-42 AUTH. A lone `Resolve`, `Inspect` or `Health` goes
+  on the process-wide `priority` lane and fails fast: an exhausted budget is
+  `ErrUnavailable` and the request is not queued or retried. `ResolveAll`
+  declares one bounded operation (four gift wraps per request at most: a
+  one-round-trip delivery without a version, then the bracket) and
+  is paced on the `bulk` lane instead; its requests are sent one at a time,
+  each after the previous one's relay OKs.
 
 ### Pinning a version
 
-`Resolve` first inspects the credential (owner, tenant label, status,
-version), then calls `credential/deliver` with `expected_version`:
+`Resolve` calls `credential/deliver` with `expected_version`. Signet
+(0.7.0+) reports the delivered `version` and refuses a mismatch with
+`version_mismatch`, which settles the pin in that reply. The tenant must be
+proven before anything is delivered, and the deliver reply carries no
+label, so:
 
-- A Signet that reports the delivered `version` (nostrc-pvj7b) settles the
-  pin in that reply and refuses a mismatch with `version_mismatch`: two round
-  trips.
-- A Signet that does not (it ignores `expected_version`) is followed by a
-  second inspect: rotation increments the version atomically and never
-  reuses a number, so the same active version before and after proves the
-  delivered value is the pinned one. Three round trips.
+- The first resolve of a credential inspects it first (owner, tenant label,
+  status, version): two round trips. The store then keeps the label of
+  every credential an inspect admitted. A credential id is Signet's digest
+  of (owner, type, label), so an id's label never changes.
+- Every later resolve of that credential in a scope its label is in is one
+  `credential/deliver`: one round trip. A scope the cached label is not in
+  takes the full path and is refused before delivery.
+- A Signet that does not report the version (it ignores
+  `expected_version`) is followed by a second inspect: rotation increments
+  the version atomically and never reuses a number, so the same active
+  version before and after proves the delivered value is the pinned one.
+  Three round trips. A one-round-trip delivery that comes back without a
+  version is discarded and the resolve repeats on this path.
 
 The store detects which by the reply; nothing is configured. Any mismatch
-zeroizes the payload and returns `ErrVersionMismatch`. Likewise a Signet
-that echoes the request id in its refusal of an unauthorized requester
-(nostrc-edjyc) yields an immediate `ErrDenied` instead of a timeout, and a
-Signet that authorizes delivery by the grant alone (nostrc-v13e0) needs no
-change here: the requester then no longer has to be a provisioner. A Signet `restore-db` can bring an older version number
+zeroizes the payload and returns `ErrVersionMismatch`. Signet echoes the
+request id in its refusals, so an unauthorized requester gets an immediate
+`ErrDenied`; it answers an ungranted and a missing credential alike
+(`no_capability`). A Signet `restore-db` can bring an older version number
 back with a different future; after a restore, re-check references.
 
 ## Threat model
@@ -245,15 +262,15 @@ back with a different future; after a restore, re-check references.
 | Event | Exposure | Bahia's response |
 |---|---|---|
 | Service key leaks | can sign as the service and decrypt anything NIP-44'd to it | no secret value: the requester is a different key and records hold references only |
-| Requester key leaks | can request delivery of the owner's credentials (and, while Signet requires delivery requesters to be provisioners, Signet management) | revoke the delivery grant and the provisioner grant; Signet's audit names the requester on every delivery; the key file must be a regular owner-only file |
+| Requester key leaks | can inspect, list and request delivery of the owner's credentials, nothing else (it holds only the owner's exact delivery grant) | replace the delivery grant; Signet's audit names the requester on every delivery; the key file must be a regular owner-only file |
 | An org's operator references another tenant's credential (ids are computable) | — | refused at intent time and on every resolve and reveal: the credential's label is outside `<org-id>/<service-id>/` |
 | An org's operator references a system credential | — | refused the same way: tenant scopes refuse the `bahia-system/` namespace |
 | Daemon memory (system keys) | the assistant-transcript and confidential-dedupe keys for the life of the process | the keyring holds the only copies and lends them through callbacks (`Keyring.Use`); consumers never receive key bytes: the dedupe HMAC and the transcript AEAD are built from the keyring's buffer inside the callback. The XChaCha20-Poly1305 implementation keeps its own copy of the key for the life of each cipher, which Go cannot zeroize. Keyring copies are zeroized at shutdown. A leaked transcript key exposes assistant history sealed under it, so rotate it (new key id) |
-| PostgreSQL leaks | nothing for store-backed secrets | legacy sealed values are deleted when a secret is re-pointed |
+| PostgreSQL leaks | nothing for store-backed secrets; legacy sealed values not yet re-pointed (already compromised) | legacy sealed values are scrubbed when a secret is re-pointed and never decrypted meanwhile |
 | Relay readers | gift-wrap sizes and timing; OCK ciphertext records | record names and service bindings are plaintext tags (tracked separately) |
 | Signet unavailable | — | fail closed: intents are rejected with the reason, reveals refused, consumers stop; the `secret_store` health check warns; nothing falls back to PostgreSQL or a cached value |
 | Forged reply | — | ignored unless sealed by the configured Signet key; the call fails closed at its deadline |
-| Daemon memory | the resolved buffer | zeroized after use, as are the byte copies Bahia decodes the reply from. The NIP-44 plaintexts of the reply are Go strings and cannot be overwritten; they stay until garbage collection. Reveal copies the value into a Go string for its JSON response, which likewise cannot be zeroized. None of these is logged or persisted. |
+| Daemon memory | the resolved buffer | zeroized after use, as are the byte copies Bahia decodes the reply from. The NIP-44 plaintexts of the reply are Go strings and cannot be overwritten; they stay until garbage collection. Reveal, runtime environments, redaction and text consumers (`TextResolver`) copy the value into Go strings, which likewise cannot be zeroized; process-held configuration credentials stay until their lease ends or they fail. None of these is logged or persisted. |
 
 Signet's own controls (SQLCipher store, per-agent envelope keys, audit chain,
 backup/restore) are in nostrc `signet/docs/THREAT_MODEL.md`.
@@ -269,9 +286,9 @@ backup/restore) are in nostrc `signet/docs/THREAT_MODEL.md`.
 3. `signetctl revoke-credential <id>` makes every resolve fail with
    `ErrRevoked`; Signet expiry gives `ErrExpired`.
 
-Rotating the requester key: create the new key file, grant it (provisioner
-and the owner's delivery grant), restart or reload the daemon with the new
-`client_key_file`, then revoke the old pubkey.
+Rotating the requester key: create the new key file, name it in the owner's
+delivery grant (which withdraws the old key's), then restart or reload the
+daemon with the new `client_key_file`.
 
 ## Migration
 
@@ -287,54 +304,111 @@ migrated as-is and no tool reads old values to import them. For each secret:
    every retained legacy ciphertext of that id, then publishes the
    store-backed record.
 
-Until bahia-cd0wr.4.7, deploys and other PostgreSQL consumers of a re-pointed
-secret fail with `ErrSecretInStore`; plan re-pointing with that migration.
-
-With `secret_store.backend` set, intents carrying `encrypted_value` or
-`value` are refused; without it the legacy path keeps working until it is
-removed.
+Bahia never decrypts a legacy value. A secret whose canonical record has no
+`credential_ref`, or whose PostgreSQL index row is not a `store-ref` marker,
+is refused by every consumer with `domain.ErrLegacySecretValue`, naming the
+secret and the remedy above. Secret intents never carry a value: an intent
+with `encrypted_value` or `value` is refused.
 
 ## Consumers
 
-- Reveal (`services/secrets-reveal`) takes the org from the service's
-  canonical record, checks the requester's read permission in that org,
-  resolves store-backed secrets through the seam in that org and service
-  scope, and zeroizes Bahia's buffer once the response is built. It needs no
-  PostgreSQL service row.
-- Every other consumer still reads values from PostgreSQL and moves to the
-  seam in bahia-cd0wr.4.7: runtime injection (`runtime_lifecycle.go`), the
-  `secrets.Resolver` users (package registries, LLM provisioning, Gitea/Hive-CI
-  build credentials, relay administration), VM bootstrap and VM plane
-  secrets, build requests and run-log redaction. With PostgreSQL configured,
-  a store-backed secret keeps a value-less index row
-  (`encryption_method = store-ref`; every retained legacy ciphertext of that
-  id scrubbed, access audit rows kept). Those consumers refuse it with
-  `domain.ErrSecretInStore`, naming the secret and bahia-cd0wr.4.7, instead
-  of deploying without it, and redaction refuses the logs rather than return
-  them unredacted. Markers are written before the canonical publish and, after
-  warm start, for every store-backed record the local store holds.
-- **Run logs.** Run-log retrieval redacts every value of the secrets a
-  deployment references before returning the logs. A store-backed secret's
-  value is not in PostgreSQL, so redaction cannot know what to remove; the
-  logs of a run that references a re-pointed or store-backed secret are
-  refused (`ErrSecretInStore`) rather than returned unredacted, until
-  redaction resolves values through the seam in bahia-cd0wr.4.7.
-- **Name collisions.** PostgreSQL consumers pick a secret by service,
-  environment and name. A store-backed secret whose name another index row
-  already holds (a different secret id) would let them serve that row. A
-  reference intent that would collide is refused with the remedy, changing
-  nothing. A canonical store-backed record found colliding by the warm-start
-  index pass blocks the other row (it becomes a scrubbed store-ref marker, so
-  nothing serves it). The `secret_store_index` health check fails readiness
-  with the secret's name until one of the two secrets is deleted, and the pass
-  retries with backoff (1s to 5m). The check also fails, with the reason,
-  while any store-backed secret cannot be indexed.
-- In bahia-cd0wr.4.7 these consumers resolve the canonical record's
-  `credential_ref` per operation; the HKDF store, `service_secret_data_keys`
-  and the `encrypted_value` intent path are then deleted.
+Consumers resolve values through `secretstore.Resolver` at use time:
+
+1. the secret's canonical record (`CanonicalSecretView`, the local event
+   store, no PostgreSQL) supplies `credential_ref`;
+2. the service's canonical org and the secret's service form the scope;
+3. the store delivers the pinned version under its lease;
+4. the consumer uses the value and zeroizes the store's buffer.
+
+`Resolve` serves one secret; `ResolveAll` serves the secrets of one
+operation, all or nothing, as one declared outbound operation paced on the
+`bulk` lane (it waits behind another active bulk operation for up to
+`request_timeout`, then fails with `ErrUnavailable`). Without a store every
+resolve fails with `secretstore.ErrNotConfigured`; nothing falls back.
+
+| Consumer | Resolves | Without a resolvable value |
+|---|---|---|
+| Direct runtime deploys (`runtime_lifecycle.go`) | the service's effective secrets (listed from the PostgreSQL index), one batch per apply | the deploy fails, naming the secret; nothing is injected |
+| Runtime action error scrubbing | the same set | error details are withheld |
+| VM bootstrap (`vm_bootstrap.go`) | the bindings, one batch; the guest receives the store's buffer | delivery fails; admission refuses legacy secrets |
+| VM plane secrets (`virtualization_policy.go`) | nothing (admission check) | legacy secrets are refused |
+| Hive-CI build requests and initiation (`encrypted_build_handlers.go`, `adapters/gitea`) | the upstream and mirror-read credentials, one batch | the initiation stays `claimed`; legacy credentials are refused up front |
+| Reveal (`services/secrets-reveal`) | the one secret, in its service's canonical org | refused |
+| Run-log redaction (`deployments/run-logs-get`) | every secret the run recorded it injected, one batch, cached per run for the lease | the logs are withheld, never returned unredacted |
+| Edge routing API token, relay administrator key, package backend credentials | on first use, then held until the store lease ends (below) | the feature's calls fail closed |
+| LLM gateway/health headers (`adapters/llm`) | per call, through `secretstore.TextResolver` | the call fails |
+
+Consumers whose APIs take text (HTTP headers, Git credentials, registry
+passwords) use `secretstore.TextResolver`, which copies the value into a Go
+string and zeroizes the store's buffer.
+
+- **Access audit.** With PostgreSQL configured, resolves are recorded in
+  `secret_access_audit` (actor, reason, credential version; no PostgreSQL
+  version row exists for a store-backed secret, migration 000082). The table
+  references the secret's index row and the service row. Deploys and VM
+  bootstrap list their secrets from those rows, so their audit row is
+  required and its failure fails the operation. Configuration credentials,
+  text consumers and run-log redaction may resolve a secret that is not
+  indexed yet (or run without PostgreSQL): their audit row is best effort, a
+  failure is logged and the resolve proceeds; Signet's audit chain records
+  every delivery regardless.
+- **Run logs.** A direct runtime run records, before each apply, the secrets
+  the apply injects: secret id and canonical record revision, no credential,
+  no value (apply metadata `secret_accesses`; the deploy aborts if it
+  cannot be written). Redaction resolves exactly those secrets, including
+  every effective secret of a non-managed deploy. The store releases only
+  the version a secret is pinned to now, so the logs are withheld
+  (`ErrRunLogsUnredactable`) when a secret's record revision differs from
+  the one the run injected (re-pointed since; decided by revision, never by
+  clock), when a secret is legacy or has no record, or when a run predates
+  the record and could have injected secrets. Loom deploy jobs carry no
+  secret from Bahia. Resolved values are cached per run until the earliest
+  store lease ends (zeroized on expiry or eviction, 32 runs); a requester
+  causes at most 6 store batches a minute (burst 3) and is told to retry
+  beyond; every resolve writes an audit row. A failed apply scrubs its error
+  with the values it injected instead of resolving them again.
+- **Process-held configuration credentials.** `edge_routing.api_token_ref`,
+  `nostr.relay_administration.administrator_private_key_ref` and package
+  backend `auth_secret_ref`/`tls_secret_ref`/`secret_refs` name service
+  secrets. They resolve on the feature's first use, not at startup, so the
+  daemon starts while Signet or the canonical record is unavailable. The
+  value is held only until the store's delivery lease ends (60 s at Signet);
+  the next use resolves again (one round trip once the label is known),
+  which notices a revoked or expired credential and picks up a re-point. The
+  edge routing token and relay administrator key also compare the canonical
+  reference on every use (a local read). Any failure, and a deleted secret,
+  drops the held value and whatever was built from it (the relay admin
+  client, the package backend); concurrent uses share one resolve. A package
+  backend resolves all its credentials as one batch.
+- **Adoption** imports no values: a container whose environment carries
+  secret values inline is refused, naming the keys (Bahia cannot write into
+  the store, and only a store administrator chooses labels). Keys are secret
+  by whole name tokens (`*_PASSWORD`, `*_SECRET`, `*_TOKEN`,
+  `*_API_KEY`, `*_PRIVATE_KEY`, `*_ACCESS_KEY`, ...) or, for connection
+  strings (`*_URL`, `*_URI`, `*_DSN`, `CONNECTION_STRING`), by a password in
+  the value; the import intent's `non_secret_env_keys` lists keys the
+  operator declares are not secrets.
+- **PostgreSQL index.** With PostgreSQL configured, a store-backed secret
+  keeps a value-less index row (`encryption_method = store-ref`; every
+  retained legacy ciphertext of that id scrubbed, access audit rows kept),
+  which deploys use to list a service's effective secrets. Markers are
+  written before the canonical publish and, after warm start, for every
+  store-backed record the local store holds. A consumer refuses an index
+  row that disagrees with its canonical record (service or name).
+- **Name collisions.** Deploys pick a secret by service, environment and
+  name. A store-backed secret whose name another index row already holds (a
+  different secret id) would let them serve that row. A reference intent
+  that would collide is refused with the remedy, changing nothing. A
+  canonical store-backed record found colliding by the warm-start index pass
+  blocks the other row (it becomes a scrubbed store-ref marker, so nothing
+  serves it). The `secret_store_index` health check fails readiness with the
+  secret's name until one of the two secrets is deleted, and the pass retries
+  with backoff (1s to 5m). The check also fails, with the reason, while any
+  store-backed secret cannot be indexed.
 - The assistant transcript/checkpoint key and the confidential-state dedupe
   HMAC key are [system credentials](#system-credentials), resolved at startup
-  and held for the life of the process.
+  and held for the life of the process (not per operation, unlike the
+  configuration credentials above).
 
 ## Services without a canonical record
 
@@ -350,7 +424,7 @@ PostgreSQL row's org.
 
 ```yaml
 secret_store:
-  backend: signet                     # empty: no store; reference intents refused
+  backend: signet                     # empty: no store; every secret-dependent operation fails closed
   signet:
     pubkey: <64-hex>                  # Signet's management identity ([nostr] bunker_pubkey)
     relays: [wss://signet-relay.example]

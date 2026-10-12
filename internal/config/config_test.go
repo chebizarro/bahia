@@ -2697,37 +2697,31 @@ func TestQdrantConfigValidation(t *testing.T) {
 	})
 }
 
-func TestSecretDependentFeatureValidationRequiresNostrPrivateKey(t *testing.T) {
-	t.Run("adoption", func(t *testing.T) {
-		cfg := Defaults()
-		cfg.Auth.Enabled = true
-		cfg.Adoption.Enabled = true
-		cfg.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "adoption.enabled=true requires the local service signer") {
-			t.Fatalf("validate error = %v, want nostr private key requirement", err)
-		}
-		// A remote signer cannot serve the raw-key-derived secret store.
-		cfg.Nostr.PublicKey = strings.Repeat("cd", 32)
-		cfg.Nostr.Signer.Method = NostrSignerNIP55L
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "adoption.enabled=true requires the local service signer") || !strings.Contains(err.Error(), "bahia-cd0wr.4.7") {
-			t.Fatalf("remote signer validate error = %v, want local signer requirement", err)
-		}
-	})
-
-	t.Run("direct runtime", func(t *testing.T) {
-		cfg := Defaults()
-		cfg.Auth.Enabled = true
-		cfg.DirectRuntime.Enabled = true
-		cfg.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "direct_runtime_actions.enabled=true requires the local service signer") {
-			t.Fatalf("validate error = %v, want nostr private key requirement", err)
-		}
-		cfg.Nostr.PublicKey = strings.Repeat("cd", 32)
-		cfg.Nostr.Signer.Method = NostrSignerNIP55L
-		if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), "direct_runtime_actions.enabled=true requires the local service signer") {
-			t.Fatalf("remote signer validate error = %v, want local signer requirement", err)
-		}
-	})
+// Adoption and direct runtime actions derive nothing from the raw service
+// key: secrets resolve through the secret store, canonical state is signed
+// and read through the injected Keyer. A remote signer serves them.
+func TestAdoptionAndDirectRuntimeAcceptRemoteSigners(t *testing.T) {
+	for name, enable := range map[string]func(*Config){
+		"adoption": func(c *Config) {
+			c.Adoption.Enabled = true
+			c.Adoption.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
+		},
+		"direct runtime": func(c *Config) {
+			c.DirectRuntime.Enabled = true
+			c.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := Defaults()
+			cfg.Auth.Enabled = true
+			enable(cfg)
+			cfg.Nostr.PublicKey = strings.Repeat("cd", 32)
+			cfg.Nostr.Signer.Method = NostrSignerNIP55L
+			if err := cfg.validate(); err != nil {
+				t.Fatalf("validate with the NIP-55L signer: %v", err)
+			}
+		})
+	}
 }
 
 func TestLoadPrivilegedRouteConfigFromYAML(t *testing.T) {

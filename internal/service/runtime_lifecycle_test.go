@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"go.uber.org/zap"
@@ -124,30 +123,15 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
 	secretRepo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
+	values := newFakeSecretValues()
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
-		WithRuntimeLifecycleSecrets(secretRepo, encryptor),
+		WithRuntimeLifecycleSecrets(secretRepo, values),
 	)
 
 	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
-	globalCiphertext, err := encryptor.Encrypt("global-token", domain.EncryptionAES256)
-	if err != nil {
-		t.Fatalf("encrypt global secret: %v", err)
-	}
-	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, Name: "API_TOKEN", EncryptedValue: globalCiphertext, EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
-		t.Fatalf("create global secret: %v", err)
-	}
-	envCiphertext, err := encryptor.Encrypt("secret-prod", domain.EncryptionAES256)
-	if err != nil {
-		t.Fatalf("encrypt env secret: %v", err)
-	}
-	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "APP_ENV", EncryptedValue: envCiphertext, EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
-		t.Fatalf("create env secret: %v", err)
-	}
+	values.storeBacked(t, secretRepo, svc.ID, nil, "API_TOKEN", "global-token")
+	values.storeBacked(t, secretRepo, svc.ID, &env.ID, "APP_ENV", "secret-prod")
 
 	if _, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID); err != nil {
 		t.Fatalf("Deploy returned error: %v", err)
@@ -160,62 +144,14 @@ func TestRuntimeLifecycleDeployMergesEffectiveSecretsOverAdoptedEnvironment(t *t
 	}
 }
 
-func TestRuntimeLifecycleV2ReaderBindsIdentityAndRefusesLegacy(t *testing.T) {
-	ctx := context.Background()
-	key, err := secretsAdapter.NewRandomDataKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	id := uuid.New()
-	ciphertext, err := key.Seal(id, 3, []byte("runtime-token"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	repo := newMockSecretRepo()
-	record := &domain.ServiceSecret{ID: id, ServiceID: uuid.New(), Version: 3, Name: "TOKEN", EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256V2}
-	if err := repo.Create(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-	lifecycle := &RuntimeLifecycleService{secrets: repo, secretEncryptor: key}
-	opts := &runtime.DeployOptions{}
-	accesses, err := lifecycle.mergeEffectiveSecrets(ctx, []domain.ServiceSecret{*record}, opts, nil, false)
-	if err != nil || opts.Environment["TOKEN"] != "runtime-token" || len(accesses) != 1 {
-		t.Fatalf("v2 runtime read failed: %v, %#v", err, opts.Environment)
-	}
-	record.EncryptionMethod = domain.EncryptionAES256
-	opts = &runtime.DeployOptions{}
-	if _, err := lifecycle.mergeEffectiveSecrets(ctx, []domain.ServiceSecret{*record}, opts, nil, false); err == nil {
-		t.Fatal("v2 runtime reader accepted legacy row")
-	}
-	if len(opts.Environment) != 0 {
-		t.Fatal("failed v2 runtime read leaked value into deploy environment")
-	}
-}
-
 func TestResolveUnitApplySecretsSeparatesSiblingEnvNames(t *testing.T) {
 	ctx := context.Background()
 	envID := uuid.New()
 	targetID := uuid.New()
 	siblingID := uuid.New()
 	repo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
-	siblingCiphertext, err := encryptor.Encrypt("sibling-value", domain.EncryptionAES256)
-	if err != nil {
-		t.Fatalf("encrypt sibling secret: %v", err)
-	}
-	siblingSecret := &domain.ServiceSecret{
-		ServiceID:        siblingID,
-		EnvironmentID:    &envID,
-		Name:             "TOKEN",
-		EncryptedValue:   siblingCiphertext,
-		EncryptionMethod: domain.EncryptionAES256,
-	}
-	if err := repo.Create(ctx, siblingSecret); err != nil {
-		t.Fatalf("create sibling secret: %v", err)
-	}
+	values := newFakeSecretValues()
+	siblingSecret := values.storeBacked(t, repo, siblingID, &envID, "TOKEN", "sibling-value")
 
 	target := domain.DesiredServiceSpec{
 		ServiceID: targetID, StableServiceKey: "target", DeploymentUnitKey: "unit",
@@ -227,7 +163,7 @@ func TestResolveUnitApplySecretsSeparatesSiblingEnvNames(t *testing.T) {
 	}
 	plan := &domain.DesiredEnvironmentPlan{EnvironmentID: envID, Services: []domain.DesiredServiceSpec{target, sibling}}
 	plan.ComputeRevisionHash()
-	lifecycle := &RuntimeLifecycleService{secrets: repo, secretEncryptor: encryptor}
+	lifecycle := &RuntimeLifecycleService{secrets: repo, secretValues: values}
 
 	resolved, accesses, err := lifecycle.resolveUnitApplySecrets(ctx, plan, &target, envID, map[string]string{"TOKEN": "target-value"})
 	if err != nil {
@@ -246,25 +182,16 @@ func TestRuntimeLifecycleActionErrorScrubsRawAndEscapedSecrets(t *testing.T) {
 	serviceID, envID := uuid.New(), uuid.New()
 	secretValue := `pa"ss\word`
 	repo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
-	ciphertext, err := encryptor.Encrypt(secretValue, domain.EncryptionAES256)
-	if err != nil {
-		t.Fatalf("Encrypt: %v", err)
-	}
-	if err := repo.Create(ctx, &domain.ServiceSecret{ServiceID: serviceID, EnvironmentID: &envID, Name: "TOKEN", EncryptedValue: ciphertext, EncryptionMethod: domain.EncryptionAES256}); err != nil {
-		t.Fatalf("create secret: %v", err)
-	}
+	values := newFakeSecretValues()
+	values.storeBacked(t, repo, serviceID, &envID, "TOKEN", secretValue)
 	encoded, err := json.Marshal(secretValue)
 	if err != nil {
 		t.Fatalf("marshal secret: %v", err)
 	}
 	escaped := string(encoded[1 : len(encoded)-1])
-	lifecycle := &RuntimeLifecycleService{secrets: repo, secretEncryptor: encryptor}
+	lifecycle := &RuntimeLifecycleService{secrets: repo, secretValues: values}
 
-	got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped))
+	got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped), nil)
 	if strings.Contains(got, secretValue) || strings.Contains(got, escaped) {
 		t.Fatalf("scrubbed runtime error leaked secret: %q", got)
 	}
@@ -272,8 +199,18 @@ func TestRuntimeLifecycleActionErrorScrubsRawAndEscapedSecrets(t *testing.T) {
 		t.Fatalf("scrubbed runtime error = %q", got)
 	}
 
-	lifecycle.secretEncryptor = nil
-	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s", secretValue)); got != runtimeActionErrorDetailsWithheld {
+	values.requireAllZeroized(t)
+	// A deploy scrubs its failure with the values it injected itself: no
+	// second resolve.
+	batches := len(values.batches)
+	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s escaped=%s", secretValue, escaped), []string{secretValue}); got != "raw=[REDACTED] escaped=[REDACTED]" {
+		t.Fatalf("scrub with the injected values = %q", got)
+	}
+	if len(values.batches) != batches {
+		t.Fatal("scrubbing with the injected values resolved the secrets again")
+	}
+	lifecycle.secretValues = nil
+	if got := lifecycle.scrubRuntimeActionError(ctx, serviceID, envID, fmt.Errorf("raw=%s", secretValue), nil); got != runtimeActionErrorDetailsWithheld {
 		t.Fatalf("redaction dependency failure returned %q, want withheld", got)
 	}
 }
@@ -404,30 +341,26 @@ func TestRuntimeLifecycleRejectsNonAdoptedOrNonDirectRuntimeWorkloads(t *testing
 	}
 }
 
-func TestRuntimeLifecycleDeploySecretDecryptFailureDoesNotMutateDesiredState(t *testing.T) {
+func TestRuntimeLifecycleDeployLegacySecretDoesNotMutateDesiredState(t *testing.T) {
 	ctx := context.Background()
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
 	secretRepo := newMockSecretRepo()
-	encryptor, err := secretsAdapter.NewEncryptor("5555555555555555555555555555555555555555555555555555555555555555")
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo, &mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
-		WithRuntimeLifecycleSecrets(secretRepo, encryptor),
+		WithRuntimeLifecycleSecrets(secretRepo, newFakeSecretValues()),
 	)
 
 	svc, env, artifact := seedRuntimeLifecycleFixtures(t, registry)
-	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "API_TOKEN", EncryptedValue: []byte("not-valid-aes"), EncryptionMethod: domain.EncryptionAES256, CreatedBy: "test"}); err != nil {
+	if err := secretRepo.Create(ctx, &domain.ServiceSecret{ServiceID: svc.ID, EnvironmentID: &env.ID, Name: "API_TOKEN", EncryptedValue: []byte("not-valid-aes"), EncryptionMethod: domain.EncryptionMethod("aes256gcm"), CreatedBy: "test"}); err != nil {
 		t.Fatalf("create invalid secret: %v", err)
 	}
 
 	before := *stateRepo.states[stateKey(svc.ID, env.ID)]
-	_, err = lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
-	if err == nil || !strings.Contains(err.Error(), "decrypting effective secret") {
-		t.Fatalf("expected decrypt error, got %v", err)
+	_, err := lifecycle.Deploy(ctx, svc.ID, env.ID, &artifact.ID)
+	if !errors.Is(err, domain.ErrLegacySecretValue) || !strings.Contains(err.Error(), "API_TOKEN") {
+		t.Fatalf("expected the legacy secret to be refused, got %v", err)
 	}
 	if rt.deployTarget != "" {
 		t.Fatalf("runtime deploy should not be called, got target %q", rt.deployTarget)

@@ -44,11 +44,10 @@ Managed Compose configuration is rendered into a Bahia-owned directory. The daem
 ```bash
 bahia secrets list <service-id>
 bahia secrets set <service-id> DATABASE_URL --credential-id cred_<64 hex> --credential-version 1
-bahia secrets set <service-id> DATABASE_URL --value-file /run/secrets/database-url   # no secret store configured
 bahia secrets delete <service-id> <secret-id>
 ```
 
-List returns metadata only. With a secret store configured, secret values live in Signet: the operator imports a value with `signetctl import-credential`, and the secret's record holds only the credential reference. Bahia fetches the value when an authorized operation needs it and never stores it ([Secret store](../../architecture/secret-store.md), [runbook](../../runbooks/signet-secret-store.md)). Without a secret store, values travel in gift-wrapped intents. The web app can reveal a value through a confidential request when the signer has read permission.
+List returns metadata only. Secret values live only in the secret store (Signet): the operator imports a value with `signetctl import-credential`, labelled `<org-id>/<service-id>/<name>`, and the secret's record holds only the credential reference. In the web app, import or rotate the value in Signet first with that exact label, then enter the Signet credential id and version when adding or updating the secret; the signed web intent carries only `credential_ref`, and the list shows its id and pinned version. Bahia fetches the value when an authorized operation needs it (a deploy, VM bootstrap, a build, a reveal, run-log redaction) and never stores it; without a secret store those operations fail closed ([Secret store](../../architecture/secret-store.md), [runbook](../../runbooks/signet-secret-store.md)). A secret whose value Bahia once sealed itself is refused until it is rotated, imported and re-pointed. The web app can reveal a value through an interactive confidential request when the signer has read permission. Rejected changes show the daemon's `30315` reason in the secret status notice.
 
 ## Routing and health
 

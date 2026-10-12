@@ -179,9 +179,10 @@ bahia state drifted        # records whose drift_status is exactly "drifted"
 bahia adopt scan   --target prod=prod-docker [--environment prod=production] [--offset 0 --limit 20]
 bahia adopt import --org "$ORG" --target prod=prod-docker --all
 bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id>=payment-api
+bahia adopt import --org "$ORG" --target prod=prod-docker --all --non-secret-env PASSWORD_MIN_LENGTH
 ```
 
-Targets are server-managed endpoint references (`alias=endpointRef`); `--raw-target alias=dockerHost` is accepted only when the daemon sets `adoption.allow_raw_docker_hosts`. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`.
+Targets are server-managed endpoint references (`alias=endpointRef`); `--raw-target alias=dockerHost` is accepted only when the daemon sets `adoption.allow_raw_docker_hosts`. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`. A container whose environment carries secret values inline is refused, naming the keys; `--non-secret-env KEY` (repeatable) declares a key flagged by name that is not a secret.
 
 ### dns
 
@@ -245,13 +246,11 @@ Config fabric desired state is published directly to relays as NIP-51/NIP-78 eve
 
 ```bash
 bahia secrets list <service-id>                                     # metadata only
-bahia secrets set  <service-id> DATABASE_URL postgres://…  [--environment <env-id>]
-bahia secrets set  <service-id> DATABASE_URL --value-file /run/secrets/db   # owner-only absolute path
-bahia secrets set  <service-id> DATABASE_URL --credential-id cred_<64 hex> --credential-version 2
+bahia secrets set  <service-id> DATABASE_URL --credential-id cred_<64 hex> --credential-version 2 [--environment <env-id>]
 bahia secrets delete <service-id> <secret-id>
 ```
 
-With the daemon's secret store configured (`secret_store.backend: signet`), import the value into Signet (`signetctl import-credential`) and set the secret with `--credential-id` and `--credential-version`: the intent carries only the reference, and a value or `--value-file` is refused by the daemon. After rotating the credential in Signet, run the same command with the new version. Without a secret store, values travel inside gift-wrapped intents. The CLI never prints values; reveal is available in the web app. See [Secret store](../architecture/secret-store.md).
+Secret values live only in the daemon's secret store (Signet). Import the value first, labelled `<org-id>/<service-id>/<name>` (`signetctl import-credential <owner> --type credential --label <org-id>/<service-id>/DATABASE_URL --stdin`), then set the secret with `--credential-id` and `--credential-version`, both required: the intent carries only the reference, never a value. After rotating the credential in Signet, run the same command with the new version. A daemon without a secret store refuses the intent. The CLI never prints values; reveal is available in the web app. See [Secret store](../architecture/secret-store.md) and the [runbook](../runbooks/signet-secret-store.md).
 
 ### orgs
 

@@ -9,19 +9,21 @@ docs/runbooks/signet-secret-store.md describes, through the same seeding code
 as the dev stack (signet_dev_seed.py):
 
   - an owner agent (provision) that nobody connects to;
-  - a requester key, named as the single client of the owner's
-    credential.deliver policy (no provisioner rights: Signet >= 0.7.0);
+  - a requester key with no Signet rights but the owner's exact delivery
+    grant: the single client of its credential.deliver policy;
   - one imported tenant credential and another tenant's;
   - two system credentials (32 random bytes each) labelled
     bahia-system/assistant-transcript/k1 and bahia-system/confidential-dedupe/k1.
 
 It then runs Bahia's opt-in TestLiveSignetCredentialStore (-tags
 signetinterop) from this clean Bahia checkout: resolve the pinned version,
-refuse another tenant's credential held by the same owner, resolve the
-system keys through the system scope (and refuse system/tenant crossovers and
-a key configured under the wrong purpose), refuse the old pin after a
-rotation and resolve the new one, refuse when the delivery grant
-names another client, refuse after revocation.
+then resolve in one round trip (Signet reports the delivered version and
+honours expected_version), refuse another tenant's credential held by the
+same owner, resolve the system keys through the system scope (and refuse
+system/tenant crossovers and a key configured under the wrong purpose),
+refuse the old pin after a rotation and resolve the new one (also as a paced
+batch), refuse when the delivery grant names another client, refuse after
+revocation.
 
 Never accepts an existing identity, relay URL or database. No secret or raw
 test output is written to stdout or stderr; on failure only the failing test
@@ -40,9 +42,9 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from signet_live_interop import (  # noqa: E402  (shared guards of the NIP-46 interop runner)
     free_loopback_port, management, private_file, pubkey, require_clean_checkout, require_commit,
-    run, run_go_test, wait_tcp,
+    run, run_go_test, wait_management, wait_tcp,
 )
-from signet_dev_seed import OWNER, SYSTEM_PURPOSES, seed, signet_config, signet_env, wait_management  # noqa: E402
+from signet_dev_seed import OWNER, SYSTEM_PURPOSES, seed, signet_config, signet_env  # noqa: E402
 
 LIVE_TEST = "TestLiveSignetCredentialStore"
 PACKAGE = "./internal/adapters/signet"

@@ -552,12 +552,6 @@ func (m *mockSecretRepo) Create(_ context.Context, s *domain.ServiceSecret) erro
 func (m *mockSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.ServiceSecret, error) {
 	return m.secrets[id], nil
 }
-func (m *mockSecretRepo) GetCurrentVersion(_ context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
-	if s, ok := m.secrets[secretID]; ok {
-		return &domain.SecretVersion{ID: uuid.New(), SecretID: secretID, Version: s.Version, EncryptedValue: s.EncryptedValue, EncryptionMethod: s.EncryptionMethod, CreatedBy: s.CreatedBy, CreatedAt: s.UpdatedAt}, nil
-	}
-	return nil, nil
-}
 func (m *mockSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
 	var result []domain.ServiceSecret
 	for _, s := range m.secrets {

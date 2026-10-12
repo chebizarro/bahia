@@ -45,11 +45,10 @@ protocol of its own.
 
 Event signing is separate from operations requiring raw key material. Secret
 values belong in the [secret store](secret-store.md), reached with a separate
-requester identity, never the service key. The legacy PostgreSQL secret
-encryption and O1 org-state reads still derive from the raw service key.
-Without in-process key material they fail closed with
-`ErrServiceKeyMaterialRequired` (never silently skipped); their migration is
-tracked in bahia-cd0wr.4.x. Assistant transcripts and the confidential-state
+requester identity, never the service key. O1 org-state reads still derive
+from the raw service key. Without in-process key material they fail closed
+with `ErrServiceKeyMaterialRequired` (never silently skipped); their migration
+is tracked in bahia-cd0wr.4.x. Assistant transcripts and the confidential-state
 dedupe HMAC use [system credentials](secret-store.md#system-credentials) held
 in Signet.
 
@@ -138,8 +137,9 @@ encrypted for members is described in [confidential state](confidential-state.md
 ### 1.6 Secret intents
 
 A secret intent (`domain=secret`, `schema=bahia.intent.secret.v1`,
-`d=<secret-uuid>`) names the value instead of carrying it when the daemon has
-a [secret store](secret-store.md) (`secret_store.backend=signet`):
+`d=<secret-uuid>`) names the value in the daemon's
+[secret store](secret-store.md) (`secret_store.backend=signet`); it never
+carries the value:
 
 ```json
 {
@@ -167,11 +167,10 @@ that id scrubbed), so PostgreSQL consumers refuse it rather than omit it. Signet
 unreachable rejects the intent with the reason (fail closed); re-send it
 once Signet answers.
 
-With the store configured, an intent carrying `encrypted_value` or `value`
-is rejected, and an intent carrying both a reference and a value is always
-rejected. Without a store, the legacy value path applies: `encrypted_value`
-is NIP-44-encrypted to the service key (or `value` arrives from in-process
-MCP) and is sealed into PostgreSQL, which that path requires.
+An intent carrying `encrypted_value` or `value` is rejected, as is a create
+or update without `credential_ref`. Without a configured store every create
+and update is rejected with `secret store is not configured`; deletes still
+apply (tombstone, and the PostgreSQL index row when configured).
 
 ## 2. Authority and trust
 

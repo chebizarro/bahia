@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,14 +37,22 @@ type vmSecretResolver struct {
 	wrongManifest bool
 }
 
-func (r *vmSecretResolver) ResolveSecretWithAudit(_ context.Context, id string, opts domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
+func (r *vmSecretResolver) ResolveAll(_ context.Context, ids []uuid.UUID) ([]secretstore.Resolved, error) {
 	r.calls++
-	s := r.repo.secret
-	m := domain.SecretAccessManifest{SecretID: s.ID, VersionID: uuid.New(), Version: 1, ServiceID: s.ServiceID, EnvironmentID: s.EnvironmentID, Operation: opts.Operation, Outcome: domain.SecretAccessOutcomeSuccess, AccessedAt: vmTestNow}
-	if r.wrongManifest {
-		m.ServiceID = uuid.New()
+	if r.err != nil {
+		return nil, r.err
 	}
-	return "SECRET-never-public", m, r.err
+	s := r.repo.secret
+	ref := domain.SecretRef{ID: s.ID, ServiceID: s.ServiceID, EnvironmentID: s.EnvironmentID, Name: s.Name, Version: 1,
+		CredentialRef: &domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_vm", Version: 1}}
+	if r.wrongManifest {
+		ref.ServiceID = uuid.New()
+	}
+	out := make([]secretstore.Resolved, 0, len(ids))
+	for range ids {
+		out = append(out, secretstore.Resolved{Secret: ref, Value: secretstore.NewValue([]byte("SECRET-never-public"), vmTestNow.Add(time.Minute))})
+	}
+	return out, nil
 }
 
 type vmBootstrapGuest struct {
@@ -63,7 +73,7 @@ func TestVMBootstrapAuditedSecretRefDeliveryAndRedaction(t *testing.T) {
 	serviceID, env := uuid.New(), uuid.New()
 	v.ServiceID = &serviceID
 	v.EnvironmentID = &env
-	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: &env, Version: 1}
+	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: serviceID, EnvironmentID: &env, Version: 1, EncryptionMethod: domain.EncryptionStoreRef}
 	v.Bootstrap = []domain.VMBootstrapBinding{{TargetKey: "ssh", Ref: domain.SecretRef{ID: secret.ID}}}
 	secrets := &vmSecretRepo{secret: secret}
 	resolver := &vmSecretResolver{repo: secrets}
@@ -97,7 +107,7 @@ func TestVMBootstrapRejectsSpoofedRefsAndWrongGuest(t *testing.T) {
 	svc, env := uuid.New(), uuid.New()
 	v.ServiceID = &svc
 	v.EnvironmentID = &env
-	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: svc, EnvironmentID: &env}
+	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: svc, EnvironmentID: &env, EncryptionMethod: domain.EncryptionStoreRef}
 	v.Bootstrap = []domain.VMBootstrapBinding{{TargetKey: "rdp", Ref: domain.SecretRef{ID: secret.ID}}}
 	secrets := &vmSecretRepo{secret: secret}
 	resolver := &vmSecretResolver{repo: secrets}
@@ -129,4 +139,22 @@ func TestVMBootstrapRejectsSpoofedRefsAndWrongGuest(t *testing.T) {
 	resolver.err = nil
 	secrets.auditError = errors.New("audit failure")
 	require.Error(t, delivery.Deliver(context.Background(), v.Identity, guest))
+}
+
+// A bootstrap binding to a secret whose value Bahia sealed itself is refused
+// at admission, naming it; nothing is resolved.
+func TestVMBootstrapRefusesLegacySecret(t *testing.T) {
+	_, _, _, v, principal := vmFixture(t)
+	svc, env := uuid.New(), uuid.New()
+	v.ServiceID, v.EnvironmentID = &svc, &env
+	secret := domain.ServiceSecret{ID: uuid.New(), ServiceID: svc, EnvironmentID: &env, Name: "RDP_PASSWORD", EncryptionMethod: domain.EncryptionMethod("aes256gcm")}
+	v.Bootstrap = []domain.VMBootstrapBinding{{TargetKey: "rdp", Ref: domain.SecretRef{ID: secret.ID}}}
+	secrets := &vmSecretRepo{secret: secret}
+	resolver := &vmSecretResolver{repo: secrets}
+	bootstrap, err := NewVMBootstrapService(secrets, resolver, &vmPermissionFake{})
+	require.NoError(t, err)
+	err = bootstrap.Authorize(context.Background(), principal, v)
+	require.ErrorIs(t, err, domain.ErrLegacySecretValue)
+	require.ErrorContains(t, err, "RDP_PASSWORD")
+	require.Zero(t, resolver.calls)
 }

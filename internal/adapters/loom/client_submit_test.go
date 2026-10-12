@@ -402,11 +402,11 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 	if len(encryptedSecrets) != len(plaintextSecrets) {
 		t.Fatalf("encrypted secret tags = %v, want exactly %v", encryptedSecrets, plaintextSecrets)
 	}
-	selectedConversationKey, err := nostrutil.NIP44ConversationKey(senderPubkey, capablePrivateKey)
+	selectedConversationKey, err := testConversationKey(senderPubkey, capablePrivateKey)
 	if err != nil {
 		t.Fatalf("selected worker conversation key: %v", err)
 	}
-	wrongConversationKey, err := nostrutil.NIP44ConversationKey(senderPubkey, uncapablePrivateKey)
+	wrongConversationKey, err := testConversationKey(senderPubkey, uncapablePrivateKey)
 	if err != nil {
 		t.Fatalf("wrong worker conversation key: %v", err)
 	}
@@ -423,4 +423,16 @@ func TestSubmitJob_HiveCIShapeSelectsCapableWorkerEncryptsSecretsAndOmitsPayment
 			t.Fatalf("non-selected worker decrypted %s", key)
 		}
 	}
+}
+
+func testConversationKey(recipientPubkeyHex, privateKeyHex string) ([32]byte, error) {
+	pubkey, err := nostrutil.PubKeyFromHex(recipientPubkeyHex)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	secret, err := nostrutil.SecretKeyFromHex(privateKeyHex)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return nip44.GenerateConversationKey(pubkey, secret)
 }

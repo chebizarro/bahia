@@ -424,7 +424,7 @@ func TestF74aArchivedAuditRowRetainsImmutableDeploymentUnitTombstone(t *testing.
 	retained, err := archiveRepo.GetArchivedByID(ctx, archivedID)
 	require.NoError(t, err)
 	require.Equal(t, *archived, *retained)
-	for _, expected := range []string{"000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
+	for _, expected := range []string{"000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
 		rolled, downErr := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
 		require.NoError(t, downErr)
 		require.Equal(t, []string{expected}, rolled)
@@ -442,7 +442,7 @@ func TestF74aArchivedAuditRowRetainsImmutableDeploymentUnitTombstone(t *testing.
 func TestF74aUnitTombstoneMigrationRejectsOrphanArchive(t *testing.T) {
 	pool, _ := f74aArchiveDatabase(t)
 	ctx := t.Context()
-	for _, expected := range []string{"000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
+	for _, expected := range []string{"000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
 		rolled, downErr := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
 		require.NoError(t, downErr)
 		require.Equal(t, []string{expected}, rolled)
@@ -514,7 +514,7 @@ func TestF74aUnitWithoutArchiveDoesNotRetainParent(t *testing.T) {
 func TestF74aUnitTombstoneMigrationUpgradesPopulatedArchive(t *testing.T) {
 	pool, _ := f74aArchiveDatabase(t)
 	ctx := t.Context()
-	for _, expected := range []string{"000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
+	for _, expected := range []string{"000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
 		rolled, downErr := db.Down(ctx, pool, zap.NewNop(), db.DownOptions{Confirm: true})
 		require.NoError(t, downErr)
 		require.Equal(t, []string{expected}, rolled)

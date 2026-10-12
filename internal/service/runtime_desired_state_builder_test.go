@@ -82,7 +82,7 @@ func makeTestInput() BuildInput {
 				ServiceID:        serviceID,
 				Name:             "DB_PASSWORD",
 				EncryptedValue:   []byte("encrypted-value"),
-				EncryptionMethod: domain.EncryptionAES256,
+				EncryptionMethod: domain.EncryptionMethod("aes256gcm"),
 				Version:          1,
 				CreatedAt:        time.Now(),
 				UpdatedAt:        time.Now(),

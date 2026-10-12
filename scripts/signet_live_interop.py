@@ -151,16 +151,37 @@ def free_loopback_port():
         return sock.getsockname()[1]
 
 
-def wait_tcp(port, process, label):
-    for _ in range(100):
+# A cold `nak serve` can take well over ten seconds to listen on a loaded
+# host; the runners wait for it (or for the process to exit) up to this long.
+STARTUP_TIMEOUT_SECONDS = 90.0
+
+
+def wait_tcp(port, process, label, timeout=STARTUP_TIMEOUT_SECONDS):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError(f"{label} exited during startup; private log withheld")
         try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
                 return
         except OSError:
-            time.sleep(0.1)
-    raise RuntimeError(f"{label} did not listen on loopback")
+            time.sleep(0.25)
+    raise RuntimeError(f"{label} did not listen on loopback within {timeout:.0f}s")
+
+
+def wait_management(ctl, config, env, signetd, timeout=STARTUP_TIMEOUT_SECONDS):
+    """Readiness is an authenticated management round trip, not a guess."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if signetd.poll() is not None:
+            raise RuntimeError("signetd exited during startup; private log withheld")
+        try:
+            management(ctl, config, env, "status")
+            return
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"signetd did not answer authenticated management status within {timeout:.0f}s")
+            time.sleep(0.25)
 
 
 def management(ctl, config, env, *args, input_text=None):
@@ -270,17 +291,7 @@ def main(argv=None):
                 signetd = subprocess.Popen([str(daemon), "-c", str(config)],
                                            stdout=daemon_log, stderr=subprocess.STDOUT, env=env)
                 processes.append(signetd)
-                # Health is an authenticated management roundtrip, not a sleep-based guess.
-                for _ in range(30):
-                    if signetd.poll() is not None:
-                        raise RuntimeError("signetd exited during startup; private log withheld")
-                    try:
-                        management(ctl, config, env, "status")
-                        break
-                    except RuntimeError:
-                        time.sleep(0.2)
-                else:
-                    raise RuntimeError("signetd did not answer authenticated management status")
+                wait_management(ctl, config, env, signetd)
 
                 adopted = run([str(ctl), "-c", str(config), "adopt-existing", AGENT_ID,
                                "--sec", "-", "--expected-pubkey", service_pk],

@@ -36,6 +36,21 @@ func (store) Inspect(context.Context, string, secretstore.Scope) (secretstore.Me
 
 func (store) Health(context.Context) error { return nil }
 
+func (s store) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
+	values := make([]*secretstore.Value, 0, len(reqs))
+	for _, req := range reqs {
+		value, err := s.Resolve(ctx, req.Ref, req.Scope)
+		if err != nil {
+			for _, v := range values {
+				v.Zeroize()
+			}
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
 // Unloaded configures one key of purpose without resolving it.
 func Unloaded(purpose string) *secretstore.Keyring {
 	ring, err := secretstore.NewKeyring([]secretstore.SystemKeyRef{{

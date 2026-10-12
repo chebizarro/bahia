@@ -1,8 +1,5 @@
 # unwired_exports architecture ratchet baseline (bahia-irsry.8).
-# Pre-existing violations only: this one-time quarantine records de-wired existing symbols; future entries may shrink, never grow.
-# 2026-10-09 quarantine: 38 previously shipped exports became test-only when SQL-authoritative startup/workflow wiring was disabled; declarations were not newly added.
-# Restore or retire them under bahia-4f10q.1 (virtualization), bahia-4f10q.2 (backup/LLM/workflow), and bahia-4f10q.3 (governed legacy SQL import).
-# These exact-key entries are not permission to add exports or re-enable SQL authority; remove each entry when its canonical path is restored or retired.
+# Pre-existing violations only: entries may shrink, never grow.
 # Regenerate with: make arch-baseline
 # Format: <count>\t<key>
 1	internal/adapters/agentmemory.Client.GetAgentContext
@@ -29,7 +26,6 @@
 1	internal/adapters/cashu.Wallet.Initialize
 1	internal/adapters/cashu.Wallet.ReceiveToken
 1	internal/adapters/dns.NewFilesystemBackendWithActivator
-1	internal/adapters/gitea.CanonicalInitiationStore.BackfillFromIndex
 1	internal/adapters/gitea.NewMemoryInitiationStore
 1	internal/adapters/llm.AvatarGenerator.GenerateAsync
 1	internal/adapters/llm.AvatarGenerator.GenerateDefault
@@ -113,7 +109,6 @@
 1	internal/adapters/sbom.NewIndexPublisher
 1	internal/adapters/sbom.SerializeAttestation
 1	internal/adapters/sbom.StorageResolver.ResolveAndVerify
-1	internal/adapters/secrets.Encryptor.ReEncryptForWorker
 1	internal/adapters/security.WithOSVBackoff
 1	internal/adapters/security.WithOSVBaseURL
 1	internal/adapters/security.WithOSVMaxBatchSize
@@ -251,7 +246,6 @@
 1	internal/kinds.DNSReadModelKinds
 1	internal/kinds.DNSRequestKinds
 1	internal/kinds.DNSResultKinds
-1	internal/kinds.IsBahiaProjectionKind
 1	internal/kinds.IsReadableKind
 1	internal/kinds.IsRequestKind
 1	internal/mcp.AssistantToolRegistry.AgentMCPTools
@@ -277,7 +271,6 @@
 1	internal/repository.PgOCIRepository.MarkUploadFailed
 1	internal/repository.PgOCIRepository.UpdateUploadOffset
 1	internal/repository.PgToolProvisioningRepository.ApplyToolApprovalDecision
-1	internal/repository.RelayPolicyProjectionShouldReplace
 1	internal/repository/repositorytest.NewInMemoryNostrEventRepository
 1	internal/rollout.NewExecutor
 1	internal/service.AdoptionService.BackfillFromIndex

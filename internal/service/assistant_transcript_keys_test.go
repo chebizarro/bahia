@@ -37,6 +37,21 @@ func (transcriptKeyStore) Inspect(context.Context, string, secretstore.Scope) (s
 
 func (transcriptKeyStore) Health(context.Context) error { return nil }
 
+func (s transcriptKeyStore) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
+	values := make([]*secretstore.Value, 0, len(reqs))
+	for _, req := range reqs {
+		value, err := s.Resolve(ctx, req.Ref, req.Scope)
+		if err != nil {
+			for _, v := range values {
+				v.Zeroize()
+			}
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
 var testTranscriptSignet = transcriptKeyStore{
 	"cred_" + strings.Repeat("1", 64): {"bahia-system/assistant-transcript/k1", bytes.Repeat([]byte{1}, secretstore.SystemKeySize)},
 	"cred_" + strings.Repeat("2", 64): {"bahia-system/assistant-transcript/k2", bytes.Repeat([]byte{2}, secretstore.SystemKeySize)},

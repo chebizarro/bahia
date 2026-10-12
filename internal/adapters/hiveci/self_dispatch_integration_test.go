@@ -34,10 +34,25 @@ func (selfDispatchMirror) ResolveRef(context.Context, string, string, string) (s
 	return strings.Repeat("1", 40), nil
 }
 
-type selfDispatchSecretResolver struct{}
+// selfDispatchSecretResolver resolves every reference as a secret of
+// serviceID, as its canonical record would name it.
+type selfDispatchSecretResolver struct{ serviceID uuid.UUID }
 
-func (selfDispatchSecretResolver) ResolveSecretWithAudit(context.Context, string, domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
-	return "resolved-only-in-memory", domain.SecretAccessManifest{}, nil
+func (r selfDispatchSecretResolver) ResolveSecretWithAudit(_ context.Context, ref string, _ domain.SecretResolveOptions) (string, domain.SecretAccessManifest, error) {
+	id, err := uuid.Parse(ref)
+	if err != nil {
+		return "", domain.SecretAccessManifest{}, err
+	}
+	return "resolved-only-in-memory", domain.SecretAccessManifest{SecretID: id, ServiceID: r.serviceID}, nil
+}
+
+func (r selfDispatchSecretResolver) ResolveSecretsWithAudit(ctx context.Context, refs []string, opts domain.SecretResolveOptions) ([]string, []domain.SecretAccessManifest, error) {
+	values := make([]string, len(refs))
+	manifests := make([]domain.SecretAccessManifest, len(refs))
+	for i, ref := range refs {
+		values[i], manifests[i], _ = r.ResolveSecretWithAudit(ctx, ref, opts)
+	}
+	return values, manifests, nil
 }
 
 type selfDispatchPublisher struct{ events []nostr.Event }
@@ -59,8 +74,9 @@ func TestBahiaSelfDispatchRoundTripsThroughSubscriberAndLineageReference(t *test
 	}
 	publisher := &selfDispatchPublisher{}
 	store := giteaadapter.NewMemoryInitiationStore()
+	serviceID := uuid.New()
 	initiator := giteaadapter.NewInitiator(
-		selfDispatchMirror{}, selfDispatchSecretResolver{}, publisher, signer, store,
+		selfDispatchMirror{}, selfDispatchSecretResolver{serviceID: serviceID}, publisher, signer, store,
 		giteaadapter.InitiatorConfig{
 			MirrorOwner:          "fleet",
 			WorkflowPath:         ".hive/workflows/build.yml",
@@ -71,7 +87,7 @@ func TestBahiaSelfDispatchRoundTripsThroughSubscriberAndLineageReference(t *test
 		zap.NewNop(),
 	)
 	request := controlplane.HiveCIBuildStartRequest{
-		BuildID: uuid.New(), ServiceID: uuid.New(),
+		BuildID: uuid.New(), ServiceID: serviceID,
 		RepositoryCoordinate: "team/repository", GitRef: "main", CredentialRef: uuid.New(),
 		RequesterPubkey: strings.Repeat("a", 64), SourceEventID: strings.Repeat("b", 64),
 	}

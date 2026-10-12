@@ -176,7 +176,7 @@ func localAdoptionView(t *testing.T, d *localHistoryDaemon) *service.LocalAdopti
 func localAdoptionService(t *testing.T, d *localHistoryDaemon, canonical service.AdoptionCanonicalPublisher, opts ...service.AdoptionServiceOption) *service.AdoptionService {
 	t.Helper()
 	if canonical == nil {
-		canonical = NewAdoptionCanonicalPublisher(d.projector, &nonceConfidentialEncryptor{}, zap.NewNop())
+		canonical = NewAdoptionCanonicalPublisher(d.projector, zap.NewNop())
 	}
 	return service.NewAdoptionService(canonical, localAdoptionView(t, d), nil, zap.NewNop(), opts...)
 }
@@ -372,7 +372,7 @@ func TestAdoptionCanonicalCrashResumeConvergesAtEveryStepBoundary(t *testing.T) 
 			dir := t.TempDir()
 			script := newRelayScript()
 			first := startLocalHistoryDaemon(t, dir, script)
-			canonical := &interruptedPublisher{AdoptionCanonicalPublisher: NewAdoptionCanonicalPublisher(first.projector, &nonceConfidentialEncryptor{}, zap.NewNop()), remaining: crashAfter}
+			canonical := &interruptedPublisher{AdoptionCanonicalPublisher: NewAdoptionCanonicalPublisher(first.projector, zap.NewNop()), remaining: crashAfter}
 			results, err := localAdoptionService(t, first, canonical).Import(ctx, adoptionImportRequest(server, "intent-1"))
 			require.ErrorIs(t, err, service.ErrAdoptionIncomplete)
 			require.True(t, results[0].Incomplete)

@@ -39,7 +39,6 @@ import (
 	routingAdapter "github.com/openagentsinc/bahia/internal/adapters/routing"
 	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	sbomAdapter "github.com/openagentsinc/bahia/internal/adapters/sbom"
-	secretsAdapter "github.com/openagentsinc/bahia/internal/adapters/secrets"
 	securityAdapter "github.com/openagentsinc/bahia/internal/adapters/security"
 	signetAdapter "github.com/openagentsinc/bahia/internal/adapters/signet"
 	"github.com/openagentsinc/bahia/internal/adapters/signing"
@@ -538,42 +537,55 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
-	// Secret encryptor: its AES key is HKDF-derived from the raw service key,
-	// so without in-process key material every operation fails with
-	// nostrutil.ErrServiceKeyMaterialRequired (bahia-cd0wr.4.7).
-	var secretEncryptor *secretsAdapter.Encryptor
-	if serviceKeyer != nil {
-		secretEncryptor, err = secretsAdapter.NewServiceEncryptor(serviceKeyer)
-		if err != nil {
-			return nil, fmt.Errorf("configuring secret encryption: %w", err)
-		}
-		if blocked := secretEncryptor.Unavailable(); blocked != nil {
-			logger.Warn("service secret store blocked: every secret read and write fails until the raw-key migration lands", zap.Error(blocked))
-		} else {
-			logger.Info("secrets encryption enabled")
-		}
+	// External secret store (docs/architecture/secret-store.md). Secret values
+	// configured through it never touch PostgreSQL, relays or intents.
+	secretStore, err := openSecretStore(ctx, cfg, servicePubkey, outboundAdmission, logger)
+	if err != nil {
+		return nil, fmt.Errorf("configuring secret store: %w", err)
 	}
+	secretStoreOwned := false
+	defer func() {
+		if secretStore != nil && !secretStoreOwned {
+			secretStore.Close()
+		}
+	}()
+	// secretValues is the seam consumers use; nil when no store is configured.
+	var secretValues secretstore.SecretStore
+	if secretStore != nil {
+		secretValues = secretStore
+	}
+	// secretResolver resolves a secret, by id, through its canonical record
+	// and the store. Every consumer resolves at use time; the canonical
+	// records are attached once the projector exists (UseRecords below).
+	secretResolver := secretstore.NewResolver(secretValues)
+	// secretText serves consumers whose APIs take secret text; it records
+	// each access in the PostgreSQL audit when PostgreSQL is configured, and
+	// an audit row it cannot write is logged, not fatal.
+	var secretAudit secretstore.Auditor
+	if secretRepo != nil {
+		secretAudit = secretRepo
+	}
+	secretText := secretstore.NewTextResolver(secretResolver, secretAudit, func(secretID uuid.UUID, err error) {
+		logger.Warn("secret access audit not recorded", zap.String("secret_id", secretID.String()), zap.Error(err))
+	})
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
-	// edge-route convergence needs the routing provider's API
-	// token (edge_routing.api_token_ref). That token is a secret value, which
-	// the canonical secret registry does not carry (it holds references); it
-	// exists only in the PostgreSQL secret store, decrypted with the service
-	// key. So convergence, and only convergence, is gated on the store being
-	// present; the desired route plan, canary probing and route state are
-	// canonical and keep running without it.
-	edgeRoutingConvergence := cfg.EdgeRouting.Enabled && secretRepo != nil && secretEncryptor != nil
+	// Edge-route convergence calls the routing provider's API with the
+	// token edge_routing.api_token_ref names. The token is a secret value:
+	// it lives in the secret store and is resolved on the first provider
+	// call. Without a store convergence stays suspended; the desired route
+	// plan, canary probing and route state are canonical and keep running.
+	edgeRoutingConvergence := cfg.EdgeRouting.Enabled && secretValues != nil
 	if edgeRoutingConvergence {
-		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretRepo, secretEncryptor, logger)
+		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretText, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configuring edge routing: %w", err)
 		}
 		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef), zap.Bool("internal_https", internalRouteBackend != nil))
 	} else if cfg.EdgeRouting.Enabled {
-		logger.Warn("edge routing convergence is suspended: the provider API token is a secret value held only in the PostgreSQL secret store; desired routes are not converged until it is reachable, route canary observation of them continues",
-			zap.String("reason", "edge_routing_secret_store_unavailable"),
-			zap.Bool("secret_store", secretRepo != nil), zap.Bool("secret_encryptor", secretEncryptor != nil))
+		logger.Warn("edge routing convergence is suspended: the provider API token is a secret value and no secret store is configured (secret_store.backend); desired routes are not converged, route canary observation of them continues",
+			zap.String("reason", "edge_routing_secret_store_unavailable"))
 	}
 
 	// Adopted workload orchestration is wired further down, once the Nostr
@@ -587,7 +599,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
 		var runtimeApplyLockOpts []service.RuntimeLifecycleOption
-		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretEncryptor))
+		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleSecrets(secretRepo, secretResolver))
 		runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeLifecycleDeploymentUnits(deploymentUnitRepo))
 		if runtimeApplyLock != nil {
 			runtimeApplyLockOpts = append(runtimeApplyLockOpts, service.WithRuntimeApplyLock(runtimeApplyLock))
@@ -792,22 +804,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
 
-	// External secret store (docs/architecture/secret-store.md). Secret values
-	// configured through it never touch PostgreSQL, relays or intents.
-	secretStore, err := openSecretStore(ctx, cfg, servicePubkey, outboundAdmission, logger)
-	if err != nil {
-		return nil, fmt.Errorf("configuring secret store: %w", err)
-	}
-	secretStoreOwned := false
-	defer func() {
-		if secretStore != nil && !secretStoreOwned {
-			secretStore.Close()
-		}
-	}()
-	// secretValues is the seam consumers use; nil when no store is configured.
-	var secretValues secretstore.SecretStore
 	if secretStore != nil {
-		secretValues = secretStore
 		healthProvider.RegisterCheck("secret_store", secretStoreHealthCheck(secretStore))
 		bgManager.RegisterWithOptions(&secretStoreProbeRunner{store: secretStore, timeout: cfg.SecretStore.Signet.RequestTimeout, logger: logger}, RunnerRequired(false))
 	}
@@ -901,7 +898,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				Details: map[string]string{"provider": cfg.EdgeRouting.Provider, "convergence": fmt.Sprintf("%t", edgeRoutingConvergence)}}
 			if !edgeRoutingConvergence {
 				check.Status = HealthStatusWarn
-				check.Message = "edge-route convergence suspended: the provider API token is a secret value held only in the PostgreSQL secret store; route canary observation continues"
+				check.Message = "edge-route convergence suspended: the provider API token is a secret value and no secret store is configured (secret_store.backend); route canary observation continues"
 			}
 			return check
 		})
@@ -1063,7 +1060,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// each Bahia-owned sidecar via NIP-86 setintentauthors.
 	var intentAuthorsSyncer *controlplane.IntentAuthorsSyncer
 	if len(enabledDomains) > 0 {
-		intentAuthorsSyncer = buildIntentAuthorsSyncer(ctx, cfg, trustSet, secretRepo, secretEncryptor, logger)
+		intentAuthorsSyncer = buildIntentAuthorsSyncer(cfg, trustSet, secretText, logger)
 		if intentAuthorsSyncer != nil {
 			bgManager.RegisterWithOptions(intentAuthorsSyncer, RunnerRequired(false))
 			healthProvider.RegisterCheck("intent_authors_sync", func() HealthCheck {
@@ -1250,7 +1247,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var packageRegistrySvc *service.PackageRegistryService
 	if cfg.Packages.Enabled {
 		packageProjection = repository.NewPgPackageControlPlaneRepository(pool)
-		packageBackends, err := packagefactory.BuildRegistryWithSecrets(ctx, cfg.Packages, secretsAdapter.NewResolver(secretRepo, secretEncryptor))
+		packageBackends, err := packagefactory.BuildRegistryWithSecrets(ctx, cfg.Packages, secretText)
 		if err != nil {
 			return nil, fmt.Errorf("building package backends: %w", err)
 		}
@@ -1388,11 +1385,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Warn("adoption is disabled: the daemon has no service key to read its canonical state with", zap.Error(supervisionStateErr))
 	}
 	if cfg.Adoption.Enabled && supervisionFromLocalState {
-		adoptionCanonical = nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, nil, logger)
+		adoptionCanonical = nostrAdapter.NewAdoptionCanonicalPublisher(nostrProjector, logger)
 		adoptionOptions := []service.AdoptionServiceOption{
 			service.WithAdoptionRuntimeConfig(cfg.Runtime, cfg.Adoption.AllowRawDockerHosts),
 			service.WithAdoptionComposeTakeoverPolicy(cfg.Adoption.AllowComposeTakeover),
-			service.WithAdoptionSecrets(secretRepo, secretEncryptor),
+
 			service.WithAdoptionOrganizations(orgRepo),
 		}
 		if dbAvailable && pool != nil {
@@ -1725,9 +1722,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		registerOCKRotationHealthCheck(healthProvider, ockManager.PendingRotations)
 		confidentialEncryptor = controlplane.NewConfidentialEncryptor(ockManager, logger)
 		f74bCanonical.SetEncryptor(confidentialEncryptor)
-		if adoptionCanonical != nil {
-			adoptionCanonical.SetEncryptor(confidentialEncryptor)
-		}
 	} else if enabledDomains["org"] {
 		logger.Error("org domain requires control-plane signer for confidential state; " +
 			"disabling org domain to prevent plaintext state publication")
@@ -2259,9 +2253,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			Details: map[string]string{
 				"sql_index": fmt.Sprintf("%t", dbAvailable && pool != nil),
 				// Build initiation resolves repository credentials (secret
-				// values) from the PostgreSQL secret store; without it new
+				// values) through the secret store; without one new
 				// initiations fail closed at that step.
-				"initiator_credential_store": fmt.Sprintf("%t", secretRepo != nil && secretEncryptor != nil),
+				"initiator_credential_store": fmt.Sprintf("%t", secretValues != nil),
 			}}
 		if hiveRepo == nil {
 			check.Message = "Hive-CI ingestion disabled: it needs hiveci.enabled, the Nostr projector and the confidential encryptor"
@@ -2384,6 +2378,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// handler reconciles against, come from the daemon's own canonical
 	// records in the local event store, not PostgreSQL.
 	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
+	secretResolver.UseRecords(secretView)
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
 	if secretIndex != nil {
 		// Store-backed secrets recorded while PostgreSQL was absent get their
@@ -2399,14 +2394,12 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 
 	// Register the secret intent handler when the secret domain is enabled.
-	// With a secret store it needs no database: intents carry only
-	// credential references. Without one, the legacy value path needs the
-	// PostgreSQL secret store.
-	if enabledDomains["secret"] && (secretValues != nil || secretRepo != nil) {
+	// Intents carry only credential references and need no database; without
+	// a secret store creates and updates are refused with the reason.
+	if enabledDomains["secret"] {
 		handlerCfg := controlplane.SecretIntentHandlerConfig{
 			Registry:   secretRepo,
 			StoreIndex: secretIndexOrNil(secretIndex),
-			Encryptor:  secretEncryptor,
 			Store:      secretValues,
 			Records:    secretView,
 			Publisher:  secretCanonical,
@@ -2414,7 +2407,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			Logger:     logger,
 		}
 		intentProcessor.RegisterHandler("secret", controlplane.NewSecretIntentHandler(handlerCfg))
-		logger.Info("secret intent handler registered", zap.Bool("secret_store", secretValues != nil), zap.Bool("sql_secret_store", secretRepo != nil))
+		logger.Info("secret intent handler registered", zap.Bool("secret_store", secretValues != nil), zap.Bool("sql_secret_index", secretRepo != nil))
 	}
 
 	// NotificationCanonicalPublisher strips sensitive fields (webhook URLs,
@@ -2732,7 +2725,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if enabledDomains["sbom"] && sbomAsyncRunner != nil {
 		intentProcessor.RegisterHandler("sbom", controlplane.NewSBOMIntentHandler(sbomAsyncRunner))
 	}
-	relayAdminClient := buildRelayAdminClient(ctx, cfg, secretRepo, secretEncryptor, logger)
+	relayAdminClient := buildRelayAdminClient(cfg, secretText)
 	relaySettingsHandlers := controlplane.NewRelaySettingsHandlers(controlplane.RelaySettingsHandlerConfig{
 		Config: cfg, AdminClient: relayAdminClient, ProjectionStore: relayPolicyProjectionRepo,
 		ServicePubkey: servicePubkey, Logger: logger, ConfigFabric: configFabricSvc,
@@ -2771,10 +2764,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			logger.Info("gift-wrap intent ingress wired to ContextVM transport")
 		}
 		encryptedRouteHandlers := controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
-			Secrets:       secretRepo,
-			Encryptor:     secretEncryptor,
 			SecretRecords: secretView,
 			SecretStore:   secretValues,
+			SecretValues:  secretResolver,
+			SecretAudit:   secretAudit,
 			Runs:          runRepo,
 			RunLogs:       runLogService,
 			Artifacts:     artifactRepo,
@@ -2798,56 +2791,36 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		// The initiation journal (prepared signed events, pinned
 		// job, per-run publisher key in the service-only layer) is a
 		// confidential record in the local event store; the build id is
-		// derived from the signed request. PostgreSQL is an optional index
-		// rebuilt from the journal after warm start.
+		// derived from the signed request.
 		var initiationStore giteaAdapter.InitiationStore
 		if nostrProjector != nil && confidentialEncryptor != nil {
 			journal := hiveCanonical
 			if journal == nil {
 				journal = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 			}
-			var initiationIndex giteaAdapter.InitiationIndex
-			if dbAvailable && pool != nil && secretEncryptor != nil {
-				initiationIndex = giteaAdapter.NewPgInitiationStore(pool, secretEncryptor)
-			}
-			canonicalInitiations := giteaAdapter.NewCanonicalInitiationStore(journal, initiationIndex, logger)
-			if initiationIndex != nil {
-				nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
-					if err := canonicalInitiations.RebuildIndex(ctx); err != nil {
-						logger.Warn("Hive-CI initiation SQL index rebuild failed", zap.Error(err))
-					}
-				})
-			}
-			initiationStore = canonicalInitiations
+			initiationStore = giteaAdapter.NewCanonicalInitiationStore(journal, logger)
 		}
 		if cfg.HiveCI.Initiator.Enabled && initiationStore == nil {
 			logger.Error("Hive-CI build initiator disabled: the initiation journal needs the Nostr projector and the confidential encryptor",
 				zap.String("reason", "hiveci_initiation_journal_unavailable"))
 		}
-		// the initiator's only database dependency is credential
-		// resolution. The upstream repository credential and the mirror-read
-		// password are secret values, which the canonical secret registry does
-		// not carry (it holds references); they live only in the PostgreSQL
-		// secret store. The journal, build identity and resume of a prepared
-		// initiation are DB-less, so the initiator is wired whenever the
-		// journal exists and credential resolution alone fails closed without
-		// the store (giteaAdapter.ErrSecretStoreUnavailable).
-		hiveCICredentialStore := secretRepo != nil && secretEncryptor != nil
+		// The upstream repository credential and the mirror-read password are
+		// secret values: they resolve through the secret store at initiation
+		// (secretText) and fail closed without one. The journal, build
+		// identity and resume of a prepared initiation need neither the store
+		// nor PostgreSQL, so the initiator is wired whenever the journal exists.
 		if cfg.HiveCI.Initiator.Enabled && initiationStore != nil {
 			dependencyAuthorizations, err := hiveCIBuildDependencyAuthorizations(ctx, cfg.HiveCI.Policies, serviceRepo)
 			if err != nil {
 				return nil, fmt.Errorf("configure Hive-CI service build dependencies: %w", err)
 			}
-			var credentialResolver giteaAdapter.SecretResolver = giteaAdapter.SecretStoreUnavailable{}
-			if hiveCICredentialStore {
-				credentialResolver = secretsAdapter.NewResolver(secretRepo, secretEncryptor)
-			} else {
-				logger.Warn("Hive-CI build initiator has no secret store: new initiations fail closed at repository credential resolution until PostgreSQL is reachable; journaled initiations still resume",
+			if secretValues == nil {
+				logger.Warn("Hive-CI build initiator has no secret store: new initiations fail closed at repository credential resolution until secret_store is configured; journaled initiations still resume",
 					zap.String("reason", "hiveci_credential_store_unavailable"))
 			}
 			hiveCIInitiator = giteaAdapter.NewInitiator(
 				giteaAdapter.NewAPIClient(cfg.HiveCI.Initiator.GiteaBaseURL, cfg.HiveCI.Initiator.GiteaToken, nil),
-				credentialResolver,
+				secretText,
 				controlPlanePool,
 				serviceKeyer,
 				initiationStore,
@@ -2874,7 +2847,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			hiveCIBuildStarter = hiveCIInitiator
 			logger.Info("fleet gitea private-mirror HiveCI build initiator enabled",
 				zap.Bool("initiation_sql_index", dbAvailable && pool != nil),
-				zap.Bool("credential_store", hiveCICredentialStore),
+				zap.Bool("credential_store", secretValues != nil),
 				zap.String("gitea_base_url", cfg.HiveCI.Initiator.GiteaBaseURL),
 				zap.String("mirror_owner", cfg.HiveCI.Initiator.MirrorOwner),
 				zap.String("workflow_path", cfg.HiveCI.Initiator.WorkflowPath),
@@ -4226,27 +4199,14 @@ func (a dnsRepositoryPersistenceAdapter) ExpireOverride(ctx context.Context, id 
 	return a.overrides.Expire(ctx, id, at)
 }
 
-func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, internalCfg config.InternalRoutingConfig, secretRepo repository.SecretRepository, encryptor *secretsAdapter.Encryptor, logger *zap.Logger) (*service.PublicRoutePlanner, *routingAdapter.NginxBackend, error) {
-	resolver := secretsAdapter.NewResolver(secretRepo, encryptor)
-	tokenPayload, err := resolver.ResolveSecret(ctx, cfg.APITokenRef)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve Cloudflare API token reference: %w", err)
-	}
-	token := strings.TrimSpace(tokenPayload)
-	if strings.HasPrefix(token, "{") {
-		var credentials map[string]any
-		if err := json.Unmarshal([]byte(token), &credentials); err != nil {
-			return nil, nil, fmt.Errorf("decode Cloudflare credential bundle")
+func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, internalCfg config.InternalRoutingConfig, secrets *secretstore.TextResolver, logger *zap.Logger) (*service.PublicRoutePlanner, *routingAdapter.NginxBackend, error) {
+	apiToken := newHeldSecret(secrets, cfg.APITokenRef, "edge routing API token (edge_routing.api_token_ref)")
+	token := func(ctx context.Context) (string, error) {
+		payload, err := apiToken.get(ctx)
+		if err != nil {
+			return "", err
 		}
-		for _, key := range []string{"api_token", "token", "APIToken"} {
-			if value, ok := credentials[key].(string); ok && strings.TrimSpace(value) != "" {
-				token = strings.TrimSpace(value)
-				break
-			}
-		}
-	}
-	if token == "" || strings.HasPrefix(token, "{") {
-		return nil, nil, fmt.Errorf("cloudflare credential secret does not contain an API token")
+		return cloudflareAPIToken(payload)
 	}
 	zoneIDs := make(map[string]string, len(cfg.Zones))
 	zones := make([]service.PublicRouteZone, 0, len(cfg.Zones))
@@ -4309,6 +4269,28 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		return nil, nil, err
 	}
 	return planner, nginx, nil
+}
+
+// cloudflareAPIToken extracts the API token from the edge routing secret:
+// the token itself, or a JSON bundle carrying it.
+func cloudflareAPIToken(payload string) (string, error) {
+	token := strings.TrimSpace(payload)
+	if strings.HasPrefix(token, "{") {
+		var credentials map[string]any
+		if err := json.Unmarshal([]byte(token), &credentials); err != nil {
+			return "", fmt.Errorf("decode Cloudflare credential bundle")
+		}
+		for _, key := range []string{"api_token", "token", "APIToken"} {
+			if value, ok := credentials[key].(string); ok && strings.TrimSpace(value) != "" {
+				token = strings.TrimSpace(value)
+				break
+			}
+		}
+	}
+	if token == "" || strings.HasPrefix(token, "{") {
+		return "", fmt.Errorf("cloudflare credential secret does not contain an API token")
+	}
+	return token, nil
 }
 
 func internalRoutingConfigHash(cfg config.InternalRoutingConfig) string {
@@ -5237,19 +5219,8 @@ func (r *controlplaneRunner) Run(ctx context.Context) error {
 	return r.reactor.Run(ctx)
 }
 
-func buildRelayAdminClient(ctx context.Context, cfg *config.Config, secretRepo repository.SecretRepository, secretEncryptor *secretsAdapter.Encryptor, logger *zap.Logger) controlplane.RelayAdminCaller {
+func buildRelayAdminClient(cfg *config.Config, secrets *secretstore.TextResolver) controlplane.RelayAdminCaller {
 	if cfg == nil || !cfg.Nostr.RelayAdministration.Enabled {
-		return nil
-	}
-	resolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
-	privateKey, err := resolver.ResolveSecret(ctx, cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef)
-	if err != nil {
-		logger.Warn("nip-86 relay administration disabled because administrator private key could not be resolved", zap.Error(err))
-		return nil
-	}
-	adminSigner, err := nostrutil.NewLocalKeyer(privateKey)
-	if err != nil {
-		logger.Warn("nip-86 relay administration disabled because the administrator private key is invalid", zap.Error(err))
 		return nil
 	}
 	targets := make([]relayadmin.Target, 0, len(cfg.Nostr.RelayAdministration.Targets))
@@ -5261,17 +5232,7 @@ func buildRelayAdminClient(ctx context.Context, cfg *config.Config, secretRepo r
 			AdministratorPubkeys: target.AdministratorPubkeys,
 		})
 	}
-	client, err := relayadmin.NewClient(relayadmin.Config{
-		Enabled:    true,
-		Signer:     adminSigner,
-		Targets:    targets,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
-	})
-	if err != nil {
-		logger.Warn("nip-86 relay administration disabled because client validation failed", zap.Error(err))
-		return nil
-	}
-	return client
+	return newHeldRelayAdmin(secrets, cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef, targets)
 }
 
 type encryptedRequestTransportRunner struct {
@@ -5506,10 +5467,11 @@ func newDocsRelayQuerier(pool *nostrAdapter.RelayPool, pubkey string, logger *za
 
 // buildIntentAuthorsSyncer creates an IntentAuthorsSyncer that pushes the
 // TrustSet's principal set to Bahia-owned sidecar relays via NIP-86. Returns
-// nil if relay administration is disabled, has no Bahia-owned targets, or the
-// admin private key cannot be resolved. In those cases the sidecar's intent
-// authors set starts empty, and only admin-allowlisted pubkeys can publish.
-func buildIntentAuthorsSyncer(ctx context.Context, cfg *config.Config, trustSet *controlplane.TrustSet, secretRepo repository.SecretRepository, secretEncryptor *secretsAdapter.Encryptor, logger *zap.Logger) *controlplane.IntentAuthorsSyncer {
+// nil if relay administration is disabled or has no Bahia-owned targets; then
+// the sidecar's intent authors set starts empty, and only admin-allowlisted
+// pubkeys can publish. The administrator key resolves through the secret
+// store on the first sync; until it does, syncs fail closed.
+func buildIntentAuthorsSyncer(cfg *config.Config, trustSet *controlplane.TrustSet, secrets *secretstore.TextResolver, logger *zap.Logger) *controlplane.IntentAuthorsSyncer {
 	if cfg == nil || !cfg.Nostr.RelayAdministration.Enabled {
 		return nil
 	}
@@ -5532,28 +5494,7 @@ func buildIntentAuthorsSyncer(ctx context.Context, cfg *config.Config, trustSet 
 		return nil
 	}
 
-	resolver := secretsAdapter.NewResolver(secretRepo, secretEncryptor)
-	privateKey, err := resolver.ResolveSecret(ctx, cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef)
-	if err != nil {
-		logger.Warn("intent authors syncer disabled: administrator private key could not be resolved", zap.Error(err))
-		return nil
-	}
-	adminSigner, err := nostrutil.NewLocalKeyer(privateKey)
-	if err != nil {
-		logger.Warn("intent authors syncer disabled: administrator private key is invalid", zap.Error(err))
-		return nil
-	}
-
-	client, err := relayadmin.NewClient(relayadmin.Config{
-		Enabled:    true,
-		Signer:     adminSigner,
-		Targets:    bahiaOwnedTargets,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
-	})
-	if err != nil {
-		logger.Warn("intent authors syncer disabled: relay admin client validation failed", zap.Error(err))
-		return nil
-	}
+	client := newHeldRelayAdmin(secrets, cfg.Nostr.RelayAdministration.AdministratorPrivateKeyRef, bahiaOwnedTargets)
 
 	targetRefs := make([]string, 0, len(bahiaOwnedTargets))
 	for _, t := range bahiaOwnedTargets {

@@ -68,7 +68,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	// TestSecurityRetireFailedRetryableMigrationRoundTrip and
 	// TestNostrPublishTargetMigrationRoundTrip; roll them back so 000070's
 	// guard is the latest below.
-	for _, expected := range []string{"000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
+	for _, expected := range []string{"000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
 		rolled, downErr := Down(ctx, pool, logger, DownOptions{Confirm: true})
 		require.NoError(t, downErr)
 		require.Equal(t, []string{expected}, rolled)
@@ -149,7 +149,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys",
+		"000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys",
 		"000079_f74a_hot_observation_immutable", "000078_f74a_backdated_successor", "000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation",
 		"000074_ml_model_version_revision",
 		"000073_sbom_pending_publication", "000072_security_retire_failed_retryable",

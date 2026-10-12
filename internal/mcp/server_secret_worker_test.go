@@ -7,8 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
@@ -35,14 +33,6 @@ func (r *testSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Servi
 	}
 	copy := *secret
 	return &copy, nil
-}
-
-func (r *testSecretRepo) GetCurrentVersion(_ context.Context, secretID uuid.UUID) (*domain.SecretVersion, error) {
-	secret, ok := r.secrets[secretID]
-	if !ok {
-		return nil, nil
-	}
-	return &domain.SecretVersion{ID: uuid.New(), SecretID: secretID, Version: secret.Version, EncryptedValue: secret.EncryptedValue, EncryptionMethod: secret.EncryptionMethod, CreatedBy: secret.CreatedBy, CreatedAt: secret.UpdatedAt}, nil
 }
 
 func (r *testSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
@@ -115,22 +105,8 @@ func (r *testSecretRepo) DeleteByName(_ context.Context, serviceID uuid.UUID, en
 	return nil
 }
 
-func newTestMCPSecretServer(t *testing.T) (*Server, *testSecretRepo, *secrets.Encryptor) {
-	t.Helper()
-	repo := newTestSecretRepo()
-	encryptor, err := secrets.NewEncryptor("3333333333333333333333333333333333333333333333333333333333333333")
-	if err != nil {
-		t.Fatalf("NewEncryptor: %v", err)
-	}
-	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{
-		SecretsRepo: repo,
-		Encryptor:   encryptor,
-	})
-	return server, repo, encryptor
-}
-
 func TestGetTools_IncludesSecretCRUD(t *testing.T) {
-	server, _, _ := newTestMCPSecretServer(t)
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	required := map[string]bool{
 		"bahia_list_secrets":  false,
 		"bahia_create_secret": false,
@@ -153,202 +129,35 @@ func TestGetTools_IncludesSecretCRUD(t *testing.T) {
 	}
 }
 
-func TestCallTool_SecretCRUD(t *testing.T) {
+// Secret tools only publish reference intents: without an intent processor
+// they fail closed, and a value argument is refused before any intent is
+// built.
+func TestCallTool_SecretToolsAreReferenceOnlyIntents(t *testing.T) {
 	ctx := authorizedMCPContext()
-	server, repo, encryptor := newTestMCPSecretServer(t)
-	serviceID := uuid.New()
-	envID := uuid.New()
-
-	createRes, err := server.CallTool(ctx, "bahia_create_secret", map[string]interface{}{
-		"service_id":     serviceID.String(),
-		"environment_id": envID.String(),
-		"name":           "DATABASE_URL",
-		"value":          "postgres://user:pass@example/db",
-	})
-	if err != nil {
-		t.Fatalf("create err: %v", err)
-	}
-	if createRes.IsError {
-		t.Fatalf("create returned error: %s", createRes.Content[0].Text)
-	}
-	createPayload := decodeResultMap(t, createRes)
-	secretID := uuid.MustParse(createPayload["secret_id"].(string))
-	if strings.Contains(createRes.Content[0].Text, "postgres://user:pass") {
-		t.Fatalf("create response leaked plaintext secret: %s", createRes.Content[0].Text)
-	}
-	stored := repo.secrets[secretID]
-	if stored == nil {
-		t.Fatalf("secret was not persisted")
-	}
-	plaintext, err := encryptor.Decrypt(stored.EncryptedValue, stored.EncryptionMethod)
-	if err != nil {
-		t.Fatalf("decrypt created secret: %v", err)
-	}
-	if plaintext != "postgres://user:pass@example/db" || stored.Version != 1 || stored.CreatedBy != "mcp-agent" {
-		t.Fatalf("unexpected stored secret metadata or decrypted value mismatch: version=%d created_by=%q", stored.Version, stored.CreatedBy)
-	}
-	fixture := attachCanonicalMCPFixture(t, server)
-	canonicalPublisher := nostrpool.NewSecretCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server), mcpSecretOrgResolver{uuid.New().String()}, zap.NewNop())
-	if err := canonicalPublisher.PublishSecretRef(ctx, stored.ToRef()); err != nil {
-		t.Fatal(err)
-	}
-
-	listRes, err := server.CallTool(ctx, "bahia_list_secrets", map[string]interface{}{"service_id": serviceID.String()})
-	if err != nil {
-		t.Fatalf("list err: %v", err)
-	}
-	if listRes.IsError {
-		t.Fatalf("list returned error: %s", listRes.Content[0].Text)
-	}
-	listPayload := decodeResultMap(t, listRes)
-	if int(listPayload["total"].(float64)) != 1 {
-		t.Fatalf("expected one secret, got %#v", listPayload)
-	}
-	secretsList := listPayload["secrets"].([]interface{})
-	secretMeta := secretsList[0].(map[string]interface{})
-	if _, ok := secretMeta["encrypted_value"]; ok {
-		t.Fatalf("list response leaked encrypted_value: %#v", secretMeta)
-	}
-	if secretMeta["environment_id"] != envID.String() || secretMeta["name"] != "DATABASE_URL" {
-		t.Fatalf("unexpected secret metadata: %#v", secretMeta)
-	}
-
-	updateRes, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
-		"secret_id": secretID.String(),
-		"value":     "postgres://user:new-pass@example/db",
-	})
-	if err != nil {
-		t.Fatalf("update err: %v", err)
-	}
-	if updateRes.IsError {
-		t.Fatalf("update returned error: %s", updateRes.Content[0].Text)
-	}
-	updatePayload := decodeResultMap(t, updateRes)
-	if int(updatePayload["version"].(float64)) != 2 {
-		t.Fatalf("expected version 2, got %#v", updatePayload)
-	}
-	updated := repo.secrets[secretID]
-	plaintext, err = encryptor.Decrypt(updated.EncryptedValue, updated.EncryptionMethod)
-	if err != nil {
-		t.Fatalf("decrypt updated secret: %v", err)
-	}
-	if plaintext != "postgres://user:new-pass@example/db" {
-		t.Fatalf("secret decrypted value was not updated")
-	}
-	secondUpdate, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
-		"secret_id": secretID.String(),
-		"value":     "postgres://user:third-pass@example/db",
-	})
-	if err != nil || secondUpdate.IsError {
-		t.Fatalf("second update after optimistic version increment failed: %v, %#v", err, secondUpdate)
-	}
-	if version := int(decodeResultMap(t, secondUpdate)["version"].(float64)); version != 3 {
-		t.Fatalf("second update returned version %d, want 3", version)
-	}
-	if repo.secrets[secretID].Version != 3 {
-		t.Fatal("persisted secret version drifted after consecutive updates")
-	}
-
-	deleteRes, err := server.CallTool(ctx, "bahia_delete_secret", map[string]interface{}{"secret_id": secretID.String()})
-	if err != nil {
-		t.Fatalf("delete err: %v", err)
-	}
-	if deleteRes.IsError {
-		t.Fatalf("delete returned error: %s", deleteRes.Content[0].Text)
-	}
-	if _, ok := repo.secrets[secretID]; ok {
-		t.Fatalf("secret was not deleted")
-	}
-}
-
-func TestCallTool_UpdateSecretRefusesV2AndUnknownWithoutMutation(t *testing.T) {
-	ctx := authorizedMCPContext()
-	server, repo, _ := newTestMCPSecretServer(t)
-	for _, method := range []domain.EncryptionMethod{domain.EncryptionAES256V2, "unknown"} {
-		t.Run(string(method), func(t *testing.T) {
-			id := uuid.New()
-			original := &domain.ServiceSecret{
-				ID: id, ServiceID: uuid.New(), Name: "TOKEN", Version: 4,
-				EncryptedValue: []byte("existing-ciphertext"), EncryptionMethod: method,
-				UpdatedAt: time.Unix(123, 0),
-			}
-			repo.secrets[id] = original
-			const proposed = "new-sensitive-value"
-			result, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
-				"secret_id": id.String(), "value": proposed,
-			})
-			if err != nil || result == nil || !result.IsError {
-				t.Fatalf("expected update refusal, err=%v result=%#v", err, result)
-			}
-			if strings.Contains(result.Content[0].Text, proposed) {
-				t.Fatal("update refusal leaked proposed plaintext")
-			}
-			stored := repo.secrets[id]
-			if stored != original || stored.Version != 4 || stored.EncryptionMethod != method ||
-				string(stored.EncryptedValue) != "existing-ciphertext" || !stored.UpdatedAt.Equal(time.Unix(123, 0)) {
-				t.Fatal("refused update mutated stored secret")
-			}
-		})
-	}
-}
-
-func TestCallTool_UpdateLegacyNIP44RelabelsReplacementAsAES(t *testing.T) {
-	ctx := authorizedMCPContext()
-	server, repo, encryptor := newTestMCPSecretServer(t)
-	id := uuid.New()
-	repo.secrets[id] = &domain.ServiceSecret{
-		ID: id, ServiceID: uuid.New(), Name: "TOKEN", Version: 1,
-		EncryptedValue: []byte("legacy-nip44-ciphertext"), EncryptionMethod: domain.EncryptionNIP44,
-	}
-	result, err := server.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
-		"secret_id": id.String(), "value": "replacement",
-	})
-	if err != nil || result == nil || result.IsError {
-		t.Fatalf("legacy update failed, err=%v result=%#v", err, result)
-	}
-	stored := repo.secrets[id]
-	if stored.Version != 2 || stored.EncryptionMethod != domain.EncryptionAES256 {
-		t.Fatalf("legacy replacement has wrong version/method: %d %q", stored.Version, stored.EncryptionMethod)
-	}
-	plain, err := encryptor.Decrypt(stored.EncryptedValue, stored.EncryptionMethod)
-	if err != nil || plain != "replacement" {
-		t.Fatal("legacy replacement is not readable with its stored method")
-	}
-}
-
-func TestCallTool_SecretValidationAndConfiguration(t *testing.T) {
-	ctx := authorizedMCPContext()
-	configured, _, _ := newTestMCPSecretServer(t)
-
-	result, err := configured.CallTool(ctx, "bahia_create_secret", map[string]interface{}{
-		"service_id": uuid.New().String(),
-		"value":      "missing-name",
-	})
-	if err != nil {
-		t.Fatalf("call err: %v", err)
-	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "name is required") {
-		t.Fatalf("expected name validation error, got %#v", result)
-	}
-
-	result, err = configured.CallTool(ctx, "bahia_update_secret", map[string]interface{}{
-		"secret_id": "not-a-uuid",
-		"value":     "new-value",
-	})
-	if err != nil {
-		t.Fatalf("call err: %v", err)
-	}
-	if !result.IsError || !strings.Contains(result.Content[0].Text, "invalid secret_id") {
-		t.Fatalf("expected invalid secret_id error, got %#v", result)
-	}
-
 	unconfigured := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
-	result, err = unconfigured.CallTool(ctx, "bahia_list_secrets", map[string]interface{}{"service_id": uuid.New().String()})
-	if err != nil {
-		t.Fatalf("call err: %v", err)
+	for _, tool := range []string{"bahia_create_secret", "bahia_update_secret", "bahia_delete_secret"} {
+		result, err := unconfigured.CallTool(ctx, tool, map[string]interface{}{"secret_id": uuid.New().String()})
+		if err != nil {
+			t.Fatalf("%s: %v", tool, err)
+		}
+		if !result.IsError || !strings.Contains(result.Content[0].Text, "intent processor is not configured") {
+			t.Fatalf("%s without an intent processor = %#v", tool, result)
+		}
 	}
-	if result.IsError || int(decodeResultMap(t, result)["total"].(float64)) != 0 {
-		t.Fatalf("expected empty store-backed secrets, got %#v", result)
+	for _, tool := range []string{"bahia_create_secret", "bahia_update_secret"} {
+		for _, schema := range unconfigured.GetTools() {
+			if schema.Name == tool {
+				if _, ok := schema.InputSchema["properties"].(map[string]interface{})["value"]; ok {
+					t.Fatalf("%s still accepts a value", tool)
+				}
+			}
+		}
+		_, err := unconfigured.intentWriteForTool(ctx, tool, map[string]interface{}{
+			"service_id": uuid.New().String(), "secret_id": uuid.New().String(), "name": "TOKEN", "value": "hunter2",
+		}, uuid.NewString())
+		if err == nil || !strings.Contains(err.Error(), "never sent to Bahia") || strings.Contains(err.Error(), "hunter2") {
+			t.Fatalf("%s with a value = %v", tool, err)
+		}
 	}
 }
 

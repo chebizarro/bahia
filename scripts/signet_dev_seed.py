@@ -32,10 +32,9 @@ import signal
 import struct
 import subprocess
 import sys
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from signet_live_interop import management, private_file, pubkey, run, wait_tcp  # noqa: E402
+from signet_live_interop import management, private_file, pubkey, run, wait_management, wait_tcp  # noqa: E402
 
 OWNER = "bahia-vault"
 SYSTEM_PURPOSES = ("assistant-transcript", "confidential-dedupe")
@@ -77,19 +76,6 @@ def signet_env(root):
                SIGNET_BUNKER_NSEC_FILE=str(root / "bunker.key"),
                SIGNET_PROVISIONER_NSEC_FILE=str(root / "provisioner.key"))
     return env
-
-
-def wait_management(ctl, config, env, signetd):
-    """Readiness is an authenticated management round trip, not a guess."""
-    for _ in range(50):
-        if signetd.poll() is not None:
-            raise RuntimeError("signetd exited during startup; private log withheld")
-        try:
-            management(ctl, config, env, "status")
-            return
-        except RuntimeError:
-            time.sleep(0.2)
-    raise RuntimeError("signetd did not answer authenticated management status")
 
 
 def seed(ctl, config, env, requester_pk, system_keys, key_id):

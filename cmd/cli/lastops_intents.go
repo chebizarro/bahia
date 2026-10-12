@@ -193,6 +193,9 @@ func runAdoptionImportIntent(cmd *cobra.Command, req client.AdoptionImportReques
 	if req.ImportAll {
 		content["import_all"] = true
 	}
+	if len(req.NonSecretEnvKeys) > 0 {
+		content["non_secret_env_keys"] = req.NonSecretEnvKeys
+	}
 	id, data, err := publishLastOpIntent(cmd, "adoption", "import", "adoption:"+org, org, req.IdempotencyKey, content)
 	if err != nil {
 		return nil, err
