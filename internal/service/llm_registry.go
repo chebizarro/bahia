@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	llmadapter "github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -684,70 +683,6 @@ func selectPreviousDeployedDifferentRelease(currentDesiredReleaseID uuid.UUID, d
 	return uuid.Nil, false
 }
 
-func (s *LLMRegistryService) RecordObservation(ctx context.Context, obs *domain.LLMRouteObservation) error {
-	if s.mlBacked() {
-		if obs == nil {
-			return fmt.Errorf("LLM route observation is required")
-		}
-		return s.ml.RecordObservation(ctx, LLMObservationToMLInferenceObservation(obs))
-	}
-	if obs == nil {
-		return fmt.Errorf("LLM route observation is required")
-	}
-	previousState, err := s.state.Get(ctx, obs.RouteID, obs.EnvironmentID)
-	if err != nil {
-		return err
-	}
-	previousDrift := domain.DriftStatusUnknown
-	if previousState != nil {
-		previousDrift = previousState.DriftStatus
-	}
-	previousLatest, err := s.observations.GetLatest(ctx, obs.RouteID, obs.EnvironmentID)
-	if err != nil {
-		return err
-	}
-	if obs.BackendHealth == "" {
-		obs.BackendHealth = domain.HealthStatusUnknown
-	}
-	if obs.GatewayStatus == "" {
-		obs.GatewayStatus = domain.GatewayRouteStatusUnknown
-	}
-	if obs.Source == "" {
-		obs.Source = "api"
-	}
-	if err := s.observations.Create(ctx, obs); err != nil {
-		return err
-	}
-	s.publish(ctx, events.EventLLMRouteObservation, obs.ID.String(), obs)
-	if previousLatest != nil && obs.ObservedAt.Before(previousLatest.ObservedAt) {
-		return nil
-	}
-	state := previousState
-	if state == nil {
-		state = &domain.LLMRouteState{RouteID: obs.RouteID, EnvironmentID: obs.EnvironmentID}
-	}
-	state.CurrentObservationID = &obs.ID
-	state.BackendKind = obs.BackendKind
-	state.BackendEndpoint = obs.BackendEndpoint
-	state.BackendHealth = obs.BackendHealth
-	state.GatewayStatus = obs.GatewayStatus
-	state.GatewayTarget = obs.GatewayTarget
-	now := time.Now().UTC()
-	state.LastReconciledAt = &now
-	state.DriftStatus = s.computeDriftStatus(ctx, state, obs)
-	if err := s.state.Upsert(ctx, state); err != nil {
-		return err
-	}
-	if previousDrift != domain.DriftStatusDrifted && state.DriftStatus == domain.DriftStatusDrifted {
-		s.publish(ctx, events.EventLLMRouteDriftDetected, obs.RouteID.String()+":"+obs.EnvironmentID.String(), events.ResourceData{RouteID: obs.RouteID.String(), EnvironmentID: obs.EnvironmentID.String()})
-	}
-	if obs.GatewayStatus == domain.GatewayRouteStatusSynced {
-		s.publish(ctx, events.EventLLMGatewayRouteSynced, obs.RouteID.String()+":"+obs.EnvironmentID.String(), events.ResourceData{RouteID: obs.RouteID.String(), EnvironmentID: obs.EnvironmentID.String()})
-	}
-	s.publishStateChanged(ctx, state)
-	return nil
-}
-
 func (s *LLMRegistryService) GetLatestObservation(ctx context.Context, routeID, envID uuid.UUID) (*domain.LLMRouteObservation, error) {
 	if s.mlBacked() {
 		obs, err := s.ml.repo.GetLatestInferenceObservation(ctx, routeID, envID)
@@ -902,31 +837,6 @@ func (s *LLMRegistryService) repairStateAfterRejectedIntent(ctx context.Context,
 	return nil
 }
 
-func (s *LLMRegistryService) computeDriftStatus(ctx context.Context, state *domain.LLMRouteState, obs *domain.LLMRouteObservation) domain.DriftStatus {
-	if state == nil || state.DesiredReleaseID == nil {
-		return domain.DriftStatusUnknown
-	}
-	if obs.ObservedReleaseID != nil && *obs.ObservedReleaseID == *state.DesiredReleaseID && obs.BackendHealth == domain.HealthStatusHealthy && obs.GatewayStatus == domain.GatewayRouteStatusSynced {
-		route, err := s.routes.GetByID(ctx, obs.RouteID)
-		if err == nil && route != nil {
-			desiredHash := BuildLLMGatewayRouteSpec(route, obs.BackendEndpoint).ManagedConfigHash()
-			if obs.GatewayConfigHash == "" || obs.GatewayConfigHash == desiredHash {
-				return domain.DriftStatusInSync
-			}
-		}
-	}
-	if state.DesiredIntentID != nil {
-		intent, err := s.intents.GetByID(ctx, *state.DesiredIntentID)
-		if err == nil && intent != nil {
-			switch intent.Status {
-			case domain.IntentStatusPending, domain.IntentStatusApproved, domain.IntentStatusDeploying:
-				return domain.DriftStatusDeploying
-			}
-		}
-	}
-	return domain.DriftStatusDrifted
-}
-
 func (s *LLMRegistryService) publish(ctx context.Context, typ events.EventType, entityID string, data any) {
 	s.publisher.Publish(ctx, events.Event{Type: typ, EntityID: entityID, Data: data})
 }
@@ -960,43 +870,4 @@ func defaultRouteGatewayConfig(route *domain.LLMRoute) {
 	if route.GatewayConfig.PublicModel == "" {
 		route.GatewayConfig.PublicModel = route.Name
 	}
-}
-
-// BuildLLMGatewayRouteSpec creates the Bahia-owned gateway route spec for a backend endpoint.
-func BuildLLMGatewayRouteSpec(route *domain.LLMRoute, backendEndpoint string) llmadapter.GatewayRouteSpec {
-	name := ""
-	publicModel := ""
-	cfg := (*domain.LLMGatewayRouteConfig)(nil)
-	if route != nil {
-		name = route.Name
-		cfg = route.GatewayConfig
-	}
-	if cfg != nil {
-		publicModel = cfg.PublicModel
-	}
-	if publicModel == "" {
-		publicModel = name
-	}
-	spec := llmadapter.GatewayRouteSpec{RouteName: name, PublicModel: publicModel, TargetURL: backendEndpoint}
-	if cfg != nil {
-		spec.Path = cfg.Path
-		spec.TimeoutSeconds = cfg.TimeoutSeconds
-		spec.Headers = cfg.Headers
-	}
-	return spec
-}
-
-// ResolveLLMGatewayRouteSpec resolves secret-backed headers immediately before
-// applying a route to the gateway. The persisted route remains reference-only.
-func ResolveLLMGatewayRouteSpec(ctx context.Context, route *domain.LLMRoute, backendEndpoint string, resolver llmadapter.SecretResolver) (llmadapter.GatewayRouteSpec, error) {
-	spec := BuildLLMGatewayRouteSpec(route, backendEndpoint)
-	if route == nil || route.GatewayConfig == nil {
-		return spec, nil
-	}
-	headers, err := llmadapter.ResolveGatewayHeaders(ctx, route.GatewayConfig.Headers, route.GatewayConfig.HeaderSecretRefs, resolver)
-	if err != nil {
-		return llmadapter.GatewayRouteSpec{}, err
-	}
-	spec.Headers = headers
-	return spec, nil
 }

@@ -361,9 +361,8 @@ func (p *Projector) SetupSubscriptions(pub events.Publisher) {
 		events.EventLLMDeploymentRunCreated,
 		events.EventLLMDeploymentRunCompleted,
 		// Observation/sync/state-changed/drift events are not audited.
-		// EventLLMDeploymentRunStatusChanged, EventLLMRouteObservation,
-		// EventLLMRouteStateChanged, EventLLMRouteDriftDetected,
-		// EventLLMGatewayRouteSynced, eventDNSZoneSynced, eventDNSRecordChanged,
+		// EventLLMDeploymentRunStatusChanged, EventLLMRouteStateChanged,
+		// eventDNSZoneSynced, eventDNSRecordChanged,
 		// eventDNSDriftDetected: their state is already published as replaceable
 		// cp-state by mutation-site publishers. DNS endpoint registered/deregistered
 		// are discrete mutations and remain.

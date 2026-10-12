@@ -225,10 +225,7 @@ func TestObservationBurstProducesZeroAuditAndDeployProducesOne(t *testing.T) {
 
 	// LLM observation/sync/drift events also produce zero audit facts.
 	llmBurstTypes := []events.EventType{
-		events.EventLLMRouteObservation,
 		events.EventLLMRouteStateChanged,
-		events.EventLLMRouteDriftDetected,
-		events.EventLLMGatewayRouteSynced,
 		events.EventLLMDeploymentRunStatusChanged,
 	}
 	for _, et := range llmBurstTypes {
