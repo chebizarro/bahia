@@ -269,6 +269,19 @@ func TestSecretReferenceIntentRetiresLegacySealedValue(t *testing.T) {
 	if row, _ := f.repo.GetByID(context.Background(), secretID); row != nil {
 		t.Fatal("the legacy sealed value must not stay readable after the secret moved to the store")
 	}
+
+	// A re-point whose publish fails still retires the compromised value:
+	// the secret is unreadable until the intent is retried.
+	other := domain.NewEntityID()
+	f.canonical.records[other] = domain.SecretRef{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptionMethod: domain.EncryptionNIP44, Version: 1, CreatedAt: time.Now().UTC()}
+	_ = f.repo.Create(context.Background(), &domain.ServiceSecret{ID: other, ServiceID: f.serviceID, Name: "API_KEY", EncryptedValue: []byte("sealed"), Version: 1})
+	f.canonical.publishErr = errors.New("outbox full")
+	if err := f.process(t, "update", f.content(other, 2)); err == nil {
+		t.Fatal("a failed publish must fail the intent")
+	}
+	if row, _ := f.repo.GetByID(context.Background(), other); row != nil {
+		t.Fatal("a failed re-point left the compromised sealed value readable")
+	}
 }
 
 func TestSecretValueIntentWithoutStoreOrPostgresIsRefused(t *testing.T) {

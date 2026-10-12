@@ -315,15 +315,17 @@ func (h *SecretIntentHandler) reconcileReference(ctx context.Context, intent *In
 	}
 	next.EncryptionMethod = ""
 	next.CredentialRef = &ref
-	if err := h.publisher.PublishSecretRef(ctx, next); err != nil {
-		return fmt.Errorf("publish canonical secret %s: %w", next.ID, err)
-	}
 	if h.registry != nil && existing != nil && existing.CredentialRef == nil {
-		// The secret now lives in the store. Its legacy sealed value passed
-		// through a compromised path and must not stay readable.
+		// The secret moves to the store. Its legacy sealed value passed
+		// through a compromised path and must not stay readable, so it goes
+		// first: if the publish below fails, the secret is unreadable until
+		// the intent is retried, never readable with the old value.
 		if err := h.registry.Delete(ctx, next.ID); err != nil {
 			return fmt.Errorf("remove legacy value of secret %s: %w", next.ID, err)
 		}
+	}
+	if err := h.publisher.PublishSecretRef(ctx, next); err != nil {
+		return fmt.Errorf("publish canonical secret %s: %w", next.ID, err)
 	}
 	h.logger.Info("secret reference applied via intent",
 		zap.String("secret_id", next.ID.String()),
