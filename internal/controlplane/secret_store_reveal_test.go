@@ -227,3 +227,25 @@ func TestRevealSecretUsesCanonicalOrgWhenPostgresDiffers(t *testing.T) {
 		}
 	})
 }
+
+// A secret whose canonical record has no credential reference still holds a
+// value Bahia sealed with the retired service key: reveal refuses it by name
+// and decrypts nothing.
+func TestRevealSecretRefusesLegacySealedValue(t *testing.T) {
+	serviceID, orgID, secretID := uuid.New(), uuid.New(), uuid.New()
+	canonical := &memCanonicalSecrets{records: map[uuid.UUID]domain.SecretRef{
+		secretID: {ID: secretID, ServiceID: serviceID, Name: "OLD_TOKEN", Version: 3, EncryptionMethod: domain.EncryptionAES256},
+	}, serviceOrg: map[uuid.UUID]string{serviceID: orgID.String()}}
+	store := &resolvingSecretStore{value: "never", lease: time.Minute}
+	services, rbac := encryptedAuthDeps(t, serviceID, orgID, domain.RoleAdmin)
+	h := NewEncryptedRouteHandlers(EncryptedRouteHandlersConfig{SecretRecords: canonical, SecretStore: store, Services: services, RBAC: rbac, Logger: zap.NewNop()})
+	transport, publisher := encryptedRouteTransport(t, h)
+	transport.HandleEvent(context.Background(), uniqueRevealRequest(t, serviceID, secretID))
+	response := contextVMResponse(t, publisher.events[len(publisher.events)-1])
+	if response.Error == nil || !strings.Contains(response.Error.Message, "OLD_TOKEN") || !strings.Contains(response.Error.Message, "rotate") {
+		t.Fatalf("reveal of a legacy secret = %+v", response)
+	}
+	if len(store.refs) != 0 {
+		t.Fatal("the store was asked for a legacy secret")
+	}
+}

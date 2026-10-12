@@ -2763,10 +2763,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			logger.Info("gift-wrap intent ingress wired to ContextVM transport")
 		}
 		encryptedRouteHandlers := controlplane.NewEncryptedRouteHandlers(controlplane.EncryptedRouteHandlersConfig{
-			Secrets:       secretRepo,
-			Encryptor:     secretEncryptor,
 			SecretRecords: secretView,
 			SecretStore:   secretValues,
+			SecretValues:  secretResolver,
 			Runs:          runRepo,
 			RunLogs:       runLogService,
 			Artifacts:     artifactRepo,

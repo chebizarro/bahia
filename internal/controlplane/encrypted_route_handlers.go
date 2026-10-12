@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
-	"github.com/openagentsinc/bahia/internal/adapters/secrets"
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -32,33 +31,34 @@ type SignatureVerifier interface {
 	VerifySignatures(context.Context, *domain.Artifact) ([]domain.ArtifactSignature, error)
 }
 
-type secretVersionHistoryLister interface {
-	ListVersions(context.Context, uuid.UUID) ([]domain.SecretVersion, error)
+// RunLogSecretValues resolves the secrets a run references for log
+// redaction (secretstore.Resolver).
+type RunLogSecretValues interface {
+	ResolveAll(ctx context.Context, secretIDs []uuid.UUID) ([]secretstore.Resolved, error)
 }
 
 type EncryptedRouteHandlersConfig struct {
-	Secrets   repository.SecretRepository
-	Encryptor secrets.StoredSecretDecryptor
-	// SecretRecords and SecretStore reveal secrets whose canonical record
-	// references a credential in the external secret store.
+	// SecretRecords and SecretStore reveal secrets: the canonical record
+	// names the credential, the store releases it.
 	SecretRecords SecretRecordView
 	SecretStore   secretstore.SecretStore
-	Runs          repository.DeploymentRunRepository
-	RunLogs       RunLogFetcher
-	Artifacts     repository.ArtifactRepository
-	Signatures    repository.ArtifactSignatureRepository
-	SignVerifier  SignatureVerifier
-	Services      repository.ServiceRepository
-	Intents       repository.DeploymentIntentRepository
-	RBAC          *auth.RBAC
-	Logger        *zap.Logger
+	// SecretValues resolves referenced secrets to redact run logs.
+	SecretValues RunLogSecretValues
+	Runs         repository.DeploymentRunRepository
+	RunLogs      RunLogFetcher
+	Artifacts    repository.ArtifactRepository
+	Signatures   repository.ArtifactSignatureRepository
+	SignVerifier SignatureVerifier
+	Services     repository.ServiceRepository
+	Intents      repository.DeploymentIntentRepository
+	RBAC         *auth.RBAC
+	Logger       *zap.Logger
 }
 
 type EncryptedRouteHandlers struct {
-	secrets       repository.SecretRepository
-	encryptor     secrets.StoredSecretDecryptor
 	secretRecords SecretRecordView
 	secretStore   secretstore.SecretStore
+	secretValues  RunLogSecretValues
 	runs          repository.DeploymentRunRepository
 	runLogs       RunLogFetcher
 	artifacts     repository.ArtifactRepository
@@ -75,8 +75,8 @@ func NewEncryptedRouteHandlers(cfg EncryptedRouteHandlersConfig) *EncryptedRoute
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &EncryptedRouteHandlers{secrets: cfg.Secrets, encryptor: cfg.Encryptor,
-		secretRecords: cfg.SecretRecords, secretStore: cfg.SecretStore,
+	return &EncryptedRouteHandlers{
+		secretRecords: cfg.SecretRecords, secretStore: cfg.SecretStore, secretValues: cfg.SecretValues,
 		runs: cfg.Runs, runLogs: cfg.RunLogs, artifacts: cfg.Artifacts,
 		signatures: cfg.Signatures, signVerifier: cfg.SignVerifier,
 		services: cfg.Services, intents: cfg.Intents, rbac: cfg.RBAC,
@@ -104,13 +104,6 @@ type encryptedSecretPayload struct {
 	SecretID  string `json:"secret_id,omitempty"`
 }
 
-func (h *EncryptedRouteHandlers) requireSecretDeps() error {
-	if h.secrets == nil || h.encryptor == nil {
-		return fmt.Errorf("encrypted secret request handling is not configured")
-	}
-	return nil
-}
-
 func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request EncryptedRequest) (any, error) {
 	var payload encryptedSecretPayload
 	if err := decodeEncryptedPayload(request, &payload); err != nil {
@@ -124,45 +117,37 @@ func (h *EncryptedRouteHandlers) RevealSecret(ctx context.Context, request Encry
 	if err != nil {
 		return nil, err
 	}
-	if h.secretRecords != nil {
-		// The canonical service record is the authority for the org: it
-		// authorizes the reveal and scopes the store, and a daemon without
-		// PostgreSQL service rows can still reveal.
-		org, err := h.canonicalServiceOrg(ctx, serviceID)
-		if err != nil {
-			return nil, err
-		}
-		if h.rbac == nil {
-			return nil, fmt.Errorf("encrypted route RBAC is not configured")
-		}
-		if err := h.rbac.CheckPermission(ctx, requestPrincipal(request), org, domain.PermReadSecrets); err != nil {
-			return nil, err
-		}
-		ref, err := h.secretRecords.CurrentSecretRef(ctx, secretID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to look up secret")
-		}
-		if ref != nil && ref.CredentialRef != nil {
-			return h.revealStoredSecret(ctx, serviceID, org, ref)
-		}
-	} else if err := h.authorizeServicePermission(ctx, request, serviceID, domain.PermReadSecrets); err != nil {
-		return nil, err
+	if h.secretRecords == nil {
+		return nil, fmt.Errorf("secret reveal needs the canonical secret records, which are not configured")
 	}
-	if err := h.requireSecretDeps(); err != nil {
-		return nil, err
-	}
-	secret, err := h.secretForService(ctx, serviceID, secretID)
+	// The canonical service record is the authority for the org: it
+	// authorizes the reveal and scopes the store, and a daemon without
+	// PostgreSQL can reveal.
+	org, err := h.canonicalServiceOrg(ctx, serviceID)
 	if err != nil {
 		return nil, err
 	}
-	if secret.EncryptionMethod == domain.EncryptionStoreRef {
-		return nil, domain.SecretInStoreError(secret.ID, secret.Name)
+	if h.rbac == nil {
+		return nil, fmt.Errorf("encrypted route RBAC is not configured")
 	}
-	value, err := h.encryptor.DecryptStored(secret.ID, secret.Version, secret.EncryptedValue, secret.EncryptionMethod)
+	if err := h.rbac.CheckPermission(ctx, requestPrincipal(request), org, domain.PermReadSecrets); err != nil {
+		return nil, err
+	}
+	ref, err := h.secretRecords.CurrentSecretRef(ctx, secretID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decrypt secret")
+		return nil, fmt.Errorf("failed to look up secret")
 	}
-	return map[string]any{"secret": secret.ToRef(), "value": value}, nil
+	if ref == nil {
+		return nil, fmt.Errorf("secret not found")
+	}
+	if ref.ServiceID != serviceID {
+		return nil, fmt.Errorf("secret does not belong to service")
+	}
+	if ref.CredentialRef == nil {
+		// Bahia never decrypts a value it sealed with the retired key.
+		return nil, domain.LegacySecretValueError(ref.ID, ref.Name)
+	}
+	return h.revealStoredSecret(ctx, serviceID, org, ref)
 }
 
 // revealStoredSecret resolves a secret whose value lives in the external
@@ -203,20 +188,6 @@ func (h *EncryptedRouteHandlers) revealStoredSecret(ctx context.Context, service
 		return nil, fmt.Errorf("secret store lease for secret %s expired before it could be revealed", ref.ID)
 	}
 	return map[string]any{"secret": ref, "value": string(value.Bytes())}, nil
-}
-
-func (h *EncryptedRouteHandlers) secretForService(ctx context.Context, serviceID, secretID uuid.UUID) (*domain.ServiceSecret, error) {
-	secret, err := h.secrets.GetByID(ctx, secretID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to look up secret")
-	}
-	if secret == nil {
-		return nil, fmt.Errorf("secret not found")
-	}
-	if secret.ServiceID != serviceID {
-		return nil, fmt.Errorf("secret does not belong to service")
-	}
-	return secret, nil
 }
 
 func (h *EncryptedRouteHandlers) authorizeServicePermission(ctx context.Context, request EncryptedRequest, serviceID uuid.UUID, permission domain.Permission) error {
@@ -280,9 +251,10 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 	if logs == nil {
 		logs = &adapterruntime.RunLogs{RunID: runID}
 	}
-	if err := h.redactRunLogSecrets(ctx, intent, logs); err != nil {
+	if err := h.redactRunLogSecrets(ctx, run, intent, logs); err != nil {
 		h.logger.Error("failed to redact encrypted request run logs", zap.String("run_id", runID.String()), zap.Error(err))
-		return nil, fmt.Errorf("failed to safely prepare logs")
+		// The reason names secrets, never values; the caller may read logs.
+		return nil, fmt.Errorf("logs withheld because they cannot be safely redacted: %w", err)
 	}
 	if payload.Tail > 0 {
 		logs.Stdout = adapterruntime.TailLogs(logs.Stdout, payload.Tail)
@@ -325,14 +297,20 @@ func (h *EncryptedRouteHandlers) authorizeRunPermission(ctx context.Context, req
 	return intent, nil
 }
 
-func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent *domain.DeploymentIntent, logs *adapterruntime.RunLogs) error {
+// redactRunLogSecrets redacts the value of every secret the run's desired
+// state references. Values resolve through the secret store, which releases
+// only the version a secret is pinned to now: when a secret was re-pointed
+// after the run began, or still holds a legacy value, the run may contain a
+// value redaction cannot know, so the logs are withheld rather than returned
+// unredacted.
+func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, run *domain.DeploymentRun, intent *domain.DeploymentIntent, logs *adapterruntime.RunLogs) error {
 	if intent == nil || intent.DesiredState == nil || len(intent.DesiredState.SecretRefs) == 0 {
 		return nil
 	}
-	if h.secrets == nil || h.encryptor == nil {
+	if h.secretRecords == nil || h.secretValues == nil {
 		return fmt.Errorf("secret redaction dependencies are not configured")
 	}
-	values := make([]string, 0, len(intent.DesiredState.SecretRefs))
+	ids := make([]uuid.UUID, 0, len(intent.DesiredState.SecretRefs))
 	seen := make(map[uuid.UUID]struct{}, len(intent.DesiredState.SecretRefs))
 	for _, ref := range intent.DesiredState.SecretRefs {
 		if ref.SecretID == uuid.Nil {
@@ -342,30 +320,30 @@ func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent
 			continue
 		}
 		seen[ref.SecretID] = struct{}{}
-		history, ok := h.secrets.(secretVersionHistoryLister)
-		if !ok {
-			return fmt.Errorf("referenced secret version history is unavailable")
-		}
-		versions, err := history.ListVersions(ctx, ref.SecretID)
+		current, err := h.secretRecords.CurrentSecretRef(ctx, ref.SecretID)
 		if err != nil {
-			return fmt.Errorf("load referenced secret history")
+			return fmt.Errorf("load referenced secret %s: %w", ref.SecretID, err)
 		}
-		if len(versions) == 0 {
-			return fmt.Errorf("referenced secret has no retained versions")
+		if current == nil {
+			return fmt.Errorf("referenced secret %s: %w", ref.SecretID, secretstore.ErrNoRecord)
 		}
-		for i := range versions {
-			value, err := h.encryptor.DecryptStored(versions[i].SecretID, versions[i].Version, versions[i].EncryptedValue, versions[i].EncryptionMethod)
-			if errors.Is(err, domain.ErrSecretInStore) {
-				// Redaction cannot know a value it cannot read: refuse the
-				// logs rather than return them unredacted.
-				return err
-			}
-			if err != nil {
-				return fmt.Errorf("decrypt referenced secret")
-			}
-			if value != "" {
-				values = append(values, value)
-			}
+		if current.CredentialRef == nil {
+			return domain.LegacySecretValueError(current.ID, current.Name)
+		}
+		if run != nil && current.UpdatedAt.After(run.CreatedAt) {
+			return fmt.Errorf("%w: secret %s (%s) was re-pointed after this run began; the store no longer releases the value the run used, so its logs are withheld", ErrRunLogsUnredactable, current.ID, current.Name)
+		}
+		ids = append(ids, ref.SecretID)
+	}
+	resolved, err := h.secretValues.ResolveAll(ctx, ids)
+	if err != nil {
+		return err
+	}
+	defer secretstore.ZeroizeResolved(resolved)
+	values := make([]string, 0, len(resolved))
+	for _, r := range resolved {
+		if value := string(r.Value.Bytes()); value != "" {
+			values = append(values, value)
 		}
 	}
 	// Longest first prevents a short secret that is a substring of another from
@@ -384,6 +362,10 @@ func (h *EncryptedRouteHandlers) redactRunLogSecrets(ctx context.Context, intent
 	logs.Stderr = redact(logs.Stderr)
 	return nil
 }
+
+// ErrRunLogsUnredactable: a run's logs may contain a secret value redaction
+// cannot resolve, so they are withheld.
+var ErrRunLogsUnredactable = errors.New("run logs cannot be safely redacted")
 
 func isTerminalEncryptedRunStatus(status domain.DeploymentRunStatus) bool {
 	switch status {
