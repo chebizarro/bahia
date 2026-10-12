@@ -400,9 +400,7 @@ export async function installE2EMocks(
         const secrets = Array.isArray(state[serviceId]) ? state[serviceId] : [];
         if (tag('op') === 'delete') state[serviceId] = secrets.filter(secret => secret.id !== content.id);
         else {
-          const value = content.encrypted_value?.startsWith('mock-nip44:')
-            ? decodeURIComponent(escape(atob(content.encrypted_value.slice('mock-nip44:'.length)))) : '';
-          const record = { ...content, value, version: (secrets.find(secret => secret.id === content.id)?.version || 0) + 1,
+          const record = { ...content, version: (secrets.find(secret => secret.id === content.id)?.version || 0) + 1,
             updated_at: new Date().toISOString() };
           state[serviceId] = [record, ...secrets.filter(secret => secret.id !== content.id)];
         }
