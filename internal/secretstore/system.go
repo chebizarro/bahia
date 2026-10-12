@@ -136,6 +136,13 @@ func (k *Keyring) Load(ctx context.Context, store SecretStore) error {
 	if err == nil && k.zeroized {
 		err = errors.New("system keyring is shut down")
 	}
+	if err == nil && k.loaded {
+		// A concurrent Load won; keep its keys.
+		for _, key := range keys {
+			clear(key)
+		}
+		return nil
+	}
 	if err != nil {
 		for _, key := range keys {
 			clear(key)

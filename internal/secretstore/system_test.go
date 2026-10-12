@@ -206,6 +206,26 @@ func TestKeyringUseWaitsForLoad(t *testing.T) {
 	}
 }
 
+func TestKeyringConcurrentLoads(t *testing.T) {
+	ref := SystemKeyRef{Purpose: PurposeConfidentialDedupe, KeyID: "k1", Credential: credRef('a')}
+	ring, _ := NewKeyring([]SystemKeyRef{ref})
+	done := make(chan error, 8)
+	for range 8 {
+		go func() {
+			store := &labelStore{creds: map[string]labelledValue{ref.Credential.CredentialID: {"bahia-system/confidential-dedupe/k1", bytes.Repeat([]byte{3}, SystemKeySize)}}}
+			done <- ring.Load(context.Background(), store)
+		}()
+	}
+	for range 8 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if loaded, _ := ring.Status(); !loaded {
+		t.Fatal("not loaded")
+	}
+}
+
 func TestNewKeyringRejectsDuplicates(t *testing.T) {
 	a := SystemKeyRef{Purpose: PurposeAssistantTranscript, KeyID: "k1", Credential: credRef('a')}
 	if _, err := NewKeyring([]SystemKeyRef{a, a}); !errors.Is(err, ErrInvalidRef) {
