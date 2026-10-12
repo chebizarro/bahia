@@ -263,11 +263,12 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 		RequestID: idempotencyKey,
 	}
 	var token, mirrorReadPassword string
+	var upstream domain.SecretAccessManifest
 	if i.loom == nil {
 		// The plaintext credential stays in memory and is passed only inside
 		// the HTTPS body of the Gitea migrate call, in the provider-specific
 		// auth field.
-		token, _, err = i.secrets.ResolveSecretWithAudit(ctx, req.CredentialRef.String(), opts)
+		token, upstream, err = i.secrets.ResolveSecretWithAudit(ctx, req.CredentialRef.String(), opts)
 		if err != nil {
 			// The resolver returns no value with an error.
 			return fmt.Errorf("resolve repository credential reference: %w", err)
@@ -288,7 +289,7 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 			// The resolver returns no value with an error.
 			return fmt.Errorf("resolve repository and mirror-read credential references: %w", err)
 		}
-		token, mirrorReadPassword = values[0], values[1]
+		token, mirrorReadPassword, upstream = values[0], values[1], manifests[0]
 		if strings.TrimSpace(mirrorReadPassword) == "" {
 			return fmt.Errorf("mirror-read credential reference resolved to an empty credential")
 		}
@@ -297,6 +298,14 @@ func (i *Initiator) prepareInitiation(ctx context.Context, rec *InitiationRecord
 		if manifests[1].SecretID != mirrorReadSecretID || manifests[1].ServiceID != req.ServiceID {
 			return scrubSecrets(fmt.Errorf("mirror-read credential reference must belong to the selected service"), token, mirrorReadPassword)
 		}
+	}
+	// The build request was admitted against the PostgreSQL index row of
+	// the credential; the canonical record the value came from must agree
+	// (same secret, same service), or the index is stale and the value is
+	// refused. The store already refused any credential outside that
+	// service's canonical org and service.
+	if upstream.SecretID != req.CredentialRef || upstream.ServiceID != req.ServiceID {
+		return scrubSecrets(fmt.Errorf("repository credential reference must belong to the selected service (the index disagrees with the canonical secret record)"), token, mirrorReadPassword)
 	}
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("repository credential reference resolved to an empty credential")

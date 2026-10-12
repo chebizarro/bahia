@@ -43,6 +43,8 @@ type fakeSecretResolver struct {
 	known   map[string]string
 	calls   []string
 	batches [][]string
+	// serviceOf overrides the service a reference's canonical record names.
+	serviceOf map[string]uuid.UUID
 }
 
 func (f *fakeSecretResolver) ResolveSecretsWithAudit(ctx context.Context, refs []string, opts domain.SecretResolveOptions) ([]string, []domain.SecretAccessManifest, error) {
@@ -70,7 +72,11 @@ func (f *fakeSecretResolver) ResolveSecretWithAudit(_ context.Context, ref strin
 	if err != nil {
 		return "", domain.SecretAccessManifest{}, fmt.Errorf("invalid secret reference")
 	}
-	return value, domain.SecretAccessManifest{SecretID: id, ServiceID: testServiceID}, nil
+	service := testServiceID
+	if other, ok := f.serviceOf[ref]; ok {
+		service = other
+	}
+	return value, domain.SecretAccessManifest{SecretID: id, ServiceID: service}, nil
 }
 
 type capturingPublisher struct {
@@ -912,5 +918,31 @@ func TestConformanceSecondRequestSyncsExistingMirror(t *testing.T) {
 	}
 	if gitea.migrateCalls != 1 || gitea.syncCalls != 1 {
 		t.Fatalf("expected one migrate and one sync, got migrate=%d sync=%d", gitea.migrateCalls, gitea.syncCalls)
+	}
+}
+
+// The build request admits the upstream credential against its PostgreSQL
+// index row; the canonical record its value comes from must name the same
+// service, with or without Loom dispatch, or nothing is mirrored or
+// published.
+func TestConformanceUpstreamCredentialMustMatchCanonicalService(t *testing.T) {
+	for _, loom := range []bool{true, false} {
+		t.Run(map[bool]string{true: "loom dispatch", false: "mirror only"}[loom], func(t *testing.T) {
+			gitea := &fakeGitea{}
+			server := httptest.NewServer(gitea.handler(t))
+			defer server.Close()
+			initiator, publisher, resolver, credentialRef, _ := newConformanceInitiator(t, server)
+			if !loom {
+				initiator.loom = nil
+			}
+			resolver.serviceOf = map[string]uuid.UUID{credentialRef.String(): uuid.New()}
+			_, err := initiator.StartHiveCIBuild(context.Background(), arcanaStartRequest(credentialRef))
+			if err == nil || !strings.Contains(err.Error(), "repository credential reference must belong to the selected service") {
+				t.Fatalf("upstream credential of another service = %v", err)
+			}
+			if gitea.migrateCalls != 0 || len(publisher.events) != 0 {
+				t.Fatalf("a mismatched upstream credential reached Gitea or the relays: migrate=%d events=%d", gitea.migrateCalls, len(publisher.events))
+			}
+		})
 	}
 }
