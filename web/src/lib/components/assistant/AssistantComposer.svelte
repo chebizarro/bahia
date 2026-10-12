@@ -6,6 +6,7 @@
     publishAssistantPrompt,
     publishAssistantCancellation,
     assistantWorkflowAvailable,
+    assistantTransportAvailable,
     createAssistantSessionId,
     setActiveAssistantSession
   } from '$lib/stores/assistant.svelte.js';
@@ -46,7 +47,8 @@
   const canCancel = $derived(Boolean(!closed && session?.authoritative && session?.executionVersion === 2 && session?.currentRunId &&
     ASSISTANT_EXECUTION_CANCELLABLE_PHASES.includes(session?.phase)));
   const pendingPrompt = $derived(Object.values(pendingAssistantRequests).some((request) => request.sessionId === (session?.sessionId || assistantUi.activeSessionId)));
-  const disabled = $derived(promptSubmitting || pendingPrompt || runActive || isHistory || closed || assistantConnection.status === 'waiting_auth');
+  const transportAvailable = $derived(assistantTransportAvailable());
+  const disabled = $derived(promptSubmitting || pendingPrompt || runActive || isHistory || closed || !transportAvailable || assistantConnection.status === 'waiting_auth');
   const workflowLocked = $derived(Boolean(session?.uncertainEffects));
   // Batch needs the deployment's batch proposer. When it is missing the batch
   // option is disabled; approving or rejecting an existing batch draft is not
@@ -175,6 +177,7 @@
   {#if workflowLocked}<p class="history-note">Resolve uncertain operations before changing the workflow.</p>{/if}
 {/if}
 {#if blockedReason}<p class="history-note blocked-reason">{blockedReason}</p>{/if}
+{#if !transportAvailable}<p class="history-note" role="status">Waiting for signed assistant discovery from the relay.</p>{/if}
 <form class="composer" onsubmit={submitPrompt}>
   <textarea
     bind:this={textarea}

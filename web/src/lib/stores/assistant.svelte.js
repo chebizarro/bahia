@@ -2,7 +2,7 @@ import { browser } from '$app/environment';
 import { getEventStore } from '../nostr/boot.js';
 import { authState } from './auth.js';
 import { controlplaneConnection, bootstrapControlplane } from './controlplane.svelte.js';
-import { requestEncryptedResult } from '../nostr/encrypted-controlplane.js';
+import { encryptedRequestsAvailable, requestEncryptedResult } from '../nostr/encrypted-controlplane.js';
 import { discoveryState } from './discovery.svelte.js';
 import {
   nostr,
@@ -76,6 +76,10 @@ export function assistantAvailableWorkflows() {
 
 export function assistantWorkflowAvailable(workflow) {
   return assistantAvailableWorkflows().includes(workflow);
+}
+
+export function assistantTransportAvailable() {
+  return encryptedRequestsAvailable();
 }
 
 export function activeAssistantSession() {
