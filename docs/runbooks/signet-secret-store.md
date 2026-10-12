@@ -276,9 +276,11 @@ from before the injected secrets were recorded. `run log redaction is rate
 limited for this requester` clears within a minute; logs of a run read
 recently are served from a short-lived cache.
 
-Adoption refuses a container naming its secret environment keys; if a key
-is not a secret (`PASSWORD_MIN_LENGTH`), list it with `bahia adopt import
---non-secret-env PASSWORD_MIN_LENGTH`.
+Adoption refuses unmapped inline-secret environment keys by name. Import each
+value into Signet with label `<org-id>/<service-id>/<name>` first, then pass
+`bahia adopt import --secret-ref KEY=credential-id:version`. If a key is not
+a secret (`PASSWORD_MIN_LENGTH`), use `--non-secret-env PASSWORD_MIN_LENGTH`
+instead.
 
 | `secret_store_index` (fails readiness) | Cause and fix |
 |---|---|

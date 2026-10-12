@@ -83,6 +83,25 @@ bahia --relay wss://relay.example \
 mutually exclusive with an empty selection only in the sense that one of
 `--all` or `--select` is required. Repeat `--select` for multiple containers.
 
+### SF-04: inline environment secrets
+
+Before importing a container with inline secrets, attempt the import once
+without references. The refused candidate status names the sensitive keys and
+its deterministic `service_id`; no service is published. Import each value
+into Signet as a credential labelled `<org-id>/<service-id>/<name>`. Use
+`--secret-ref KEY=credential-id:version` once per key (or the intent's
+`secret_refs` map with `{store:"signet",credential_id,version}`). The daemon
+checks the exact label, active status and pinned version; it never reads the
+value. The adopted service keeps no inline copy. A missing or invalid reference
+refuses the candidate, naming keys but not values. For a key that is genuinely
+non-secret, use `--non-secret-env KEY` instead; never use both for one key.
+
+```bash
+bahia adopt import --org "$ORG" --target prod=prod-docker \
+  --select prod/<container-id>=api \
+  --secret-ref DB_PASSWORD=cred_<id>:1
+```
+
 The daemon publishes canonical service/environment/build/artifact records and
 an `adoption-binding` record at
 `adoption:binding:<service-id>:<environment-id>`. A binding moves from

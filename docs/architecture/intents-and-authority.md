@@ -172,6 +172,13 @@ or update without `credential_ref`. Without a configured store every create
 and update is rejected with `secret store is not configured`; deletes still
 apply (tombstone, and the PostgreSQL index row when configured).
 
+An adoption `import` intent may likewise carry `secret_refs`, mapping inline
+environment key names to `{store:"signet",credential_id,version}`. It carries
+no values. Adoption checks each credential against the exact
+`<org-id>/<service-id>/<name>` label and pinned active version, then publishes
+reference-only service secrets. An inline key without a reference or an
+explicit `non_secret_env_keys` exemption refuses the candidate by key name.
+
 ## 2. Authority and trust
 
 ### 2.1 `TrustSet`
