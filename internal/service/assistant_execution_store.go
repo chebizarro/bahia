@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 )
 
 // ErrAssistantCheckpointNotFound means a complete EOSE-bounded backfill found
@@ -91,7 +93,7 @@ func NewAssistantExecutionStore(c AssistantExecutionStoreConfig) *AssistantExecu
 	return &AssistantExecutionStore{publisher: c.Publisher, subscriber: c.Subscriber, signer: c.Signer, keys: c.KeyProvider, servicePubkey: strings.TrimSpace(c.ServicePubkey), now: now, pending: make(map[string]assistantPendingCheckpoint)}
 }
 
-func checkpointTags(e domain.AssistantExecution, prev string, key AssistantTranscriptKey) nostr.Tags {
+func checkpointTags(e domain.AssistantExecution, prev string, key AssistantTranscriptKeyRef) nostr.Tags {
 	tags := nostr.Tags{
 		{domain.AssistantCheckpointTagDomain, domain.AssistantDomain},
 		{domain.AssistantCheckpointTagType, domain.AssistantCheckpointTypeExecution},
@@ -108,8 +110,22 @@ func checkpointTags(e domain.AssistantExecution, prev string, key AssistantTrans
 	return tags
 }
 
-func checkpointAD(e domain.AssistantExecution, prev string) map[string]string {
-	return map[string]string{"schema": domain.AssistantExecutionCheckpointSchema, "session": e.SessionID, "run": e.RunID, "revision": strconv.FormatUint(e.Revision, 10), "prev": prev}
+// checkpointAD is the associated data a checkpoint is sealed with: its chain
+// position and the key that seals it. Checkpoints sealed under the retired
+// nsec-derived key predate the key binding (checkpointADKeyBound).
+func checkpointAD(e domain.AssistantExecution, prev string, key AssistantTranscriptKeyRef) map[string]string {
+	ad := map[string]string{"schema": domain.AssistantExecutionCheckpointSchema, "session": e.SessionID, "run": e.RunID, "revision": strconv.FormatUint(e.Revision, 10), "prev": prev}
+	if checkpointADKeyBound(key.Ref) {
+		ad[domain.AssistantTranscriptTagKeyRef] = key.Ref
+		ad[domain.AssistantTranscriptTagKeyVersion] = key.Version
+	}
+	return ad
+}
+
+// checkpointADKeyBound reports whether a checkpoint sealed under keyRef binds
+// its key reference into the associated data: every Signet system key does.
+func checkpointADKeyBound(keyRef string) bool {
+	return strings.HasPrefix(keyRef, secretstore.SystemLabelNamespace+"/")
 }
 
 func (s *AssistantExecutionStore) Append(ctx context.Context, execution domain.AssistantExecution, previous string) (string, error) {
@@ -168,28 +184,24 @@ func (s *AssistantExecutionStore) sealCheckpoint(ctx context.Context, execution 
 }
 
 func (s *AssistantExecutionStore) sealCheckpointAt(ctx context.Context, execution domain.AssistantExecution, previous string, plaintext []byte, createdAt nostr.Timestamp) (nostr.Event, error) {
-	key, err := s.keys.ActiveTranscriptKey(ctx)
-	if err != nil {
-		return nostr.Event{}, err
+	var envelope domain.AssistantExecutionCheckpointAEADEnvelope
+	var key AssistantTranscriptKeyRef
+	if err := s.keys.WithActiveKey(ctx, func(ref AssistantTranscriptKeyRef, aead cipher.AEAD) error {
+		key = ref
+		nonce := make([]byte, chacha20poly1305.NonceSizeX)
+		if _, err := rand.Read(nonce); err != nil {
+			return err
+		}
+		ad := checkpointAD(execution, previous, ref)
+		adBytes, err := json.Marshal(ad)
+		if err != nil {
+			return err
+		}
+		envelope = domain.AssistantExecutionCheckpointAEADEnvelope{Schema: domain.AssistantExecutionCheckpointSchema, Envelope: domain.AssistantTranscriptEnvelopeServiceHeldAEAD, Algorithm: domain.AssistantTranscriptAEADAlgorithmXChaCha20, KeyRef: ref.Ref, KeyVersion: ref.Version, Nonce: base64.RawStdEncoding.EncodeToString(nonce), Ciphertext: base64.RawStdEncoding.EncodeToString(aead.Seal(nil, nonce, plaintext, adBytes)), AssociatedData: ad}
+		return nil
+	}); err != nil {
+		return nostr.Event{}, fmt.Errorf("seal assistant checkpoint: %w", err)
 	}
-	key, err = validateAssistantTranscriptKey(key)
-	if err != nil {
-		return nostr.Event{}, err
-	}
-	aead, err := chacha20poly1305.NewX(key.Key)
-	if err != nil {
-		return nostr.Event{}, err
-	}
-	nonce := make([]byte, chacha20poly1305.NonceSizeX)
-	if _, err = rand.Read(nonce); err != nil {
-		return nostr.Event{}, err
-	}
-	ad := checkpointAD(execution, previous)
-	adBytes, err := json.Marshal(ad)
-	if err != nil {
-		return nostr.Event{}, err
-	}
-	envelope := domain.AssistantExecutionCheckpointAEADEnvelope{Schema: domain.AssistantExecutionCheckpointSchema, Envelope: domain.AssistantTranscriptEnvelopeServiceHeldAEAD, Algorithm: domain.AssistantTranscriptAEADAlgorithmXChaCha20, KeyRef: key.Ref, KeyVersion: key.Version, Nonce: base64.RawStdEncoding.EncodeToString(nonce), Ciphertext: base64.RawStdEncoding.EncodeToString(aead.Seal(nil, nonce, plaintext, adBytes)), AssociatedData: ad}
 	content, err := json.Marshal(envelope)
 	if err != nil {
 		return nostr.Event{}, err
@@ -221,23 +233,11 @@ func (s *AssistantExecutionStore) decode(ctx context.Context, ev *nostr.Event, a
 	if s.keys == nil {
 		return domain.AssistantExecutionCheckpoint{}, errors.New("assistant checkpoint key provider missing")
 	}
-	key, err := s.keys.TranscriptKey(ctx, env.KeyRef, env.KeyVersion)
-	if err != nil {
-		return domain.AssistantExecutionCheckpoint{}, err
-	}
-	key, err = validateAssistantTranscriptKey(key)
-	if err != nil {
-		return domain.AssistantExecutionCheckpoint{}, err
-	}
 	nonce, err := base64.RawStdEncoding.DecodeString(env.Nonce)
 	if err != nil {
 		return domain.AssistantExecutionCheckpoint{}, err
 	}
-	cipher, err := base64.RawStdEncoding.DecodeString(env.Ciphertext)
-	if err != nil {
-		return domain.AssistantExecutionCheckpoint{}, err
-	}
-	aead, err := chacha20poly1305.NewX(key.Key)
+	sealed, err := base64.RawStdEncoding.DecodeString(env.Ciphertext)
 	if err != nil {
 		return domain.AssistantExecutionCheckpoint{}, err
 	}
@@ -245,8 +245,12 @@ func (s *AssistantExecutionStore) decode(ctx context.Context, ev *nostr.Event, a
 	if err != nil {
 		return domain.AssistantExecutionCheckpoint{}, err
 	}
-	plain, err := aead.Open(nil, nonce, cipher, adBytes)
-	if err != nil {
+	var plain []byte
+	if err := s.keys.WithKey(ctx, env.KeyRef, env.KeyVersion, func(aead cipher.AEAD) error {
+		var err error
+		plain, err = aead.Open(nil, nonce, sealed, adBytes)
+		return err
+	}); err != nil {
 		return domain.AssistantExecutionCheckpoint{}, err
 	}
 	var cp domain.AssistantExecutionCheckpoint
@@ -257,7 +261,10 @@ func (s *AssistantExecutionStore) decode(ctx context.Context, ev *nostr.Event, a
 	if e.Version != domain.AssistantExecutionVersion || e.SessionID != sessionID || e.RunID != runID || e.Revision == 0 || !e.Workflow.Valid() || !e.Phase.Valid() || tagValue(ev.Tags, domain.AssistantCheckpointTagRevision) != strconv.FormatUint(e.Revision, 10) || tagValue(ev.Tags, domain.AssistantCheckpointTagPrevious) != cp.PreviousEventID {
 		return domain.AssistantExecutionCheckpoint{}, errors.New("assistant checkpoint payload/tags mismatch")
 	}
-	expected := checkpointAD(e, cp.PreviousEventID)
+	expected := checkpointAD(e, cp.PreviousEventID, AssistantTranscriptKeyRef{Ref: env.KeyRef, Version: env.KeyVersion})
+	if len(env.AssociatedData) != len(expected) {
+		return domain.AssistantExecutionCheckpoint{}, errors.New("assistant checkpoint associated data mismatch")
+	}
 	for k, v := range expected {
 		if env.AssociatedData[k] != v {
 			return domain.AssistantExecutionCheckpoint{}, errors.New("assistant checkpoint associated data mismatch")

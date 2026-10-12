@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/cipher"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,7 +84,7 @@ func PlanAssistantReencryption(ctx context.Context, in AssistantReencryptInput) 
 	if in.DryRun {
 		signer = idOnlySigner{pubkey: newAuthor}
 	}
-	if _, err := in.NewKeys.ActiveTranscriptKey(ctx); err != nil {
+	if err := in.NewKeys.WithActiveKey(ctx, func(AssistantTranscriptKeyRef, cipher.AEAD) error { return nil }); err != nil {
 		return plan, fmt.Errorf("resolve the new assistant transcript key: %w", err)
 	}
 	old := partitionAssistantEvents(in.OldEvents, in.OldAuthor, &plan)
@@ -102,16 +103,12 @@ func PlanAssistantReencryption(ctx context.Context, in AssistantReencryptInput) 
 	}
 
 	transcripts := &AssistantTranscriptStore{keys: in.OldKeys, now: nowUTC}
-	newKey, err := in.NewKeys.ActiveTranscriptKey(ctx)
-	if err != nil {
-		return plan, err
-	}
 	for _, d := range sortedKeys(old.transcripts) {
 		if _, ok := current.transcripts[d]; ok {
 			plan.Present++
 			continue
 		}
-		ev, err := reSealTranscript(ctx, transcripts, newKey, signer, old.transcripts[d])
+		ev, err := reSealTranscript(ctx, transcripts, in.NewKeys, signer, old.transcripts[d])
 		if err != nil {
 			plan.Failures = append(plan.Failures, fmt.Sprintf("transcript %s: %v", old.transcripts[d].ID.Hex(), err))
 			continue
@@ -276,7 +273,7 @@ func planCheckpointChain(ctx context.Context, plan *AssistantReencryptPlan, oldS
 	return mapping, nil
 }
 
-func reSealTranscript(ctx context.Context, store *AssistantTranscriptStore, key AssistantTranscriptKey, signer nostr.Signer, ev nostr.Event) (nostr.Event, error) {
+func reSealTranscript(ctx context.Context, store *AssistantTranscriptStore, keys AssistantTranscriptKeyProvider, signer nostr.Signer, ev nostr.Event) (nostr.Event, error) {
 	record, err := store.decryptEvent(ctx, &ev, AssistantTranscriptReplayQuery{SessionID: tagValue(ev.Tags, domain.AssistantTranscriptTagSession)})
 	if err != nil {
 		return nostr.Event{}, err
@@ -284,8 +281,14 @@ func reSealTranscript(ctx context.Context, store *AssistantTranscriptStore, key 
 	if record == nil {
 		return nostr.Event{}, errors.New("not an assistant transcript event")
 	}
-	envelope, err := encryptAssistantTranscriptPayload(ctx, key, record.Payload, assistantTranscriptAssociatedData(record.Payload, key))
-	if err != nil {
+	var envelope domain.AssistantTranscriptAEADEnvelope
+	var key AssistantTranscriptKeyRef
+	if err := keys.WithActiveKey(ctx, func(ref AssistantTranscriptKeyRef, aead cipher.AEAD) error {
+		key = ref
+		var err error
+		envelope, err = encryptAssistantTranscriptPayload(ctx, ref, aead, record.Payload, assistantTranscriptAssociatedData(record.Payload, ref))
+		return err
+	}); err != nil {
 		return nostr.Event{}, err
 	}
 	content, err := json.Marshal(envelope)

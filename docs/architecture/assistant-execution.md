@@ -139,7 +139,10 @@ least one. The first configured key seals new events; the others only open
 events sealed under them. An event records its key as `key_ref` (the
 credential label, `bahia-system/assistant-transcript/<key-id>`) and
 `key_version` (its Signet version), in the tags and in the AEAD associated
-data. An event whose key is not configured, including one sealed under the
+data (transcripts and checkpoints alike; checkpoints sealed under the retired
+nsec-derived key predate the binding and are only opened by the re-encryption
+tool). The provider lends a cipher built inside the keyring's callback
+(`WithActiveKey`, `WithKey`); key bytes never leave it. An event whose key is not configured, including one sealed under the
 retired nsec-derived key (`assistant-transcript/service-nostr-key`), fails
 closed with the key named; nothing derives a key from the service key.
 

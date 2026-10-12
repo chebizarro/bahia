@@ -3,6 +3,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/cipher"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +90,15 @@ func TestKeyringTranscriptKeysRotateWithVersionedKeyRefs(t *testing.T) {
 	if strings.Join(refs, " ") != want {
 		t.Fatalf("key refs = %v, want %s", refs, want)
 	}
+	for _, ev := range events {
+		var env domain.AssistantExecutionCheckpointAEADEnvelope
+		if err := json.Unmarshal([]byte(ev.Content), &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.AssociatedData[domain.AssistantTranscriptTagKeyRef] != env.KeyRef || env.AssociatedData[domain.AssistantTranscriptTagKeyVersion] != env.KeyVersion {
+			t.Fatalf("checkpoint associated data does not bind its key: %v", env.AssociatedData)
+		}
+	}
 	rotated.subscriber = newReplayTranscriptSubscriber(events)
 	head, err := rotated.Load(ctx, "session-chain", "run-chain")
 	if err != nil || head.Execution.Revision != 3 || len(head.Chain) != 3 {
@@ -102,9 +113,25 @@ func TestKeyringTranscriptKeysRotateWithVersionedKeyRefs(t *testing.T) {
 func TestKeyringTranscriptKeysRefuseLegacyAndMismatchedKeys(t *testing.T) {
 	ctx := context.Background()
 	keys := keyringKeys(t, "k1")
-	active, err := keys.ActiveTranscriptKey(ctx)
-	if err != nil || active.Ref != "bahia-system/assistant-transcript/k1" || active.Version != "1" || !bytes.Equal(active.Key, bytes.Repeat([]byte{1}, secretstore.SystemKeySize)) {
-		t.Fatalf("active = %+v, %v", active, err)
+	var sealed []byte
+	nonce := make([]byte, 24)
+	if err := keys.WithActiveKey(ctx, func(ref AssistantTranscriptKeyRef, aead cipher.AEAD) error {
+		if ref.Ref != "bahia-system/assistant-transcript/k1" || ref.Version != "1" {
+			t.Fatalf("active ref = %+v", ref)
+		}
+		sealed = aead.Seal(nil, nonce, []byte("payload"), nil)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := keys.WithKey(ctx, "bahia-system/assistant-transcript/k1", "1", func(aead cipher.AEAD) error {
+		plain, err := aead.Open(nil, nonce, sealed, nil)
+		if err != nil || string(plain) != "payload" {
+			t.Fatalf("open = %q, %v", plain, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 	for name, ref := range map[string][2]string{
 		"nsec-derived v1":  {"assistant-transcript/service-nostr-key", "v1"},
@@ -114,11 +141,14 @@ func TestKeyringTranscriptKeysRefuseLegacyAndMismatchedKeys(t *testing.T) {
 		"empty key id":     {"bahia-system/assistant-transcript/", "1"},
 		"wrapped manifest": {"assistant-transcript/wrapped", "v2"},
 	} {
-		if _, err := keys.TranscriptKey(ctx, ref[0], ref[1]); err == nil {
-			t.Errorf("%s: TranscriptKey(%q, %q) succeeded", name, ref[0], ref[1])
+		if err := keys.WithKey(ctx, ref[0], ref[1], func(cipher.AEAD) error {
+			t.Fatalf("%s: lent a key", name)
+			return nil
+		}); err == nil {
+			t.Errorf("%s: WithKey(%q, %q) succeeded", name, ref[0], ref[1])
 		}
 	}
-	if _, err := (KeyringTranscriptKeys{}).ActiveTranscriptKey(ctx); err == nil {
+	if err := (KeyringTranscriptKeys{}).WithActiveKey(ctx, func(AssistantTranscriptKeyRef, cipher.AEAD) error { return nil }); err == nil {
 		t.Fatal("a provider without a keyring served a key")
 	}
 }

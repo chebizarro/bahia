@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/cipher"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/secretstore"
+	"golang.org/x/crypto/chacha20poly1305"
 )
 
 // KeyringTranscriptKeys serves assistant transcript and checkpoint keys from
@@ -21,36 +23,38 @@ type KeyringTranscriptKeys struct {
 
 const assistantTranscriptKeyRefPrefix = secretstore.SystemLabelNamespace + "/" + secretstore.PurposeAssistantTranscript + "/"
 
-// ActiveTranscriptKey returns the key that seals new events.
-func (k KeyringTranscriptKeys) ActiveTranscriptKey(ctx context.Context) (AssistantTranscriptKey, error) {
-	return k.key(ctx, "")
+// WithActiveKey lends the cipher of the key that seals new events.
+func (k KeyringTranscriptKeys) WithActiveKey(ctx context.Context, fn func(AssistantTranscriptKeyRef, cipher.AEAD) error) error {
+	return k.use(ctx, "", fn)
 }
 
-// TranscriptKey returns the key named by an event's key_ref and key_version.
-func (k KeyringTranscriptKeys) TranscriptKey(ctx context.Context, keyRef, keyVersion string) (AssistantTranscriptKey, error) {
+// WithKey lends the cipher of the key an event names by key_ref and
+// key_version.
+func (k KeyringTranscriptKeys) WithKey(ctx context.Context, keyRef, keyVersion string, fn func(cipher.AEAD) error) error {
 	keyID, ok := strings.CutPrefix(strings.TrimSpace(keyRef), assistantTranscriptKeyRefPrefix)
 	if !ok || keyID == "" {
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key %q is not a Signet system key; data sealed under it is readable only after operator re-encryption", keyRef)
+		return fmt.Errorf("assistant transcript key %q is not a Signet system key; data sealed under it is readable only after operator re-encryption", keyRef)
 	}
-	key, err := k.key(ctx, keyID)
-	if err != nil {
-		return AssistantTranscriptKey{}, err
-	}
-	if key.Version != strings.TrimSpace(keyVersion) {
-		clear(key.Key)
-		return AssistantTranscriptKey{}, fmt.Errorf("assistant transcript key %q version %q is not available (configured version %s)", keyRef, keyVersion, key.Version)
-	}
-	return key, nil
+	return k.use(ctx, keyID, func(ref AssistantTranscriptKeyRef, aead cipher.AEAD) error {
+		if ref.Version != strings.TrimSpace(keyVersion) {
+			return fmt.Errorf("assistant transcript key %q version %q is not available (configured version %s)", keyRef, keyVersion, ref.Version)
+		}
+		return fn(aead)
+	})
 }
 
-func (k KeyringTranscriptKeys) key(ctx context.Context, keyID string) (AssistantTranscriptKey, error) {
+// use builds the cipher from the keyring's own buffer, under the keyring's
+// lock: no copy of the key exists outside the keyring except the one the
+// XChaCha20-Poly1305 implementation keeps for the cipher's lifetime.
+func (k KeyringTranscriptKeys) use(ctx context.Context, keyID string, fn func(AssistantTranscriptKeyRef, cipher.AEAD) error) error {
 	if k.Ring == nil {
-		return AssistantTranscriptKey{}, fmt.Errorf("%w: no assistant transcript system key", secretstore.ErrNotConfigured)
+		return fmt.Errorf("%w: no assistant transcript system key", secretstore.ErrNotConfigured)
 	}
-	var out AssistantTranscriptKey
-	err := k.Ring.Use(ctx, secretstore.PurposeAssistantTranscript, keyID, func(ref secretstore.SystemKeyRef, raw []byte) error {
-		out = AssistantTranscriptKey{Ref: ref.Label(), Version: strconv.Itoa(ref.Credential.Version), Key: append([]byte(nil), raw...)}
-		return nil
+	return k.Ring.Use(ctx, secretstore.PurposeAssistantTranscript, keyID, func(ref secretstore.SystemKeyRef, raw []byte) error {
+		aead, err := chacha20poly1305.NewX(raw)
+		if err != nil {
+			return err
+		}
+		return fn(AssistantTranscriptKeyRef{Ref: ref.Label(), Version: strconv.Itoa(ref.Credential.Version)}, aead)
 	})
-	return out, err
 }
