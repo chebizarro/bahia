@@ -159,14 +159,39 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 		return nostr.Event{}, fmt.Errorf("intent status signer is not configured")
 	}
 
-	// Build d-tag: intent-status:<requester-pubkey>:<entity-coordinate>
-	// This bounds growth to one status event per requester per entity.
+	// Ordinarily the d-tag is bounded to one status per requester and entity.
+	// Secret statuses use an opaque request correlation instead.
 	dTag := fmt.Sprintf("intent-status:%s:%s", intent.Actor, intent.Coordinate)
+	if intent.Domain == "secret" {
+		// A secret coordinate can identify a service. Secret statuses are
+		// correlated by request instead of exposing that coordinate.
+		correlation := intent.IntentID
+		if correlation == "" && intent.Event != nil {
+			correlation = intent.Event.ID.Hex()
+		}
+		if correlation == "" {
+			return nostr.Event{}, fmt.Errorf("secret status requires request correlation")
+		}
+		dTag = fmt.Sprintf("intent-status:%s:secret:%s", intent.Actor, correlation)
+		if status == "conflict" {
+			reason = "revision_conflict"
+		} else {
+			switch reason {
+			case "invalid_request", "revision_conflict", "store_unavailable", "processing_failed":
+			default:
+				if reason != "" {
+					reason = "invalid_request"
+				}
+			}
+		}
+	}
 
 	content := map[string]interface{}{
-		"intent_id":  intent.IntentID,
-		"coordinate": intent.Coordinate,
-		"result":     result,
+		"intent_id": intent.IntentID,
+		"result":    result,
+	}
+	if intent.Domain != "secret" {
+		content["coordinate"] = intent.Coordinate
 	}
 	if reason != "" {
 		content["reason"] = reason
@@ -174,11 +199,12 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 	if evaluation != nil {
 		content["evaluation"] = evaluation
 	}
-	if (status == "accepted" || status == "pending") && len(intent.StatusData) != 0 {
+	// Secret handler output is never a public status payload.
+	if intent.Domain != "secret" && (status == "accepted" || status == "pending") && len(intent.StatusData) != 0 {
 		content["data"] = intent.StatusData
-	} else if (status == "accepted" || status == "pending") && len(intent.Result) != 0 {
+	} else if intent.Domain != "secret" && (status == "accepted" || status == "pending") && len(intent.Result) != 0 {
 		content["data"] = intent.Result
-	} else if status == "rejected" && len(intent.StatusData) != 0 {
+	} else if intent.Domain != "secret" && status == "rejected" && len(intent.StatusData) != 0 {
 		// A handler that got part of the way (adoption's per-resource
 		// canonical publication) reports its progress on the rejection, so a
 		// partial application is visible, not silent.

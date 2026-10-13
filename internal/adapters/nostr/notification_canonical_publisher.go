@@ -65,12 +65,12 @@ func (p *NotificationCanonicalPublisher) PublishChannel(ctx context.Context, ch 
 	}
 
 	// Org-visible: sanitized metadata (no secrets/webhook URLs).
-	tags, orgVisibleContent := NotificationChannelRegistryRecord(ch, false, false)
+	_, orgVisibleContent := NotificationChannelRegistryRecord(ch, false, false)
 
 	// Service-only: full config including credentials.
 	_, serviceContent := NotificationChannelRegistryRecord(ch, false, true)
 
-	return p.publishConfidentialWithServiceInner(ctx, KindNotificationChannelRegistry, dTag, false, tags, orgVisibleContent, []byte(serviceContent), "notification_channel.projection", &ch.ID, ch.OrgID.String())
+	return p.publishConfidentialWithServiceInner(ctx, KindNotificationChannelRegistry, dTag, false, nil, orgVisibleContent, []byte(serviceContent), "notification_channel.projection", &ch.ID, ch.OrgID.String())
 }
 
 // publishFleetScopedChannel publishes a fleet-scoped notification channel
@@ -108,12 +108,7 @@ func (p *NotificationCanonicalPublisher) publishFleetScopedChannel(ctx context.C
 		return fmt.Errorf("encrypt fleet notification channel: %w", err)
 	}
 
-	tags := gonostr.Tags{
-		{"channel_type", string(ch.ChannelType)},
-		{"name", ch.Name},
-	}
-
-	return p.projector.publishControlState(ctx, KindNotificationChannelRegistry, dTag, false, tags, encrypted, "notification_channel.projection", &ch.ID)
+	return p.projector.publishControlState(ctx, KindNotificationChannelRegistry, dTag, false, nil, encrypted, "notification_channel.projection", &ch.ID)
 }
 
 // PublishChannelDeleted publishes a tombstone for a deleted channel.
@@ -159,17 +154,12 @@ func NotificationChannelDTag(id uuid.UUID) string {
 	return id.String()
 }
 
-// NotificationChannelRegistryRecord builds the tags and content for a
-// notification channel registry canonical state record. When confidential is
+// NotificationChannelRegistryRecord builds the encrypted content for a
+// notification channel registry canonical state record. No confidential
+// metadata is returned as a public tag. When confidential is
 // true the full config is included (the caller encrypts); when false, webhook
 // URLs and secrets are redacted for any non-encrypted context.
 func NotificationChannelRegistryRecord(ch *domain.NotificationChannel, deleted bool, confidential bool) (gonostr.Tags, string) {
-	tags := gonostr.Tags{
-		{"org_id", ch.OrgID.String()},
-		{"channel_type", string(ch.ChannelType)},
-		{"name", ch.Name},
-	}
-
 	// When publishing confidentially (NIP-44 encrypted), include the full config
 	// so the daemon can reconstitute the channel from the relay copy. When not
 	// confidential, sanitize to strip secrets and webhook URLs.
@@ -198,7 +188,7 @@ func NotificationChannelRegistryRecord(ch *domain.NotificationChannel, deleted b
 	}
 
 	contentJSON, _ := json.Marshal(payload)
-	return tags, string(contentJSON)
+	return nil, string(contentJSON)
 }
 
 // sanitizeNotificationConfig strips sensitive fields from the notification

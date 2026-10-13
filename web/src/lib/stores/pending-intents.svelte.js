@@ -3,6 +3,11 @@ const STORE = 'pending_intents';
 function tag(event, name) { return event?.tags?.find(t => t[0] === name)?.[1]; }
 function key(coordinate, intentId) { return `${coordinate}\u0000${intentId}`; }
 
+export function intentStatusCoordinates(requester, { domain, coordinate, intentId }) {
+  const legacy = `intent-status:${requester}:${coordinate}`;
+  return domain === 'secret' ? [`intent-status:${requester}:secret:${intentId}`, legacy] : [legacy];
+}
+
 /** Merge UI-only desired state beside canonical rows without changing the store. */
 export function mergeWithPending(canonical, pending, domain) {
   const rows = new Map(canonical.map(row => [String(row.id), row]));
@@ -81,7 +86,7 @@ export function createPendingIntents({ namespace, servicePubkey, requesterPubkey
       const intentId = tag(event, 'intent_id');
       const row = [...rows.values()].find(item => item.intentId === intentId);
       if (!row || tag(event, 'p') !== requesterPubkey ||
-        tag(event, 'd') !== `intent-status:${requesterPubkey}:${row.coordinate}`) return false;
+        !intentStatusCoordinates(requesterPubkey, row).includes(tag(event, 'd'))) return false;
       let body;
       try { body = JSON.parse(event.content || '{}'); } catch { return false; }
       const status = tag(event, 'status') || body.status;
