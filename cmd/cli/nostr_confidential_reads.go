@@ -239,14 +239,7 @@ func listCLISecrets(cmd *cobra.Command, serviceID string) error {
 	if err != nil {
 		return fmt.Errorf("invalid service ID %q: %w", serviceID, err)
 	}
-	all, unreadable, err := readCLIConfidentialRecords[cliSecretRef](cmd, kinds.SecretRegistry, func(record *client.DecodedEvent) bool {
-		for _, tag := range record.Event.Tags {
-			if len(tag) >= 2 && tag[0] == "service_id" {
-				return tag[1] == parsed.String()
-			}
-		}
-		return false
-	})
+	all, unreadable, err := readCLIConfidentialRecords[cliSecretRef](cmd, kinds.SecretRegistry)
 	if err != nil {
 		return err
 	}
