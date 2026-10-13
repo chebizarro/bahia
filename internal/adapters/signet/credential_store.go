@@ -47,7 +47,7 @@ var signetCredentialIDPattern = regexp.MustCompile(`^cred_[0-9a-f]{64}$`)
 
 // errReplySubscriptionDown marks requests refused while the reply
 // subscription has not caught up.
-var errReplySubscriptionDown = errors.New("Signet reply subscription is not caught up")
+var errReplySubscriptionDown = errors.New("signet reply subscription is not caught up")
 
 // CredentialStoreConfig configures the Signet-backed secret store.
 type CredentialStoreConfig struct {
