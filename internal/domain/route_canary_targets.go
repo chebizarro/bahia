@@ -53,8 +53,9 @@ type RouteCanaryPolicy struct {
 	Thresholds RouteCanaryThresholds
 	// Overrides tunes individual routes, keyed by normalized hostname. A route
 	// without an entry uses the fleet-wide values above unchanged. Overrides
-	// apply to periodic probing and to the post-deploy gate alike, because both
-	// derive targets through DeriveRouteCanaryTargets.
+	// apply to periodic probing and to the post-deploy gate where relevant;
+	// gate timeout/retry are resolved by the gate and periodic outage thresholds
+	// do not replace its conclusive one-observation record.
 	Overrides map[string]RouteCanaryOverride
 }
 

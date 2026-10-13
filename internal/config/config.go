@@ -247,7 +247,13 @@ type RouteCanaryOverrideConfig struct {
 	// Interval replaces the periodic probe interval for this route.
 	Interval time.Duration `koanf:"interval" yaml:"interval" secret:"false"`
 	// ProbeTimeout replaces the per-probe timeout for this route.
-	ProbeTimeout time.Duration `koanf:"probe_timeout" yaml:"probe_timeout" secret:"false"`
+	ProbeTimeout                    time.Duration `koanf:"probe_timeout" yaml:"probe_timeout" secret:"false"`
+	GateTimeout                     time.Duration `koanf:"gate_timeout" yaml:"gate_timeout" secret:"false"`
+	GateRetryInterval               time.Duration `koanf:"gate_retry_interval" yaml:"gate_retry_interval" secret:"false"`
+	FailureThreshold                *int          `koanf:"failure_threshold" yaml:"failure_threshold" secret:"false"`
+	SuccessThreshold                *int          `koanf:"success_threshold" yaml:"success_threshold" secret:"false"`
+	DetectCatchAll                  *bool         `koanf:"detect_catch_all" yaml:"detect_catch_all" secret:"false"`
+	RequireDiscriminatingHealthPath *bool         `koanf:"require_discriminating_health_path" yaml:"require_discriminating_health_path" secret:"false"`
 	// ExpectedStatusMin and ExpectedStatusMax replace either bound of the
 	// accepted status range for this route.
 	ExpectedStatusMin *int `koanf:"expected_status_min" yaml:"expected_status_min" secret:"false"`

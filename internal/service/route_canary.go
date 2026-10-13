@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -198,11 +199,14 @@ type RouteCanarySupervisor struct {
 	routeLocks   map[string]*sync.Mutex
 
 	// scheduleMu guards nextDue, the instant each route coordinate is next due,
-	// and enumerationFailed, whether the latest sweep could not list routes.
+	// enumerationFailed, whether the latest sweep could not list routes, and the
+	// last successful override inventory check.
 	// A route with no entry is due immediately.
-	scheduleMu        sync.Mutex
-	nextDue           map[string]time.Time
-	enumerationFailed bool
+	scheduleMu         sync.Mutex
+	nextDue            map[string]time.Time
+	enumerationFailed  bool
+	overridesScanned   bool
+	unmatchedOverrides []string
 }
 
 // NewRouteCanarySupervisor builds a periodic route canary supervisor.
@@ -338,6 +342,7 @@ func (s *RouteCanarySupervisor) sweep(ctx context.Context, force bool) {
 	sort.Slice(plans, func(i, j int) bool {
 		return domain.RouteCanaryKeyForPlan(plans[i]).Coordinate() < domain.RouteCanaryKeyForPlan(plans[j]).Coordinate()
 	})
+	s.checkOverrideHostnames(plans)
 
 	// Scheduling uses one instant for the whole sweep, so routes that share an
 	// interval stay batched however long an individual probe takes.
@@ -360,6 +365,38 @@ func (s *RouteCanarySupervisor) sweep(ctx context.Context, force bool) {
 				zap.String("route", coordinate),
 				zap.Error(err))
 		}
+	}
+}
+
+// UnmatchedOverrideHostnames reports the last successful route enumeration's
+// unmatched configured hostnames. The second result is false before the first
+// successful enumeration, when the policy cannot yet be checked.
+func (s *RouteCanarySupervisor) UnmatchedOverrideHostnames() ([]string, bool) {
+	s.scheduleMu.Lock()
+	defer s.scheduleMu.Unlock()
+	return slices.Clone(s.unmatchedOverrides), s.overridesScanned
+}
+
+func (s *RouteCanarySupervisor) checkOverrideHostnames(plans []*domain.DesiredPublicRoutePlan) {
+	overrides := s.evaluator.Policy().Overrides
+	managed := make(map[string]struct{}, len(plans))
+	for _, plan := range plans {
+		managed[domain.NormalizeRouteCanaryHostname(plan.Hostname)] = struct{}{}
+	}
+	unmatched := make([]string, 0)
+	for hostname := range overrides {
+		if _, ok := managed[hostname]; !ok {
+			unmatched = append(unmatched, hostname)
+		}
+	}
+	sort.Strings(unmatched)
+	s.scheduleMu.Lock()
+	changed := !slices.Equal(s.unmatchedOverrides, unmatched)
+	s.unmatchedOverrides = unmatched
+	s.overridesScanned = true
+	s.scheduleMu.Unlock()
+	if changed && len(unmatched) > 0 {
+		s.logger.Warn("route canary overrides match no managed route", zap.Strings("hostnames", unmatched))
 	}
 }
 
@@ -476,7 +513,7 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 		verdict.Perspective,
 		verdict.Reason,
 		verdict.TLSNotAfter,
-		s.evaluator.Policy().Thresholds,
+		s.evaluator.Policy().ForHostname(plan.Hostname).Thresholds,
 		now,
 	)
 	next.RouteCanaryKey = key

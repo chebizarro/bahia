@@ -32,6 +32,18 @@ type RouteCanaryOverride struct {
 	// ProbeTimeout replaces the per-probe timeout, for a slow origin. Zero
 	// inherits.
 	ProbeTimeout time.Duration
+	// GateTimeout and GateRetryInterval tune only post-deploy verification.
+	// Zero inherits the fleet-wide gate setting.
+	GateTimeout       time.Duration
+	GateRetryInterval time.Duration
+	// FailureThreshold and SuccessThreshold tune periodic outage hysteresis.
+	// The post-deploy gate remains conclusive after its retry window and records
+	// with one observation; explicit threshold values must be positive.
+	FailureThreshold *int
+	SuccessThreshold *int
+	// Pointer booleans distinguish an inherited setting from an explicit false.
+	DetectCatchAll                  *bool
+	RequireDiscriminatingHealthPath *bool
 	// ExpectedStatusMin and ExpectedStatusMax replace either bound of the
 	// accepted status range. The resulting range must still be valid.
 	ExpectedStatusMin *int
@@ -53,6 +65,12 @@ type RouteCanaryOverride struct {
 func (o RouteCanaryOverride) IsEmpty() bool {
 	return o.Interval == 0 &&
 		o.ProbeTimeout == 0 &&
+		o.GateTimeout == 0 &&
+		o.GateRetryInterval == 0 &&
+		o.FailureThreshold == nil &&
+		o.SuccessThreshold == nil &&
+		o.DetectCatchAll == nil &&
+		o.RequireDiscriminatingHealthPath == nil &&
 		o.ExpectedStatusMin == nil &&
 		o.ExpectedStatusMax == nil &&
 		o.ExpectedBodyContains == nil &&
@@ -101,6 +119,18 @@ func (p RouteCanaryPolicy) ForHostname(hostname string) RouteCanaryPolicy {
 	if override.ProbeTimeout > 0 {
 		effective.ProbeTimeout = override.ProbeTimeout
 	}
+	if override.FailureThreshold != nil {
+		effective.Thresholds.FailureThreshold = *override.FailureThreshold
+	}
+	if override.SuccessThreshold != nil {
+		effective.Thresholds.SuccessThreshold = *override.SuccessThreshold
+	}
+	if override.DetectCatchAll != nil {
+		effective.DetectCatchAll = *override.DetectCatchAll
+	}
+	if override.RequireDiscriminatingHealthPath != nil {
+		effective.RequireDiscriminatingHealthPath = *override.RequireDiscriminatingHealthPath
+	}
 	if override.ExpectedStatusMin != nil {
 		effective.ExpectedStatusMin = *override.ExpectedStatusMin
 	}
@@ -117,6 +147,13 @@ func (p RouteCanaryPolicy) ForHostname(hostname string) RouteCanaryPolicy {
 		effective.TLSMinDaysRemaining = *override.TLSMinDaysRemaining
 	}
 	return effective
+}
+
+// GateTimingFor returns only the gate timing fields overridden for a route.
+// Zero means that the gate inherits its fleet-wide configured value.
+func (p RouteCanaryPolicy) GateTimingFor(hostname string) (time.Duration, time.Duration) {
+	override := p.Overrides[NormalizeRouteCanaryHostname(hostname)]
+	return override.GateTimeout, override.GateRetryInterval
 }
 
 // ProbeIntervalFor reports the per-route periodic probe interval, when the
@@ -161,10 +198,23 @@ func (p RouteCanaryPolicy) validateOverrides() error {
 		if override.ProbeTimeout < 0 {
 			return fmt.Errorf("route canary policy: overrides[%s].probe_timeout must not be negative", hostname)
 		}
+		if override.GateTimeout < 0 || override.GateRetryInterval < 0 {
+			return fmt.Errorf("route canary policy: overrides[%s] gate timing must not be negative", hostname)
+		}
+		if override.FailureThreshold != nil && *override.FailureThreshold < 1 {
+			return fmt.Errorf("route canary policy: overrides[%s].failure_threshold must be positive", hostname)
+		}
+		if override.SuccessThreshold != nil && *override.SuccessThreshold < 1 {
+			return fmt.Errorf("route canary policy: overrides[%s].success_threshold must be positive", hostname)
+		}
+		effective := p.ForHostname(hostname)
+		if effective.RequireDiscriminatingHealthPath && !effective.DetectCatchAll {
+			return fmt.Errorf("route canary policy: overrides[%s].require_discriminating_health_path requires detect_catch_all", hostname)
+		}
 		// Validate the policy the route will actually be probed with, so an
 		// override that breaks the fleet-wide range (for example a minimum above
 		// the inherited maximum) fails at startup.
-		if err := p.ForHostname(hostname).validateExpectations(); err != nil {
+		if err := effective.validateExpectations(); err != nil {
 			return fmt.Errorf("route canary policy: overrides[%s]: %w", hostname, err)
 		}
 	}
