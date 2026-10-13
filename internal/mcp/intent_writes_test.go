@@ -233,7 +233,9 @@ func TestMCPNotificationIntentRedactsCanonicalCredentials(t *testing.T) {
 			Enabled:     true,
 		})
 	}
-	processor := controlplane.NewIntentProcessor(controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID.String(): operator})), canonical.store, nil, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"notification": true}}, zap.NewNop())
+	trust := controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{orgID.String(): operator}))
+	server.trustSet = trust
+	processor := controlplane.NewIntentProcessor(trust, canonical.store, nil, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"notification": true}}, zap.NewNop())
 	processor.RegisterHandler("notification", handler)
 	server.intentProc = processor
 	ctx := auth.ContextWithPrincipal(context.Background(), &auth.Principal{Subject: "operator", PubKey: operator, Method: auth.MethodNIP98})

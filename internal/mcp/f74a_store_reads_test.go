@@ -10,6 +10,7 @@ import (
 	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
@@ -17,6 +18,12 @@ import (
 )
 
 type testSBOMAttributions struct{ org uuid.UUID }
+
+type allSBOMAttributions struct{}
+
+func (allSBOMAttributions) HasAttribution(context.Context, domain.SecurityAttribution) (bool, error) {
+	return true, nil
+}
 
 func (a testSBOMAttributions) HasAttribution(_ context.Context, edge domain.SecurityAttribution) (bool, error) {
 	return edge.OrgID == a.org && edge.SubjectType == "sbom" && edge.SubjectDigest == strings.Repeat("b", 64), nil
@@ -53,6 +60,21 @@ func TestF74aSBOMOrgReadRequiresCanonicalAttribution(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, search.IsError)
 	require.JSONEq(t, `{"query":"alpha","packages":[],"total":0}`, search.Content[0].Text)
+	actor := strings.Repeat("a", 64)
+	server.authorizedPubkeys = []string{actor}
+	server.trustSet = controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{org.String(): actor}))
+	server.securityAttributions = allSBOMAttributions{}
+	memberCtx := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: actor, PubKey: actor, Method: auth.MethodNIP98})
+	foreign, err := server.CallTool(memberCtx, "bahia_get_sbom", map[string]any{"artifact_id": artifact.String(), "org_id": other.String()})
+	require.NoError(t, err)
+	require.True(t, foreign.IsError)
+	require.Contains(t, foreign.Content[0].Text, "access denied")
+	own, err := server.CallTool(memberCtx, "bahia_get_sbom", map[string]any{"artifact_id": artifact.String(), "org_id": org.String()})
+	require.NoError(t, err)
+	require.False(t, own.IsError)
+	unscoped, err := server.CallTool(memberCtx, "bahia_get_sbom", map[string]any{"artifact_id": artifact.String()})
+	require.NoError(t, err)
+	require.True(t, unscoped.IsError, "tenant member cannot bypass attribution through a fleet read")
 }
 
 // Goldens are the MCP response contract, not a second repository implementation.

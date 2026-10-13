@@ -40,6 +40,7 @@ type Server struct {
 	toolProvisioning     repository.ToolProvisioningRepository
 	authorizedPubkeys    []string
 	rbac                 *auth.RBAC
+	trustSet             *controlplane.TrustSet
 	securityAttributions interface {
 		HasAttribution(context.Context, domain.SecurityAttribution) (bool, error)
 	}
@@ -69,6 +70,7 @@ type ServerDeps struct {
 	AuthorizedPubkeys []string
 	// RBAC is required for tenant-scoped authorization such as secret access.
 	RBAC                 *auth.RBAC
+	TrustSet             *controlplane.TrustSet
 	SecurityAttributions interface {
 		HasAttribution(context.Context, domain.SecurityAttribution) (bool, error)
 	}
@@ -98,6 +100,7 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 		toolProvisioning:     deps.ToolProvisioning,
 		authorizedPubkeys:    normalizePubkeys(deps.AuthorizedPubkeys),
 		rbac:                 deps.RBAC,
+		trustSet:             deps.TrustSet,
 		securityAttributions: deps.SecurityAttributions,
 		outbox:               deps.Outbox,
 	}, nil
@@ -1720,6 +1723,42 @@ func (s *Server) authorizeToolCall(ctx context.Context, name string) *ToolResult
 	return nil
 }
 
+func (s *Server) isFleetReader(ctx context.Context) bool {
+	principal := auth.GetPrincipal(ctx)
+	if principal == nil || !principal.IsAuthenticated() {
+		return false
+	}
+	if principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin)) {
+		return true
+	}
+	return s.trustSet != nil && slices.Contains(s.trustSet.FleetOps(), principal.PubKey)
+}
+
+func (s *Server) canReadOrg(ctx context.Context, orgID uuid.UUID, permission domain.Permission) bool {
+	if orgID == uuid.Nil {
+		return false
+	}
+	principal := auth.GetPrincipal(ctx)
+	if principal == nil || !principal.IsAuthenticated() {
+		return false
+	}
+	if principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin)) {
+		return true
+	}
+	return s.trustSet != nil && s.trustSet.HasPermission(ctx, orgID, principal.PubKey, permission)
+}
+
+func isFleetReadTool(name string) bool {
+	if strings.HasPrefix(name, "bahia_dns_") || strings.HasPrefix(name, "bahia_assistant_dns_") || strings.HasPrefix(name, "bahia_fips_") {
+		return true
+	}
+	switch name {
+	case "bahia_list_workers", "bahia_get_worker", "bahia_get_worker_pricing", "bahia_worker_get_assignments", "bahia_worker_list_assignments", "bahia_worker_get_drain_status", "bahia_worker_list_drain_status", "bahia_worker_preview_eligibility":
+		return true
+	}
+	return false
+}
+
 func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.UUID, permission domain.Permission, resource string) *ToolResult {
 	principal := auth.GetPrincipal(ctx)
 	if principal != nil && principal.Method == auth.MethodSystem && principal.HasRole(string(domain.RoleAdmin)) {
@@ -1813,6 +1852,9 @@ func (s *Server) CallTool(ctx context.Context, name string, arguments map[string
 	}
 	if denied := s.authorizeToolCall(ctx, name); denied != nil {
 		return denied, nil
+	}
+	if isFleetReadTool(name) && !s.isFleetReader(ctx) {
+		return errorResult("access denied"), nil
 	}
 	if result, handled := s.callStoreReadTool(ctx, name, arguments); handled {
 		return result, nil
@@ -3106,6 +3148,10 @@ func (s *Server) handleMarkNotificationRead(ctx context.Context, args map[string
 
 	if notification == nil {
 		return errorResult("notification not found"), nil
+	}
+	channel, err := s.readStateOne(ctx, nostrAdapter.KindNotificationChannelRegistry, "id", notification.ChannelID.String())
+	if err != nil || channel == nil {
+		return errorResult("access denied"), nil
 	}
 
 	// Mark as read by updating status to sent

@@ -31,6 +31,16 @@ type finalIntentFixture struct {
 	ctx, strangerCtx context.Context
 }
 
+type finalNotificationOwners struct{ repo *testNotificationRepo }
+
+func (r finalNotificationOwners) OwnerOf(ctx context.Context, id uuid.UUID) (uuid.UUID, bool, error) {
+	channel, err := r.repo.GetChannelByID(ctx, id)
+	if err != nil || channel == nil {
+		return uuid.Nil, false, err
+	}
+	return channel.OrgID, true, nil
+}
+
 func newFinalIntentFixture(t *testing.T, domainName, mode string) *finalIntentFixture {
 	t.Helper()
 	f := &finalIntentFixture{actor: nostr.Generate().Public().Hex(), stranger: nostr.Generate().Public().Hex(), orgID: uuid.New()}
@@ -48,6 +58,7 @@ func newFinalIntentFixture(t *testing.T, domainName, mode string) *finalIntentFi
 		return err
 	}, signer, zap.NewNop())
 	trust := controlplane.NewTrustSet([]string{f.actor}, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{f.orgID.String(): f.actor, uuid.NewString(): f.stranger}))
+	f.server.trustSet = trust
 	f.server.intentProc = controlplane.NewIntentProcessor(trust, f.canonical.store, status, controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{domainName: true}}, zap.NewNop())
 	return f
 }
@@ -404,9 +415,9 @@ func TestFinalMCPD80RealHandlerPipeline(t *testing.T) {
 					channel := &domain.NotificationChannel{ID: id, OrgID: f.orgID, Name: "alerts", Enabled: true}
 					repo := newTestNotificationRepo()
 					require.NoError(t, repo.CreateChannel(t.Context(), channel))
-					f.publishState(t, nostrpool.KindNotificationChannelRegistry, channel, id.String())
+					require.NoError(t, f.canonical.notificationPublisher(t, f.server).PublishChannel(t.Context(), channel))
 					dispatcher := &finalNotificationDispatcher{}
-					f.server.intentProc.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(controlplane.NotificationIntentHandlerConfig{Registry: repo, TestDispatcher: dispatcher, Logger: zap.NewNop()}))
+					f.server.intentProc.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(controlplane.NotificationIntentHandlerConfig{Registry: repo, Owners: finalNotificationOwners{repo: repo}, TestDispatcher: dispatcher, Logger: zap.NewNop()}))
 					args["channel_id"] = id.String()
 					effects = func() int { return dispatcher.calls }
 				}
@@ -492,7 +503,7 @@ func TestFinalMCPD79D80FixtureMappings(t *testing.T) {
 	artifactID := uuid.MustParse(d80[3].Content["artifact_id"].(string))
 	f.publishState(t, nostrpool.KindArtifactRegistry, &domain.Artifact{ID: artifactID, ServiceID: serviceID, ImageDigest: "sha256:abc"}, "artifact:"+artifactID.String())
 	channelID := uuid.MustParse(d80[6].Content["id"].(string))
-	f.publishState(t, nostrpool.KindNotificationChannelRegistry, &domain.NotificationChannel{ID: channelID, OrgID: f.orgID, Name: "alerts"}, channelID.String())
+	require.NoError(t, f.canonical.notificationPublisher(t, f.server).PublishChannel(t.Context(), &domain.NotificationChannel{ID: channelID, OrgID: f.orgID, Name: "alerts"}))
 	cases := []struct {
 		fixture fixtureIntent
 		tool    string

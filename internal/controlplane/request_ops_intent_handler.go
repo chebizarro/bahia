@@ -33,7 +33,9 @@ func NewSecurityScanIntentHandler(scanner SecurityScannerControlPlane, attributi
 func (*SecurityScanIntentHandler) PermissionFor(string) domain.Permission {
 	return domain.PermWriteServices
 }
-func (*SecurityScanIntentHandler) IsFleetScoped() bool { return true }
+func (*SecurityScanIntentHandler) IsFleetScopedOperation(op string) bool {
+	return op != "attribution-apply"
+}
 
 func (h *SecurityScanIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
 	if intent.Op == "attribution-apply" {

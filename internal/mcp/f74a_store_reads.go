@@ -116,6 +116,13 @@ func (s *Server) storeF74aRead(ctx context.Context, name string, args map[string
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
+		orgID, scoped, err := sbomReadOrg(args)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		if scoped && !s.canReadOrg(ctx, orgID, domain.PermReadServices) || !scoped && !s.isFleetReader(ctx) {
+			return errorResult("access denied"), nil
+		}
 		sboms, err := decodeFamily[domain.ArtifactSBOM](ctx, s, nostrpool.KindArtifactSBOMRegistry)
 		if err != nil {
 			return nil, err
@@ -129,11 +136,9 @@ func (s *Server) storeF74aRead(ctx context.Context, name string, args map[string
 		if latest == nil {
 			return errorResult("SBOM not found for artifact"), nil
 		}
-		if orgID, scoped, err := sbomReadOrg(args); err != nil {
-			return errorResult(err.Error()), nil
-		} else if scoped {
+		if scoped {
 			if err := s.requireSBOMAttribution(ctx, orgID, latest); err != nil {
-				return errorResult(err.Error()), nil
+				return errorResult("access denied"), nil
 			}
 		}
 		if name == "bahia_get_sbom" {
@@ -160,13 +165,16 @@ func (s *Server) storeF74aRead(ctx context.Context, name string, args map[string
 		if query == "" {
 			return errorResult("query is required"), nil
 		}
-		packages, err := decodeFamily[domain.SBOMPackage](ctx, s, nostrpool.KindSBOMPackageRegistry)
-		if err != nil {
-			return nil, err
-		}
 		orgID, scoped, err := sbomReadOrg(args)
 		if err != nil {
 			return errorResult(err.Error()), nil
+		}
+		if scoped && !s.canReadOrg(ctx, orgID, domain.PermReadServices) || !scoped && !s.isFleetReader(ctx) {
+			return errorResult("access denied"), nil
+		}
+		packages, err := decodeFamily[domain.SBOMPackage](ctx, s, nostrpool.KindSBOMPackageRegistry)
+		if err != nil {
+			return nil, err
 		}
 		visibleSBOMs := map[uuid.UUID]bool{}
 		if scoped {

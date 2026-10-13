@@ -160,19 +160,21 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 	}
 
 	// Ordinarily the d-tag is bounded to one status per requester and entity.
-	// Secret statuses use an opaque request correlation instead.
+	// Confidential refusals use request correlation instead of the target.
+	privateStatus := intent.Domain == "secret" || (status == "rejected" || status == "conflict") && confidentialTenantStatusDomain(intent.Domain)
 	dTag := fmt.Sprintf("intent-status:%s:%s", intent.Actor, intent.Coordinate)
-	if intent.Domain == "secret" {
-		// A secret coordinate can identify a service. Secret statuses are
-		// correlated by request instead of exposing that coordinate.
+	if privateStatus {
+		// The target coordinate can identify confidential resources.
 		correlation := intent.IntentID
 		if correlation == "" && intent.Event != nil {
 			correlation = intent.Event.ID.Hex()
 		}
 		if correlation == "" {
-			return nostr.Event{}, fmt.Errorf("secret status requires request correlation")
+			return nostr.Event{}, fmt.Errorf("confidential status requires request correlation")
 		}
-		dTag = fmt.Sprintf("intent-status:%s:secret:%s", intent.Actor, correlation)
+		dTag = fmt.Sprintf("intent-status:%s:%s:%s", intent.Actor, intent.Domain, correlation)
+	}
+	if intent.Domain == "secret" {
 		if status == "conflict" {
 			reason = "revision_conflict"
 		} else {
@@ -185,12 +187,18 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 			}
 		}
 	}
+	if status == "rejected" && confidentialTenantStatusDomain(intent.Domain) && reason != "" {
+		reason = "access_denied"
+	}
+	if status == "conflict" && confidentialTenantStatusDomain(intent.Domain) && reason != "" {
+		reason = "revision_conflict"
+	}
 
 	content := map[string]interface{}{
 		"intent_id": intent.IntentID,
 		"result":    result,
 	}
-	if intent.Domain != "secret" {
+	if !privateStatus {
 		content["coordinate"] = intent.Coordinate
 	}
 	if reason != "" {
@@ -204,7 +212,7 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 		content["data"] = intent.StatusData
 	} else if intent.Domain != "secret" && (status == "accepted" || status == "pending") && len(intent.Result) != 0 {
 		content["data"] = intent.Result
-	} else if intent.Domain != "secret" && status == "rejected" && len(intent.StatusData) != 0 {
+	} else if intent.Domain != "secret" && !confidentialTenantStatusDomain(intent.Domain) && status == "rejected" && len(intent.StatusData) != 0 {
 		// A handler that got part of the way (adoption's per-resource
 		// canonical publication) reports its progress on the rejection, so a
 		// partial application is visible, not silent.
@@ -253,4 +261,12 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 		return nostr.Event{}, err
 	}
 	return ev, nil
+}
+
+func confidentialTenantStatusDomain(domain string) bool {
+	switch domain {
+	case "backup", "dns", "worker", "loom", "notification", "sbom", "security", "relay":
+		return true
+	}
+	return false
 }

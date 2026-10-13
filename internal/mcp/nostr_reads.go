@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -87,7 +88,24 @@ func (s *Server) readStateFamily(ctx context.Context, legacyKind int) ([]stateRe
 		if err := json.Unmarshal(content, &envelope); err != nil {
 			return nil, fmt.Errorf("decode cp-state event %s: %w", ev.ID.Hex(), err)
 		}
+		channelScope := ""
 		if envelope.Schema == controlplane.ConfidentialSchema {
+			if legacyKind == nostrpool.KindNotificationChannelRegistry {
+				channelScope, _, err = controlplane.VersionFromEnvelope(ev.Content)
+				if err != nil {
+					return nil, fmt.Errorf("notification channel has invalid canonical scope")
+				}
+				if channelScope == "fleet" {
+					if !s.isFleetReader(ctx) {
+						continue
+					}
+				} else {
+					owner, parseErr := uuid.Parse(channelScope)
+					if parseErr != nil || owner == uuid.Nil || !s.canReadOrg(ctx, owner, domain.PermManageSettings) {
+						continue
+					}
+				}
+			}
 			if s.confidentialReader == nil {
 				return nil, fmt.Errorf("confidential MCP state requires the daemon OCK decryptor")
 			}
@@ -113,6 +131,13 @@ func (s *Server) readStateFamily(ctx context.Context, legacyKind int) ([]stateRe
 		if fields["deleted"] == true {
 			continue
 		}
+		allowed, err := s.authorizeConfidentialStateRecord(ctx, legacyKind, fields, channelScope)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			continue
+		}
 		records = append(records, stateRecord{Event: ev, Content: content, Fields: fields})
 	}
 	sort.Slice(records, func(i, j int) bool {
@@ -122,6 +147,65 @@ func (s *Server) readStateFamily(ctx context.Context, legacyKind int) ([]stateRe
 		return records[i].Event.ID.Hex() > records[j].Event.ID.Hex()
 	})
 	return records, nil
+}
+
+func (s *Server) authorizeConfidentialStateRecord(ctx context.Context, family int, fields map[string]any, channelScope string) (bool, error) {
+	permission := domain.PermReadServices
+	var owner uuid.UUID
+	switch family {
+	case nostrpool.KindNotificationChannelRegistry:
+		permission = domain.PermManageSettings
+		var err error
+		owner, err = uuid.Parse(stringFromRecord(fields, "org_id"))
+		if err != nil {
+			return false, nil
+		}
+		if owner == uuid.Nil {
+			return channelScope == "fleet" && s.isFleetReader(ctx), nil
+		}
+		if channelScope != owner.String() {
+			return false, nil
+		}
+	case nostrpool.KindBackupRepositoryRegistry, nostrpool.KindBackupPolicyRegistry,
+		nostrpool.KindBackupRecipeRegistry, nostrpool.KindBackupDefinitionRegistry, nostrpool.KindBackupRunState:
+		permission = domain.PermManageBackups
+		var err error
+		owner, err = uuid.Parse(stringFromRecord(fields, "org_id"))
+		if err != nil || owner == uuid.Nil {
+			return false, nil
+		}
+	case nostrpool.KindBackupRestoreState, nostrpool.KindBackupVerificationState:
+		permission = domain.PermManageBackups
+		runID, err := uuid.Parse(stringFromRecord(fields, "backup_run_id"))
+		if err != nil || runID == uuid.Nil {
+			return false, nil
+		}
+		run, err := s.readStateOne(ctx, nostrpool.KindBackupRunState, "id", runID.String())
+		if err != nil || run == nil {
+			return false, err
+		}
+		owner, err = uuid.Parse(stringFromRecord(run.Fields, "org_id"))
+		if err != nil || owner == uuid.Nil {
+			return false, nil
+		}
+	case nostrpool.KindBackupRetentionRegistry:
+		permission = domain.PermManageBackups
+		repositoryID, err := uuid.Parse(stringFromRecord(fields, "repository_id"))
+		if err != nil || repositoryID == uuid.Nil {
+			return false, nil
+		}
+		repository, err := s.readStateOne(ctx, nostrpool.KindBackupRepositoryRegistry, "id", repositoryID.String())
+		if err != nil || repository == nil {
+			return false, err
+		}
+		owner, err = uuid.Parse(stringFromRecord(repository.Fields, "org_id"))
+		if err != nil || owner == uuid.Nil {
+			return false, nil
+		}
+	default:
+		return true, nil
+	}
+	return s.canReadOrg(ctx, owner, permission), nil
 }
 
 func (s *Server) readStateOne(ctx context.Context, family int, key, value string) (*stateRecord, error) {

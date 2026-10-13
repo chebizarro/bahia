@@ -218,7 +218,7 @@ func TestD80NotificationChannelTestAcceptedReplayRejected(t *testing.T) {
 	repo := newMemNotificationRepo()
 	require.NoError(t, repo.CreateChannel(t.Context(), &domain.NotificationChannel{ID: id, OrgID: testOrgID()}))
 	dispatcher := &d80NotificationDispatcher{}
-	h := NewNotificationIntentHandler(NotificationIntentHandlerConfig{Registry: repo, TestDispatcher: dispatcher, Logger: zap.NewNop()})
+	h := NewNotificationIntentHandler(NotificationIntentHandlerConfig{Registry: repo, Owners: testNotificationOwners{repo: repo}, TestDispatcher: dispatcher, Logger: zap.NewNop()})
 	p, statuses := d76Processor(t, "notification", testPubkey, h)
 	intent := d70Intent("notification", "channel-test", id.String(), testPubkey, map[string]interface{}{"id": id.String()})
 	require.NoError(t, p.ProcessInProcess(t.Context(), intent))

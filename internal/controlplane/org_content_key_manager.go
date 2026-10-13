@@ -624,9 +624,15 @@ func VersionFromEnvelope(content string) (orgID string, version int, err error) 
 	if envelope.Schema != ConfidentialSchema {
 		return "", 0, fmt.Errorf("unknown schema: %s", envelope.Schema)
 	}
+	if len(envelope.KeyVersion) < 2 || envelope.KeyVersion[0] != 'v' {
+		return "", 0, fmt.Errorf("invalid key version %q", envelope.KeyVersion)
+	}
 	v, err := strconv.Atoi(envelope.KeyVersion[1:]) // strip "v" prefix
 	if err != nil {
 		return "", 0, fmt.Errorf("parse key version %q: %w", envelope.KeyVersion, err)
+	}
+	if v < 1 {
+		return "", 0, fmt.Errorf("invalid key version %q", envelope.KeyVersion)
 	}
 	return envelope.KeyOrg, v, nil
 }

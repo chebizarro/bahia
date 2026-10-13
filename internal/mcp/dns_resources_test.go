@@ -6,7 +6,10 @@ import (
 	"reflect"
 	"testing"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/auth"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
@@ -54,7 +57,7 @@ func TestDNSResourcesListHealthyEndpoints(t *testing.T) {
 	}
 	attachCanonicalMCPFixture(t, server).publishDNS(t, endpoints...)
 
-	resources, err := server.GetResources(context.Background())
+	resources, err := server.GetResources(authorizedMCPContext())
 	if err != nil {
 		t.Fatalf("GetResources returned error: %v", err)
 	}
@@ -88,12 +91,25 @@ func TestDNSResourcesListHealthyEndpoints(t *testing.T) {
 	if !reflect.DeepEqual(resource.Metadata, expectedMetadata) {
 		t.Fatalf("unexpected metadata: %#v", resource.Metadata)
 	}
+	actor := nostr.Generate().Public().Hex()
+	org := uuid.New()
+	server.trustSet = controlplane.NewTrustSet(nil, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{org.String(): actor}))
+	orgContext := auth.ContextWithPrincipal(t.Context(), &auth.Principal{Subject: actor, PubKey: actor, Method: auth.MethodNIP98})
+	resources, err = server.GetResources(orgContext)
+	if err != nil {
+		t.Fatalf("org-only resource list: %v", err)
+	}
+	for _, resource := range resources {
+		if resource.URI == "bahia://dns/endpoint/drydock-review.prod.example.test" {
+			t.Fatal("org-only requester received fleet DNS resource")
+		}
+	}
 }
 
 func TestDNSResourcesNoListerReturnsEmpty(t *testing.T) {
 	server := newTestServerWithLegacyDeps(nil, zap.NewNop(), legacyMCPReadDeps{})
 
-	resources, err := server.GetResources(context.Background())
+	resources, err := server.GetResources(authorizedMCPContext())
 	if err != nil {
 		t.Fatalf("GetResources returned error: %v", err)
 	}
@@ -110,7 +126,7 @@ func TestDNSResourcesDoNotUseLegacyLister(t *testing.T) {
 		}),
 	})
 
-	_, err := server.GetResources(context.Background())
+	_, err := server.GetResources(authorizedMCPContext())
 	if err != nil {
 		t.Fatalf("store-backed resources used legacy lister: %v", err)
 	}
