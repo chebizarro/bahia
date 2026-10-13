@@ -82,6 +82,74 @@ Iterative approval binds one `action_id` and the SHA-256 canonical-JSON digest
 of its arguments. `decision` is `approve` or `reject`; cancellation is a
 separate method.
 
+## Iterative agentic execution
+
+`workflow: "iterative"` selects the provider-neutral agent loop. A model response
+may contain several ordered `tool_calls` (`id`, registered `name`, JSON-object
+`arguments`). The proposer records the user/model messages in the protected
+transcript and hands the **whole** call sequence to the v2 executor. The
+executor checkpoints that sequence before dispatching its first call; the
+model is asked for another response only after the prior observations are
+consumed. Tool calls are proposals, not permission grants or completed work.
+
+The transcript uses `AssistantAgentMessage` roles `system`, `user`,
+`assistant`, and `tool`. Content blocks are `text`, `tool_call`,
+`tool_observation`, or `json`. A tool message carries the original
+`tool_call_id`, tool `name`, and a normalized `observation`. These are
+provider-neutral, encrypted transcript values, **not** new ContextVM methods
+or public session-projection fields. The observation shape has
+`observation_id`, `tool_name`, `status`, and optional `tool_call_id`, `effect`,
+`risk`, `execution_mode`, `summary`, `content`, `result`, `error`, `receipt`,
+`deferred_action`, `event_id`, `observed_at`, and `metadata`.
+
+| Observation status | Meaning |
+|---|---|
+| `succeeded` | A synchronous result or correlated terminal async event succeeded. |
+| `failed` | A definite tool failure or correlated terminal async event failed. |
+| `denied` | The registered-tool, scope, permission, hook, or approval gate refused the call. |
+| `deferred` | Human approval is required; `deferred_action` identifies the exact pending action. |
+| `waiting_async` | Submission has a receipt but no correlated terminal result yet. |
+| `cancelled` | A call was cancelled without claiming a successful effect. |
+
+The status vocabulary is the normalized observation type; it does not make a
+receipt terminal. In v2, `waiting_async` is checkpointed as a work state with
+an `AsyncToolReceipt` (`request_event_id`, request/result kinds, correlation
+and idempotency key). The executor observes the matching signed event,
+checkpoints `observed`, then appends the terminal tool observation to the
+transcript exactly once. The checkpoint's ordered `work` array and `cursor`
+(first unfinished work item) survive restart. Work states also include
+`awaiting_approval`, `uncertain`, and `abandoned`; the public projection
+exposes only phase, approval state, checkpoint reference, and effect counts,
+not private arguments, receipts, or transcript content.
+
+`allowed_tools` is an authorization boundary, not merely a model hint. The
+command scope is persisted before proposal; JSON `null` means unrestricted,
+while `[]` denies all tools. The model sees only in-scope schemas, and the
+executor rechecks that same scope, registered schema, current permission
+policy, hooks, and exact approval binding before dispatch. A model-named tool
+that was not advertised remains unauthorized. A resumed turn keeps the
+checkpointed scope; a config or model change cannot expand it. An iterative
+approval binds one `action_id` and effective argument digest. A hook changing
+arguments creates a new reviewable draft, never execution under an old hash.
+
+Configured subagents and skills are service-owned internal tools, not external
+MCP methods. `bahia_assistant_delegate_subagent` takes a configured subagent
+name and task, returns a synchronous observation, and lets the child call only
+read-only synchronous MCP tools allowed by the parent's persisted scope.
+`bahia_assistant_skill_load` exposes a configured skill body or a file within
+that skill's directory; the initial model context contains only skill names
+and descriptions. Both internal tools pass the common registration, scope,
+permission, and hook gate. Configured hooks run at `UserPromptSubmit`,
+`SessionStart`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, and
+`SessionEnd`; they may tighten a tool decision but not override a hard deny.
+Hook handlers are prompt or read-only MCP-tool evaluations, not shell commands.
+
+The older `AssistantAgentLoopMetadata` fields (`state: running`,
+`last_observation_id`, `transcript_cursor`, and `allowed_tools`) are a v1
+session-metadata decode shape. New execution uses the v2 checkpoint's
+`phase`, `work`, `cursor`, and `scope` instead; clients must not infer a v2
+wire state from the historical `agent_loop` metadata.
+
 ## Cancellation and reconciliation
 
 Cancel request:
