@@ -7,6 +7,10 @@ Several numeric prefixes are shared by distinct migrations; do not
 renumber or collapse them. External runners such as golang-migrate, goose, and
 dbmate are unsupported for this directory: their version or file conventions
 would not preserve Bahia's live version keys and transactional behavior.
+The historical shared prefixes are `000020`, `000050`, `000051`, `000055`,
+`000056`, `000060`, and `000062`. The `internal/db` test suite, run in Go CI,
+rejects any additional file in those groups or any new duplicate prefix.
+New migrations must use a fresh numeric prefix.
 
 The server migrates up on startup. Operators can use `bahia-migrate status|up|down`
 without starting the server; see `docs/user-guide/cli-reference.md`. Down
