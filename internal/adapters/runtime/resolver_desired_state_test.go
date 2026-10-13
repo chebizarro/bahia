@@ -2,6 +2,11 @@ package runtime
 
 import (
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,26 +71,46 @@ func TestResolveDesiredStateApplier_DockerEndpoint(t *testing.T) {
 }
 
 func TestResolveDesiredStateApplier_PodmanEndpoint(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "bahia-podman-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "podman.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
-		Default: config.RuntimeTargetConfig{Type: "podman"},
+		Default: config.RuntimeTargetConfig{Type: "podman", PodmanHost: "unix:///wrong-default.sock"},
 		Endpoints: map[string]config.RuntimeEndpointConfig{
-			"podman-local": {DockerHost: "unix:///run/user/1000/podman/podman.sock"},
+			"podman-local": {DockerHost: "unix://" + socket},
 		},
 	}, zap.NewNop(), nil)
-
 	svc := resolverTestService(domain.RuntimeTypePodman)
 	env := resolverTestEnv("staging", map[string]any{"endpoint_ref": "podman-local"})
-
 	applier, err := resolver.ResolveDesiredStateApplier(svc, env)
-	// Podman now supports desired-state convergence via Docker delegation.
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if applier == nil {
-		t.Fatal("expected non-nil applier for Podman")
+	observer, ok := applier.(*PodmanObserver)
+	if !ok || !observer.SupportsDesiredState() {
+		t.Fatalf("applier = %T, want capable Podman observer", applier)
 	}
-	if !applier.SupportsDesiredState() {
-		t.Error("expected Podman to support desired state")
+	response, err := observer.httpClient.Get(observer.host + "/_ping")
+	if err != nil {
+		t.Fatalf("Podman request did not use endpoint_ref socket: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d", response.StatusCode)
 	}
 }
 

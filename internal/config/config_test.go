@@ -1891,10 +1891,12 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 	content := []byte(`runtime:
   type: docker
   docker_host: unix:///legacy.sock
+  podman_host: unix:///run/podman/flat.sock
   default:
     type: compose
     execution_mode: cli
     docker_host: tcp://default:2375
+    podman_host: unix:///run/podman/default.sock
     compose_dir: /srv/bahia/default
     bahia_owned: true
   environments:
@@ -1904,6 +1906,7 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
       compose_dir: /srv/bahia/production
       bahia_owned: false
       docker_host: tcp://prod:2375
+      podman_host: unix:///run/podman/prod.sock
     staging:
       type: kubernetes
       kube_context: staging-cluster
@@ -1924,6 +1927,9 @@ func TestLoadNestedRuntimeConfigFromYAML(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
+	if cfg.Runtime.PodmanHost != "unix:///run/podman/flat.sock" || cfg.Runtime.Default.PodmanHost != "unix:///run/podman/default.sock" || cfg.Runtime.Environments["production"].PodmanHost != "unix:///run/podman/prod.sock" {
+		t.Fatalf("Podman hosts not loaded: %+v", cfg.Runtime)
+	}
 	if cfg.Runtime.Type != "docker" {
 		t.Errorf("legacy Runtime.Type = %q, want docker", cfg.Runtime.Type)
 	}

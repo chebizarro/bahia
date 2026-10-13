@@ -310,6 +310,41 @@ func TestConfigRuntimeResolver_UnknownEndpointRef(t *testing.T) {
 	}
 }
 
+func TestConfigRuntimeResolverPodmanHostPrecedenceAndCache(t *testing.T) {
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
+		Type: "podman", PodmanHost: "tcp://flat:1234",
+		Default: config.RuntimeTargetConfig{PodmanHost: "tcp://default:1234"},
+		Environments: map[string]config.RuntimeTargetConfig{
+			"configured": {PodmanHost: "tcp://configured:1234"},
+		},
+	}, zap.NewNop(), nil)
+	service := resolverTestService(domain.RuntimeTypePodman)
+	for _, tc := range []struct {
+		name      string
+		persisted map[string]any
+		want      string
+	}{
+		{"plain", nil, "http://default:1234"},
+		{"configured", nil, "http://configured:1234"},
+		{"configured", map[string]any{"podman_host": "tcp://persisted:1234"}, "http://persisted:1234"},
+	} {
+		runtime, err := resolver.Resolve(service, resolverTestEnv(tc.name, tc.persisted))
+		if err != nil {
+			t.Fatal(err)
+		}
+		observer, ok := runtime.(*PodmanObserver)
+		if !ok {
+			t.Fatalf("runtime = %T", runtime)
+		}
+		if observer.host != tc.want {
+			t.Errorf("%s host = %q, want %q", tc.name, observer.host, tc.want)
+		}
+	}
+	if len(resolver.cache) != 3 {
+		t.Errorf("cache entries = %d, want 3 distinct Podman hosts", len(resolver.cache))
+	}
+}
+
 func resolverTestService(rt domain.RuntimeType) *domain.Service {
 	return &domain.Service{
 		ID:          uuid.New(),
