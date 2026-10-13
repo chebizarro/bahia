@@ -108,11 +108,14 @@ reissued after reconnect backoff. A terminal event is checkpointed as
 
 Provider submission is not transactional: after a restart a receipt-less
 `dispatching` item becomes `uncertain` and is **never redispatched**.
-`assistant/reconcile` accepts only an operator-named request event that
-`AssistantContextVMRequestEvidenceResolver` fetches by id through EOSE and
-proves (command-signer author, kind `25910`, `d` equal to the executor key, a
-method the tool publishes, params equal to the effective arguments). Absence at
-EOSE is not proof of non-submission.
+`assistant/reconcile` accepts an operator-named intent event ID only when the
+durable intent processor marker proves the exact tool, actor, idempotency key
+and signed kind-`30900` event ID. The marker establishes submission, not a
+successful downstream effect; the correlated non-ephemeral kind-`30315`
+status remains the outcome evidence. Kind-`25910` requests are ephemeral and
+are never recovered by a later REQ. Missing marker or result evidence never
+proves non-submission and never authorizes redispatch. LLM lifecycle recovery
+refuses marker-only evidence because it is not canonical provisioning proof.
 
 `assistant/cancel` names session, run and scope, rejects a stale run, persists
 the stop intent, blocks new dispatch and model work and skips undispatched
