@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/google/uuid"
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/relayadmin"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -49,7 +52,7 @@ type RelaySettingsHandlers struct {
 	admin             RelayAdminCaller
 	projectionStore   repository.RelayPolicyProjectionRepository
 	servicePubkey     string
-	publisher         NostrEventPublisher
+	publisher         RelaySettingsEventPublisher
 	signer            nostr.Signer
 	logger            *zap.Logger
 	now               func() time.Time
@@ -173,7 +176,13 @@ func NewRelaySettingsHandlers(cfg RelaySettingsHandlerConfig) *RelaySettingsHand
 	}
 }
 
-func (h *RelaySettingsHandlers) SetPublisher(publisher NostrEventPublisher, signer nostr.Signer) {
+// RelaySettingsEventPublisher admits service-signed settings facts to the
+// daemon outbox and verifies the current service write-relay quorum.
+type RelaySettingsEventPublisher interface {
+	PublishProjection(context.Context, nostr.Event, string, *uuid.UUID) error
+}
+
+func (h *RelaySettingsHandlers) SetPublisher(publisher RelaySettingsEventPublisher, signer nostr.Signer) {
 	h.publisher = publisher
 	h.signer = signer
 }
@@ -236,13 +245,16 @@ func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req Conte
 			return nil, fmt.Errorf("publish replacement confirmation before relay policy mutation: %w", err)
 		}
 	}
-	if err := h.publishState(ctx, req, state, "updated"); err != nil {
-		return nil, err
+	stateErr := h.publishState(ctx, req, state, "updated")
+	if stateErr != nil && !errors.Is(stateErr, nostradapter.ErrPublishIncomplete) {
+		return nil, stateErr
 	}
-	if err := h.publishDMRelayLists(ctx, req, state); err != nil {
-		return nil, err
+	dmErr := h.publishDMRelayLists(ctx, req, state)
+	if dmErr != nil && !errors.Is(dmErr, nostradapter.ErrPublishIncomplete) {
+		return nil, errors.Join(stateErr, dmErr)
 	}
-	if err := h.publishAudit(ctx, req, state, "relay-settings.updated", confirmation); err != nil {
+	auditErr := h.publishAudit(ctx, req, state, "relay-settings.updated", confirmation)
+	if err := errors.Join(stateErr, dmErr, auditErr); err != nil {
 		return nil, err
 	}
 	return map[string]any{
@@ -301,10 +313,8 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign relay settings state: %w", err)
 	}
-	if published, err := publisher.Publish(ctx, *ev); err != nil {
+	if err := publisher.PublishProjection(ctx, *ev, "relay-settings", nil); err != nil {
 		return fmt.Errorf("publish relay settings state: %w", err)
-	} else if published == 0 {
-		return fmt.Errorf("publish relay settings state: no relay accepted event")
 	}
 	return nil
 }
@@ -314,15 +324,19 @@ func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMR
 // publishes them from the effective relay policy once the daemon applies
 // this state.
 func (h *RelaySettingsHandlers) publishDMRelayLists(ctx context.Context, req ContextVMRequest, state RelayPolicyState) error {
+	var incomplete error
 	for _, list := range state.DMRelayLists {
 		if !list.Enabled || list.Feature != config.DMRelayListFeatureNotifications || list.Identity != config.DMRelayListIdentityService || len(list.Relays) == 0 {
 			continue
 		}
 		if err := h.publishDMRelayList(ctx, req, list); err != nil {
-			return err
+			if !errors.Is(err, nostradapter.ErrPublishIncomplete) {
+				return errors.Join(incomplete, err)
+			}
+			incomplete = errors.Join(incomplete, err)
 		}
 	}
-	return nil
+	return incomplete
 }
 
 func (h *RelaySettingsHandlers) publishDMRelayList(ctx context.Context, req ContextVMRequest, list RelayPolicyDMRelayList) error {
@@ -338,10 +352,8 @@ func (h *RelaySettingsHandlers) publishDMRelayList(ctx context.Context, req Cont
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign dm relay list: %w", err)
 	}
-	if published, err := publisher.Publish(ctx, *ev); err != nil {
+	if err := publisher.PublishProjection(ctx, *ev, "relay-settings-dm-list", nil); err != nil {
 		return fmt.Errorf("publish dm relay list: %w", err)
-	} else if published == 0 {
-		return fmt.Errorf("publish dm relay list: no relay accepted event")
 	}
 	return nil
 }
@@ -371,15 +383,13 @@ func (h *RelaySettingsHandlers) publishAudit(ctx context.Context, req ContextVMR
 	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
 		return fmt.Errorf("sign relay settings audit: %w", err)
 	}
-	if published, err := publisher.Publish(ctx, *ev); err != nil {
+	if err := publisher.PublishProjection(ctx, *ev, "relay-settings-audit", nil); err != nil {
 		return fmt.Errorf("publish relay settings audit: %w", err)
-	} else if published == 0 {
-		return fmt.Errorf("publish relay settings audit: no relay accepted event")
 	}
 	return nil
 }
 
-func (h *RelaySettingsHandlers) publisherForRequest(req ContextVMRequest) (NostrEventPublisher, nostr.Signer, error) {
+func (h *RelaySettingsHandlers) publisherForRequest(req ContextVMRequest) (RelaySettingsEventPublisher, nostr.Signer, error) {
 	_ = req
 	if h.publisher == nil {
 		return nil, nil, fmt.Errorf("relay settings publisher is not configured")

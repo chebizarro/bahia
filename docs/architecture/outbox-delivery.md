@@ -12,6 +12,10 @@ payments and security.
 - `Publisher.PublishProjection` writes the signed event to the outbox first;
   per-relay `OK` tracking is persisted, so a publish interrupted mid-delivery
   resumes exactly where it stopped after a restart.
+- Relay-settings `30900` state, `4903` audit facts, and service `10050` DM
+  relay lists use the service publisher's outbox and current service write
+  relays. A queued policy change may reconfigure those relays before its
+  next delivery round; the pending event then retries against the new set.
 - The caller-facing publish calls (`PublishSignedEventWithResults`,
   `PublishProjection`, `publishCanonicalFirst`) run one delivery round inline
   and return:

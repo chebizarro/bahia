@@ -2874,7 +2874,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		ServicePubkey: servicePubkey, Logger: logger, ConfigFabric: configFabricSvc,
 		FleetOperatorGate: controlplane.NewFleetOperatorGate(cfg.Nostr.AuthorizedPubkeys),
 	})
-	relaySettingsHandlers.SetPublisher(contextVMResponsePool, serviceKeyer)
+	relaySettingsHandlers.SetPublisher(nostrPub, serviceKeyer)
 	if enabledDomains["relay"] && serviceKeyer != nil && relayPolicyProjectionRepo != nil {
 		intentProcessor.RegisterHandler("relay", controlplane.NewRelayPolicyIntentHandler(relaySettingsHandlers))
 	}
