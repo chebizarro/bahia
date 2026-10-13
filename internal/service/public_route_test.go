@@ -283,3 +283,50 @@ func TestPublicRouteClaimRejectsUnprotectedEnvironmentForProtectedZone(t *testin
 		t.Fatal(err)
 	}
 }
+
+type publicRouteCompensationStub struct{ compensations int }
+
+func (*publicRouteCompensationStub) Check(context.Context, *domain.DesiredPublicRoutePlan) error {
+	return nil
+}
+func (*publicRouteCompensationStub) Apply(context.Context, *domain.DesiredPublicRoutePlan) error {
+	return nil
+}
+func (b *publicRouteCompensationStub) ApplyWithCompensation(context.Context, *domain.DesiredPublicRoutePlan) (routing.Compensation, error) {
+	return func(context.Context) error { b.compensations++; return nil }, nil
+}
+
+func TestPublicRouteCompensationRechecksCanonicalClaim(t *testing.T) {
+	planner, _, svc, env, desired := publicRouteFixture(t)
+	plan, _, err := planner.Plan(context.Background(), svc, env, desired, routeRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &publicRouteCompensationStub{}
+	planner.backends = routing.StaticResolver{"edge": backend}
+	claimed := true
+	planner.SetClaimChecker(func(context.Context, *domain.DesiredPublicRoutePlan) error {
+		if !claimed {
+			return errors.New("released")
+		}
+		return nil
+	})
+	compensate, err := planner.ApplyWithCompensation(context.Background(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed = false
+	if err := compensate(context.Background()); err == nil {
+		t.Fatal("compensation ran after release")
+	}
+	if backend.compensations != 0 {
+		t.Fatal("provider compensation ran after release")
+	}
+	claimed = true
+	if err := compensate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.compensations != 1 {
+		t.Fatal("claimed compensation did not run")
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/routing"
@@ -55,6 +56,7 @@ type PublicRoutePlanOptions struct {
 }
 
 type PublicRoutePlanner struct {
+	effectMu       sync.Mutex
 	cfg            PublicRoutePlannerConfig
 	backends       routing.Resolver
 	claimChecker   func(context.Context, *domain.DesiredPublicRoutePlan) error
@@ -223,6 +225,8 @@ func (p *PublicRoutePlanner) Check(ctx context.Context, plan *domain.DesiredPubl
 
 // Withdraw removes provider state only while the canonical claim still holds.
 func (p *PublicRoutePlanner) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error {
+	p.effectMu.Lock()
+	defer p.effectMu.Unlock()
 	if err := p.requireClaim(ctx, plan); err != nil {
 		return err
 	}
@@ -238,6 +242,8 @@ func (p *PublicRoutePlanner) Withdraw(ctx context.Context, plan *domain.DesiredP
 }
 
 func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	p.effectMu.Lock()
+	defer p.effectMu.Unlock()
 	backend, err := p.resolveValidatedBackend(plan)
 	if err != nil {
 		return err
@@ -256,6 +262,8 @@ func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPubl
 // applying a route that cannot be rolled back would let a gate detect an outage
 // it has no way to undo.
 func (p *PublicRoutePlanner) ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (routing.Compensation, error) {
+	p.effectMu.Lock()
+	defer p.effectMu.Unlock()
 	backend, err := p.resolveValidatedBackend(plan)
 	if err != nil {
 		return nil, err
@@ -274,7 +282,14 @@ func (p *PublicRoutePlanner) ApplyWithCompensation(ctx context.Context, plan *do
 	if compensation == nil {
 		return nil, fmt.Errorf("public route backend %q returned no compensation", plan.BackendRef)
 	}
-	return compensation, nil
+	return func(compensationCtx context.Context) error {
+		p.effectMu.Lock()
+		defer p.effectMu.Unlock()
+		if err := p.requireClaim(compensationCtx, plan); err != nil {
+			return err
+		}
+		return compensation(compensationCtx)
+	}, nil
 }
 
 // resolveValidatedBackend re-validates that the reviewed plan still matches live
