@@ -764,10 +764,18 @@ func (r *Reconciler) autoApplyDesiredState(ctx context.Context, currentState *do
 	if err == nil {
 		return r.clearReconcileFailure(ctx, currentState.ServiceID, currentState.EnvironmentID)
 	}
-	reason := "auto_apply_failed"
 	if errors.Is(err, runtimeService.ErrEnvironmentApplyLockContended) {
-		reason = "environment_apply_lock_contended"
+		// A manual mutation holds the same non-PG effect fence. Contention is
+		// not an apply attempt and must not advance failure backoff.
+		return nil
 	}
+	if errors.Is(err, ErrFreshDecisionRequired) || errors.Is(err, ErrAutoApplyRecoveryRequired) {
+		// The executor has staged a signed 30315 refusal/recovery status when
+		// it had a durable decision receipt. Never upsert this potentially
+		// superseded state into the PostgreSQL-derived index.
+		return err
+	}
+	reason := "auto_apply_failed"
 	return r.recordReconcileFailure(ctx, currentState, reason)
 }
 

@@ -638,6 +638,19 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	} else {
 		logger.Warn("runtime and service DNS projection have no canonical service signer", zap.Error(sourceErr))
 	}
+	var autoApplySource *reconcile.CanonicalAutoApplySource
+	var autoApplyExecutor *reconcile.CanonicalAutoApplyExecutor
+	if cfg.Reconcile.Enabled && cfg.DirectRuntime.Enabled && canonicalRuntime != nil && serviceKeyer != nil && nostrPub != nil {
+		autoApplySource = &reconcile.CanonicalAutoApplySource{Runtime: canonicalRuntime, Secrets: secretResolver}
+		autoApplyExecutor = &reconcile.CanonicalAutoApplyExecutor{
+			Source: autoApplySource, Effect: reconcile.DockerAutoApplyEffect{Resolver: runtimeResolver},
+			Lock: runtimeApplyLock, Outbox: localOutbox, Signer: serviceKeyer,
+			Enqueue: func(ctx context.Context, ev nostr.Event) error {
+				return nostrPub.Enqueue(ctx, ev, "auto-apply-status", nil)
+			},
+		}
+	}
+	coordinatorOptions = append(coordinatorOptions, workflow.WithCanonicalAutoApplyExecutor(autoApplyExecutor))
 	// Route-canary and managed-instance supervision read their desired set and
 	// their durable progress from the daemon's canonical records in the local
 	// event store. They need the service key, never PostgreSQL.
@@ -732,13 +745,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if cfg.Reconcile.Enabled {
 		if runtimeStateRead != nil {
 			canonicalArtifacts, canonicalIntents, canonicalRuns := reconcile.CanonicalRuntimeHistory(canonicalRuntime)
-			// Do not wire RuntimeLifecycleService for auto_apply here: that
-			// service still loads deployment inputs from the SQL index.
 			rec = reconcile.NewReconciler(
 				runtimeServiceRead, runtimeEnvironmentRead, canonicalArtifacts, runtimeUnitRead, runtimeObservationRead, runtimeStateRead,
 				runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
 				reconcile.WithDeploymentHistory(canonicalIntents, canonicalRuns),
-				reconcile.WithAutoRemediationDeployer(nil),
+				reconcile.WithAutoRemediationDeployer(autoApplyExecutor),
 			)
 		}
 	}
@@ -867,11 +878,18 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 					Message: "runtime observation is suspended: no canonical service signer is available; PostgreSQL will not be used as a fallback",
 					Details: map[string]string{"desired_source": "relay/local cp-state", "observation": "suspended", "auto_apply": "suspended", "sql_authority": "disabled"}}
 			}
+			if autoApplyExecutor == nil {
+				return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
+					Message: "canonical runtime observation is enabled; auto_apply is suspended (bahia-4f10q.2: direct runtime, signer, and outbox required)",
+					Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
+			}
 			return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
-				Message: "canonical runtime observation is enabled; auto_apply is suspended pending signed decision binding, complete snapshots, and effect replay",
-				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
+				Message: "canonical route-free Docker auto_apply is enabled; Compose, release-binding, route, tool and LLM effects remain fail closed (bahia-4f10q.2)",
+				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "docker_subset", "sql_authority": "disabled"}}
 		})
-		logger.Warn("runtime auto_apply remediation suspended pending signed decision binding, complete snapshots, and effect replay")
+		if autoApplyExecutor == nil {
+			logger.Warn("runtime auto_apply remediation suspended (bahia-4f10q.2): executor prerequisites are unavailable")
+		}
 	}
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	registerUndeliveredHealthCheck(healthProvider, localEventStore)
@@ -973,6 +991,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	})
 	if rec != nil {
 		rec.SetCanonicalReadiness(bootstrapper.ReadySignal())
+	}
+	if autoApplyExecutor != nil {
+		autoApplyExecutor.Ready = bootstrapper.ReadySignal()
 	}
 	// Supervisors and stale-run health act on the local event store only after
 	// its first relay catch-up.
@@ -1965,6 +1986,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if rec != nil {
 		bgManager.RegisterWithOptions(&reconcilerRunner{rec: rec})
 	}
+	if autoApplyExecutor != nil {
+		bgManager.RegisterWithOptions(autoApplyExecutor, RunnerRequired(false))
+	}
 
 	// Nostr event processor: maps inbound events to domain commands.
 	nostrProcessor := nostrAdapter.NewProcessorWithPublisher(registry, workerRepo, publisher, logger, nostrAdapter.WithPressureThresholds(pressureThresholds))
@@ -2381,6 +2405,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// records in the local event store, not PostgreSQL.
 	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
 	secretResolver.UseRecords(secretView)
+	if autoApplySource != nil {
+		autoApplySource.Records = secretView
+	}
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
 	if adoptionSvc != nil {
 		refs := service.AdoptionSecretReferences{Store: secretValues, View: secretView, Publisher: secretCanonical}
@@ -2708,6 +2735,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		DeploymentUnits:   deploymentUnitRepo,
 		RBAC:              tenantRBAC,
 		ReleasePromotions: releasePromotionAuthorizer,
+		SecretRecords:     secretView,
+		SecretStore:       secretValues,
 		Logger:            logger,
 	}
 	if enabledDomains["deployment"] || enabledDomains["runtime"] {

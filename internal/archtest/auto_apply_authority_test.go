@@ -53,7 +53,7 @@ func runtimeLifecycleReceiver(expr ast.Expr) bool {
 	}
 }
 
-func TestStartupKeepsAutoRemediationSuspended(t *testing.T) {
+func TestStartupWiresOnlyCanonicalAutoApplyExecutor(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(repoRoot(t), "internal/app/app.go"), nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -74,12 +74,32 @@ func TestStartupKeepsAutoRemediationSuspended(t *testing.T) {
 			return true
 		}
 		arg, ok := call.Args[0].(*ast.Ident)
-		if !ok || arg.Name != "nil" {
-			t.Error("auto-remediation must remain suspended until the canonical executor is verified")
+		if !ok || arg.Name != "autoApplyExecutor" {
+			t.Error("auto-remediation must use only the canonical executor, never the SQL-backed lifecycle")
 		}
 		return true
 	})
 	if count != 1 {
 		t.Fatalf("startup auto-remediation wiring count = %d, want 1", count)
+	}
+}
+
+// Runtime effect exclusion must not depend on PostgreSQL. Other repository
+// advisory locks protect SQL-only projections and are outside this ratchet.
+func TestCanonicalAutoApplyUsesNoPostgresAdvisoryLock(t *testing.T) {
+	for _, path := range []string{
+		"internal/reconcile/auto_apply_executor.go",
+		"internal/reconcile/canonical_auto_apply_source.go",
+		"internal/service/runtime_apply_lock.go",
+	} {
+		data, err := os.ReadFile(filepath.Join(repoRoot(t), path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, prohibited := range []string{"pg_advisory", "pgx.", "internal/repository"} {
+			if strings.Contains(string(data), prohibited) {
+				t.Errorf("%s contains %q: canonical effects must work without PostgreSQL", path, prohibited)
+			}
+		}
 	}
 }

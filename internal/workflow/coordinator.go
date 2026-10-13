@@ -42,6 +42,10 @@ type publicRouteLifecycle interface {
 	Apply(context.Context, *domain.DesiredPublicRoutePlan) error
 }
 
+type canonicalAutoApplyLifecycle interface {
+	AutoRemediateDesiredState(context.Context, uuid.UUID, uuid.UUID, service.DeployStatusCallback) (*domain.RuntimeObservation, error)
+}
+
 type Coordinator struct {
 	registry         *service.RegistryService
 	loom             deploymentLoomClient
@@ -49,6 +53,8 @@ type Coordinator struct {
 	deploymentUnits  repository.DeploymentUnitRepository
 	runtimeLifecycle deploymentRuntimeLifecycle
 	publicRoutes     publicRouteLifecycle
+	autoApply        canonicalAutoApplyLifecycle
+	autoApplyGuard   bool
 	publisher        events.Publisher
 	logger           *zap.Logger
 
@@ -111,6 +117,17 @@ func WithDeploymentUnitRouting(units repository.DeploymentUnitRepository, lifecy
 // WithPublicRoutes applies signed edge plans after a healthy direct-runtime deploy.
 func WithPublicRoutes(routes publicRouteLifecycle) CoordinatorOption {
 	return func(c *Coordinator) { c.publicRoutes = routes }
+}
+
+// WithCanonicalAutoApplyExecutor prevents auto_apply workflow decisions from
+// falling through to the SQL-backed direct lifecycle or Loom. A nil executor
+// deliberately keeps this mode fail-closed when canonical prerequisites are
+// absent. Tool approval and LLM effects belong to bahia-4f10q.2.1/.2.2.
+func WithCanonicalAutoApplyExecutor(executor canonicalAutoApplyLifecycle) CoordinatorOption {
+	return func(c *Coordinator) {
+		c.autoApplyGuard = true
+		c.autoApply = executor
+	}
 }
 
 // RecoverNonTerminalRuns reattaches completion awaits for persisted Loom jobs
@@ -257,6 +274,23 @@ func (c *Coordinator) ExecuteDeployment(ctx context.Context, intentID uuid.UUID)
 	unit, err := c.resolveDeploymentUnit(ctx, intent, env)
 	if err != nil {
 		return fmt.Errorf("resolving deployment unit: %w", err)
+	}
+	if c.autoApplyGuard && unit == nil {
+		return fmt.Errorf("bahia-4f10q.2: deployment unit mode is unavailable; workflow dispatch cannot bypass canonical auto_apply")
+	}
+	if c.autoApplyGuard && unit != nil && unit.ReconcileMode == domain.ReconcileModeAutoApply {
+		if releasePromotion {
+			return fmt.Errorf("bahia-4f10q.2: canary release-promotion effects require a revision-fenced step adapter")
+		}
+		if c.autoApply == nil {
+			return fmt.Errorf("bahia-4f10q.2: canonical auto_apply executor is unavailable")
+		}
+		// The SQL intent only supplies lookup identities. The executor ignores
+		// all SQL-selected effect inputs and re-reads the exact signed decision,
+		// environment, release/artifact and secret pins from local canonical
+		// state under the non-PG effect fence.
+		_, err := c.autoApply.AutoRemediateDesiredState(ctx, intent.ServiceID, intent.EnvironmentID, nil)
+		return err
 	}
 	if isRouteOnlyIntent(intent) {
 		return c.executeRouteOnlyDeployment(ctx, intent, svc, env, unit)
@@ -704,6 +738,25 @@ func (c *Coordinator) applyRouteOnlyRun(ctx context.Context, run *domain.Deploym
 	if run == nil || intent == nil || intent.DesiredState == nil || intent.DesiredState.PublicRoute == nil {
 		return fmt.Errorf("run and signed route-only desired state are required")
 	}
+	if c.autoApplyGuard {
+		env, err := c.registry.GetEnvironment(ctx, intent.EnvironmentID)
+		if err != nil {
+			return fmt.Errorf("bahia-4f10q.2: resolving route-only recovery environment: %w", err)
+		}
+		if env == nil {
+			return fmt.Errorf("bahia-4f10q.2: route-only recovery environment is absent")
+		}
+		unit, err := c.resolveDeploymentUnit(ctx, intent, env)
+		if err != nil {
+			return fmt.Errorf("bahia-4f10q.2: resolving route-only recovery unit: %w", err)
+		}
+		if unit == nil {
+			return fmt.Errorf("bahia-4f10q.2: route-only recovery unit mode is unavailable")
+		}
+		if unit.ReconcileMode == domain.ReconcileModeAutoApply {
+			return fmt.Errorf("bahia-4f10q.2: route-only auto_apply recovery requires a revision-fenced effect adapter")
+		}
+	}
 	if run.ApplyMetadata == nil {
 		run.ApplyMetadata = map[string]any{}
 	}
@@ -829,6 +882,12 @@ func (c *Coordinator) applyDirectRuntimeRun(
 ) error {
 	if run == nil || intent == nil || unit == nil {
 		return fmt.Errorf("run, intent, and deployment unit are required")
+	}
+	if c.autoApplyGuard && unit.ReconcileMode == domain.ReconcileModeAutoApply {
+		// Legacy SQL run recovery must never reissue an auto_apply effect.
+		// The canonical receipt runner owns replay, including a crash after
+		// the runtime changed but before a checkpoint was published.
+		return fmt.Errorf("bahia-4f10q.2: legacy direct-run recovery is fenced by canonical auto_apply receipts")
 	}
 	if run.ApplyMetadata == nil {
 		run.ApplyMetadata = map[string]any{}
