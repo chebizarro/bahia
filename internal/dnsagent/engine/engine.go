@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/atomicfile"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -50,7 +51,7 @@ type Config struct {
 	FilePrefix string
 	Runner     CommandRunner
 	Reload     ReloadConfig
-	Logger     *slog.Logger
+	Logger     *zap.Logger
 }
 
 // ZoneSnapshot is the DNS state observed in a Bahia-owned dnsmasq include.
@@ -67,7 +68,7 @@ type Engine struct {
 	filePrefix string
 	runner     CommandRunner
 	reload     ReloadConfig
-	logger     *slog.Logger
+	logger     *zap.Logger
 
 	strategyMu sync.RWMutex
 	strategy   []string
@@ -96,7 +97,8 @@ func New(cfg Config) *Engine {
 	}
 	e.strategy = e.detectReloadStrategy()
 	if e.logger != nil && len(e.strategy) > 0 {
-		e.logger.Debug("selected dnsmasq reload strategy", "argv", e.strategy)
+		e.logger.Debug("selected dnsmasq reload strategy", zap.Strings("argv", e.strategy))
+
 	}
 	return e
 }

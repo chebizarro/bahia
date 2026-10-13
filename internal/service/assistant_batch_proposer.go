@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -46,7 +47,7 @@ type AssistantBatchPlannerConfig struct {
 	Status           AssistantStatusPublisher
 	AllowedToolNames []string
 	StreamingEnabled bool
-	Logger           *slog.Logger
+	Logger           *zap.Logger
 }
 
 // AssistantBatchPlanner produces one editable batch plan per operator prompt.
@@ -62,7 +63,7 @@ type AssistantBatchPlanner struct {
 	status       AssistantStatusPublisher
 	allowedTools map[string]struct{}
 	streaming    bool
-	logger       *slog.Logger
+	logger       *zap.Logger
 }
 
 var _ AssistantBatchProposer = (*AssistantBatchPlanner)(nil)
@@ -70,7 +71,7 @@ var _ AssistantBatchProposer = (*AssistantBatchPlanner)(nil)
 func NewAssistantBatchPlanner(cfg AssistantBatchPlannerConfig) *AssistantBatchPlanner {
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	allowed := make(map[string]struct{}, len(cfg.AllowedToolNames))
 	for _, name := range cfg.AllowedToolNames {
@@ -78,7 +79,7 @@ func NewAssistantBatchPlanner(cfg AssistantBatchPlannerConfig) *AssistantBatchPl
 			allowed[name] = struct{}{}
 		}
 	}
-	return &AssistantBatchPlanner{chat: cfg.ChatClient, context: cfg.ContextBuilder, proposal: cfg.Context, history: cfg.History, transcript: cfg.Transcript, status: cfg.Status, allowedTools: allowed, streaming: cfg.StreamingEnabled, logger: logger.With("component", "assistant_batch_planner")}
+	return &AssistantBatchPlanner{chat: cfg.ChatClient, context: cfg.ContextBuilder, proposal: cfg.Context, history: cfg.History, transcript: cfg.Transcript, status: cfg.Status, allowedTools: allowed, streaming: cfg.StreamingEnabled, logger: logger.With(zap.String("component", "assistant_batch_planner"))}
 }
 
 // ProposeBatch builds planning context, asks the planner model for an
@@ -184,7 +185,8 @@ func (p *AssistantBatchPlanner) record(ctx context.Context, req AssistantProposa
 			continue
 		}
 		if _, err := p.transcript.AppendMessageOnce(ctx, AssistantTranscriptAppend{LogicalID: message.ID, SessionID: req.SessionID, TurnID: req.TurnID, RunID: req.RunID, Message: message}); err != nil {
-			p.logger.Warn("assistant batch transcript append failed", "session_id", req.SessionID, "run_id", req.RunID, "error", err)
+			p.logger.Warn("assistant batch transcript append failed", zap.String("session_id", req.SessionID), zap.String("run_id", req.RunID), zap.Error(err))
+
 			return
 		}
 	}
@@ -198,7 +200,8 @@ func (p *AssistantBatchPlanner) publish(ctx context.Context, req AssistantPropos
 	content["turn_id"] = req.TurnID
 	content["workflow"] = string(domain.AssistantWorkflowBatch)
 	if err := p.status.PublishAssistantStatus(ctx, req.SessionID, status, content); err != nil {
-		p.logger.Warn("assistant batch status publish failed", "session_id", req.SessionID, "status", status, "error", err)
+		p.logger.Warn("assistant batch status publish failed", zap.String("session_id", req.SessionID), zap.String("status", status), zap.Error(err))
+
 	}
 }
 

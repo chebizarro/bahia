@@ -6,10 +6,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/llm"
 	"github.com/openagentsinc/bahia/internal/config"
@@ -51,7 +52,7 @@ type AssistantAgentLoopConfig struct {
 	Subagents  *AssistantSubagentLibrary
 	Skills     *AssistantSkillLibrary
 	Hooks      *AssistantHookRunner
-	Logger     *slog.Logger
+	Logger     *zap.Logger
 	Now        func() time.Time
 	NewID      func(prefix string) string
 }
@@ -74,7 +75,7 @@ type AssistantAgentLoop struct {
 	skills         *AssistantSkillLibrary
 	hooks          *AssistantHookRunner
 	internalTools  []AssistantInternalTool
-	logger         *slog.Logger
+	logger         *zap.Logger
 	now            func() time.Time
 	newID          func(prefix string) string
 
@@ -99,9 +100,11 @@ func NewAssistantAgentLoop(cfg AssistantAgentLoopConfig) (*AssistantAgentLoop, e
 	}
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
-	loop := &AssistantAgentLoop{modelClient: cfg.ModelClient, toolRuntime: cfg.ToolRuntime, contextBuilder: cfg.ContextBuilder, toolSchemas: cfg.ToolSchemas, transcript: cfg.Transcript, proposal: cfg.Context, status: cfg.Status, agentic: cfg.Agentic, subagents: cfg.Subagents, skills: cfg.Skills, hooks: cfg.Hooks, logger: logger.With("component", "assistant_iterative_proposer"), now: now, newID: newID, iterations: map[string]int{}}
+	loop := &AssistantAgentLoop{modelClient: cfg.ModelClient, toolRuntime: cfg.ToolRuntime, contextBuilder: cfg.ContextBuilder, toolSchemas: cfg.ToolSchemas, transcript: cfg.Transcript, proposal: cfg.Context, status: cfg.Status, agentic: cfg.Agentic, subagents: cfg.Subagents, skills: cfg.Skills, hooks: cfg.Hooks, logger: logger.With(zap.String("component", "assistant_iterative_proposer")),
+
+		now: now, newID: newID, iterations: map[string]int{}}
 	if loop.subagents.Len() > 0 {
 		loop.internalTools = append(loop.internalTools, loop.buildDelegateSubagentTool())
 	}
@@ -319,7 +322,8 @@ func (l *AssistantAgentLoop) publish(ctx context.Context, req AssistantProposalR
 	content["turn_id"] = req.TurnID
 	content["workflow"] = string(domain.AssistantWorkflowIterative)
 	if err := l.status.PublishAssistantStatus(ctx, req.SessionID, status, content); err != nil {
-		l.logger.Warn("assistant iterative status publish failed", "session_id", req.SessionID, "status", status, "error", err)
+		l.logger.Warn("assistant iterative status publish failed", zap.String("session_id", req.SessionID), zap.String("status", status), zap.Error(err))
+
 	}
 }
 

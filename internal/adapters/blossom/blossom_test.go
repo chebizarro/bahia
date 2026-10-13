@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,14 +16,16 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
+
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 // testLogger returns a logger that discards all output
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func testLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 func TestComputeSHA256(t *testing.T) {

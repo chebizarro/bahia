@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"text/template"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -22,7 +23,7 @@ type SoulGenerator struct {
 	apiURL     string
 	model      string
 	httpClient *http.Client
-	logger     *slog.Logger
+	logger     *zap.Logger
 }
 
 // Config holds LLM configuration.
@@ -34,7 +35,7 @@ type Config struct {
 }
 
 // NewSoulGenerator creates a new soul generator.
-func NewSoulGenerator(config Config, logger *slog.Logger) *SoulGenerator {
+func NewSoulGenerator(config Config, logger *zap.Logger) *SoulGenerator {
 	if config.APIURL == "" {
 		config.APIURL = "https://api.anthropic.com"
 	}
@@ -45,7 +46,7 @@ func NewSoulGenerator(config Config, logger *slog.Logger) *SoulGenerator {
 		config.Timeout = 120 * time.Second
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	return &SoulGenerator{
@@ -55,17 +56,13 @@ func NewSoulGenerator(config Config, logger *slog.Logger) *SoulGenerator {
 		httpClient: &http.Client{
 			Timeout: config.Timeout,
 		},
-		logger: logger.With("component", "llm"),
+		logger: logger.With(zap.String("component", "llm")),
 	}
 }
 
 // Generate creates soul content from a brief.
 func (g *SoulGenerator) Generate(ctx context.Context, input domain.SoulGeneratorInput) (*domain.SoulGeneratorOutput, error) {
-	g.logger.Info("generating soul",
-		"agent_id", input.AgentID,
-		"name", input.Name,
-		"tier", input.Tier,
-	)
+	g.logger.Info("generating soul", zap.String("agent_id", input.AgentID), zap.String("name", input.Name), zap.Any("tier", input.Tier))
 
 	// Build the prompt
 	prompt, err := g.buildPrompt(input)
@@ -84,12 +81,7 @@ func (g *SoulGenerator) Generate(ctx context.Context, input domain.SoulGenerator
 	if err != nil {
 		return nil, fmt.Errorf("parse output: %w", err)
 	}
-
-	g.logger.Info("soul generated",
-		"agent_id", input.AgentID,
-		"allowed_kinds", len(output.AllowedKinds),
-		"tools", len(output.ToolGrants),
-	)
+	g.logger.Info("soul generated", zap.String("agent_id", input.AgentID), zap.Int("allowed_kinds", len(output.AllowedKinds)), zap.Int("tools", len(output.ToolGrants)))
 
 	return output, nil
 }

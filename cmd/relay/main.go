@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,7 +26,13 @@ func main() {
 	flag.Parse()
 
 	if err := run(*configPath); err != nil {
-		log.Fatalf("relay sidecar error: %v", err)
+		logger, loggerErr := zap.NewDevelopment()
+		if loggerErr != nil {
+			fmt.Fprintln(os.Stderr, loggerErr)
+			os.Exit(1)
+		}
+		logger.Error(fmt.Sprintf("relay sidecar error: %v", err), zap.Error(err))
+		os.Exit(1)
 	}
 }
 

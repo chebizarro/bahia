@@ -9,11 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 )
@@ -35,7 +36,7 @@ type Client struct {
 	httpClient    *http.Client
 	signer        nostr.Signer
 	observeUpload func(context.Context, BlobDescriptor) error
-	logger        *slog.Logger
+	logger        *zap.Logger
 
 	mu    sync.RWMutex
 	stats map[string]*serverStats // server URL -> stats
@@ -85,7 +86,7 @@ func (t BlossomTimestamp) MarshalJSON() ([]byte, error) {
 }
 
 // NewClient creates a new Blossom client.
-func NewClient(cfg Config, logger *slog.Logger) *Client {
+func NewClient(cfg Config, logger *zap.Logger) *Client {
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = 3
 	}

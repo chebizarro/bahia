@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	gonostr "fiatjaf.com/nostr"
 
@@ -57,7 +58,7 @@ type EventStoreConfig struct {
 	// FileStore writes. It is a fast local cache and the journal a daemon
 	// upgraded in place resumes from once; it is never the only authority.
 	CacheDir string
-	Logger   *slog.Logger
+	Logger   *zap.Logger
 	Now      func() time.Time
 }
 
@@ -74,7 +75,7 @@ type EventStore struct {
 	publisher EventPublisher
 	author    gonostr.PubKey
 	cacheDir  string
-	logger    *slog.Logger
+	logger    *zap.Logger
 	now       func() time.Time
 
 	// mu serializes every read-modify-publish, as FileStore's lock does.
@@ -100,7 +101,7 @@ func NewEventStore(cfg EventStoreConfig) (*EventStore, error) {
 	}
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	now := cfg.Now
 	if now == nil {
@@ -115,7 +116,9 @@ func NewEventStore(cfg EventStoreConfig) (*EventStore, error) {
 			return nil, fmt.Errorf("secure saga cache directory: %w", err)
 		}
 	}
-	return &EventStore{reader: cfg.Reader, publisher: cfg.Publisher, author: author, cacheDir: cacheDir, logger: logger.With("component", "saga_event_store"), now: now, runs: map[string]cachedRun{}}, nil
+	return &EventStore{reader: cfg.Reader, publisher: cfg.Publisher, author: author, cacheDir: cacheDir, logger: logger.With(zap.String("component", "saga_event_store")),
+
+		now: now, runs: map[string]cachedRun{}}, nil
 }
 
 // Record is the wire content of one canonical saga-run record. It carries
@@ -477,12 +480,14 @@ func (s *EventStore) publish(ctx context.Context, run *Run, replaces gonostr.Tim
 	path := s.cachePath(run.RequestID)
 	if deleted {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			s.logger.Warn("saga checkpoint cache remove failed", "request_id", run.RequestID, "error", err)
+			s.logger.Warn("saga checkpoint cache remove failed", zap.String("request_id", run.RequestID), zap.Error(err))
+
 		}
 		return nil
 	}
 	if err := writeAtomic(path, run); err != nil {
-		s.logger.Warn("saga checkpoint cache write failed", "request_id", run.RequestID, "error", err)
+		s.logger.Warn("saga checkpoint cache write failed", zap.String("request_id", run.RequestID), zap.Error(err))
+
 	}
 	return nil
 }

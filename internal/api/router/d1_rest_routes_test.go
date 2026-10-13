@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -133,7 +133,7 @@ func TestPhase5D1bBlossomBlobFetchRemains200(t *testing.T) {
 		_, _ = w.Write(content)
 	}))
 	defer upstream.Close()
-	client := blossom.NewClient(blossom.Config{Servers: []string{upstream.URL}, MaxRetries: 1}, slog.Default())
+	client := blossom.NewClient(blossom.Config{Servers: []string{upstream.URL}, MaxRetries: 1}, zap.NewNop())
 	h := router.NewWithDeps(newTestRegistryService(), zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Blossom: client})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/blossom/blob/"+hash, nil))

@@ -2,13 +2,14 @@ package soulfactory
 
 import (
 	"context"
-	"log/slog"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
@@ -77,7 +78,7 @@ func TestReactorPublishesOverOneSharedPool(t *testing.T) {
 			return true, "blocked: refusing test publication"
 		}
 	})
-	reactor := NewReactor(Config{Relays: []string{first}, AdditionalRelays: []string{second}}, nil, signer, slog.Default(), withReactorRelayAdmission(generousTestAdmission()))
+	reactor := NewReactor(Config{Relays: []string{first}, AdditionalRelays: []string{second}}, nil, signer, zap.NewNop(), withReactorRelayAdmission(generousTestAdmission()))
 	defer reactor.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -127,7 +128,7 @@ func TestSharedRelayClientViews(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	reactor := NewReactor(Config{Relays: []string{first, second}}, nil, signer, slog.Default(), WithRelayClient(shared))
+	reactor := NewReactor(Config{Relays: []string{first, second}}, nil, signer, zap.NewNop(), WithRelayClient(shared))
 	if reactor.relayClient != shared {
 		t.Fatal("reactor did not take the shared client")
 	}

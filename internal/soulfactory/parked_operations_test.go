@@ -2,12 +2,13 @@ package soulfactory
 
 import (
 	"context"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -110,7 +111,7 @@ func TestRuntimeResultWaitersOverflowNeverEvictsSoulHoldingOperation(t *testing.
 			Soul:     RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
 		}, i)
 	}
-	waiters := newRuntimeResultWaiters(slog.Default())
+	waiters := newRuntimeResultWaiters(zap.NewNop())
 	waiters.limit = 1
 	resumed := map[int]bool{}
 	park := func(i int, holdsSoul bool) *runtimeResultPending {

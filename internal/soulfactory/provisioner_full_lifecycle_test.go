@@ -3,10 +3,11 @@ package soulfactory
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -47,7 +48,7 @@ func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T)
 	}
 
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, zap.NewNop())
 	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	attachPublishCapture(reactor)
 	_ = NewFullProvisioner(reactor, FullProvisionerConfig{}, integration)
@@ -114,7 +115,7 @@ func TestLifecycleHandlerActionsPropagateBahiaAndSignerSideEffects(t *testing.T)
 
 func TestLifecycleHandlerResumeRequiresSuspendedSoul(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, zap.NewNop())
 	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	attachPublishCapture(reactor)
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) {
@@ -129,7 +130,7 @@ func TestLifecycleHandlerResumeRequiresSuspendedSoul(t *testing.T) {
 
 func TestLifecycleHandlerReturnsLookupErrors(t *testing.T) {
 	signer := &trackingSigner{fakeSigner: newFakeSigner(t)}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, fakeGenerator{}, signer, zap.NewNop())
 	reactor.getSoulFn = func(context.Context, string) (*domain.AgentSoul, error) { return nil, errors.New("boom") }
 
 	if err := reactor.lifecycle().HandleAction(t.Context(), buildActionEvent(t, signer.fakeSigner, "lookup-error", nostr.Tags{{"soul", "scout"}, {"action", string(domain.SoulActionSuspend)}}, "")); err == nil || !strings.Contains(err.Error(), "lookup soul") {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"go.uber.org/zap"
 )
 
 // Upload uploads data to the first available Blossom server.
@@ -30,18 +31,20 @@ func (c *Client) Upload(ctx context.Context, data []byte, contentType string) (*
 		if err != nil {
 			c.recordUpload(server, false)
 			lastErr = err
-			c.logger.Warn("upload failed, trying next server",
-				"server", server,
-				"error", err,
+			c.logger.Warn("upload failed, trying next server", zap.String("server",
+
+				server), zap.Error(err),
 			)
 			continue
 		}
 
 		c.recordUpload(server, true)
-		c.logger.Info("uploaded to Blossom",
-			"server", server,
-			"sha256", hash,
-			"size", len(data),
+		c.logger.Info("uploaded to Blossom", zap.String("server",
+
+			server), zap.String("sha256",
+
+			hash), zap.Int("size",
+			len(data)),
 		)
 		if err := c.observe(ctx, bd); err != nil {
 			return nil, fmt.Errorf("publish Blossom upload observation: %w", err)
@@ -74,9 +77,11 @@ func (c *Client) UploadWithRedundancy(ctx context.Context, data []byte, contentT
 		c.recordUpload(server, true)
 		results = append(results, bd)
 
-		c.logger.Debug("uploaded to Blossom server",
-			"server", server,
-			"sha256", hash,
+		c.logger.Debug("uploaded to Blossom server", zap.String("server",
+
+			server), zap.String("sha256",
+
+			hash),
 		)
 	}
 

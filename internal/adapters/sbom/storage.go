@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
+
 	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -19,7 +21,7 @@ type StorageResolver struct {
 	blossom        BlossomClient
 	ociClient      OCIReferrerClient
 	packageBackend PackageBackendClient
-	logger         *slog.Logger
+	logger         *zap.Logger
 }
 
 // BlossomClient is the interface for Blossom blob operations.
@@ -48,10 +50,10 @@ func NewStorageResolver(
 	blossom BlossomClient,
 	ociClient OCIReferrerClient,
 	packageBackend PackageBackendClient,
-	logger *slog.Logger,
+	logger *zap.Logger,
 ) *StorageResolver {
 	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		logger = zap.NewNop()
 	}
 	return &StorageResolver{
 		blossom:        blossom,
@@ -109,8 +111,8 @@ func (r *StorageResolver) resolveFromBlossom(ctx context.Context, uri string) ([
 	}
 
 	r.logger.Debug("resolved SBOM from Blossom",
-		slog.String("uri", uri),
-		slog.Int("size", len(data)),
+		zap.String("uri", uri),
+		zap.Int("size", len(data)),
 	)
 
 	return data, nil
@@ -128,9 +130,9 @@ func (r *StorageResolver) resolveFromOCI(ctx context.Context, repo, digest strin
 	}
 
 	r.logger.Debug("resolved SBOM from OCI referrer",
-		slog.String("repo", repo),
-		slog.String("digest", digest),
-		slog.Int("size", len(data)),
+		zap.String("repo", repo),
+		zap.String("digest", digest),
+		zap.Int("size", len(data)),
 	)
 
 	return data, nil
@@ -148,8 +150,8 @@ func (r *StorageResolver) resolveFromPackageBackend(ctx context.Context, referen
 	}
 
 	r.logger.Debug("resolved SBOM from package backend",
-		slog.String("reference", reference),
-		slog.Int("size", len(data)),
+		zap.String("reference", reference),
+		zap.Int("size", len(data)),
 	)
 
 	return data, nil
@@ -225,8 +227,8 @@ func (r *StorageResolver) storeToBlossom(ctx context.Context, data []byte, forma
 	}
 
 	r.logger.Debug("stored SBOM to Blossom",
-		slog.String("url", desc.URL),
-		slog.String("sha256", expectedHash),
+		zap.String("url", desc.URL),
+		zap.String("sha256", expectedHash),
 	)
 
 	return &StoreResult{

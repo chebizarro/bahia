@@ -5,11 +5,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/fipsbridge"
 	"github.com/openagentsinc/bahia/internal/strutil"
@@ -68,16 +69,22 @@ func main() {
 		cfg.EnvironmentFilter = environmentList
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logConfig := zap.NewDevelopmentConfig()
+	logConfig.Level.SetLevel(zap.InfoLevel)
+	logger, err := logConfig.Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configure logger: %v\n", err)
+		os.Exit(1)
+	}
 	bridge, err := fipsbridge.NewBridge(cfg, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "configure bridge: %v\n", err)
+		logger.Error(fmt.Sprintf("configure bridge: %v", err), zap.Error(err))
 		os.Exit(1)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := bridge.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintf(os.Stderr, "bridge stopped: %v\n", err)
+		logger.Error(fmt.Sprintf("bridge stopped: %v", err), zap.Error(err))
 		os.Exit(1)
 	}
 }

@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -35,11 +36,11 @@ type OpenAIAgentClient struct {
 	maxTokens   int
 	temperature float64
 	httpClient  *http.Client
-	logger      *slog.Logger
+	logger      *zap.Logger
 }
 
 // NewOpenAIAgentClient creates an OpenAI-compatible agent model client.
-func NewOpenAIAgentClient(config OpenAIAgentClientConfig, logger *slog.Logger) *OpenAIAgentClient {
+func NewOpenAIAgentClient(config OpenAIAgentClientConfig, logger *zap.Logger) *OpenAIAgentClient {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.openai.com"
 	}
@@ -53,7 +54,7 @@ func NewOpenAIAgentClient(config OpenAIAgentClientConfig, logger *slog.Logger) *
 		config.HTTPClient = &http.Client{Timeout: config.Timeout}
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &OpenAIAgentClient{
 		baseURL:     strings.TrimRight(config.BaseURL, "/"),
@@ -62,7 +63,7 @@ func NewOpenAIAgentClient(config OpenAIAgentClientConfig, logger *slog.Logger) *
 		maxTokens:   config.MaxTokens,
 		temperature: config.Temperature,
 		httpClient:  config.HTTPClient,
-		logger:      logger.With("component", "llm_openai_agent_client"),
+		logger:      logger.With(zap.String("component", "llm_openai_agent_client")),
 	}
 }
 

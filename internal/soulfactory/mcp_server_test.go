@@ -7,7 +7,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"log/slog"
+	"go.uber.org/zap"
 )
 
 type fakeMCPSoulFactoryClient struct {
@@ -168,10 +168,10 @@ func TestMCPServerActionAndRegenerateUseSignedActions(t *testing.T) {
 }
 
 func TestMCPServerGetStatusReturnsRunState(t *testing.T) {
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), zap.NewNop())
 	run := &domain.ProvisioningRun{RequestID: "req-1", AgentID: "scout", Status: domain.ProvisioningStatusRunning}
 	reactor.runs[run.RequestID] = run
-	server := NewMCPServer(reactor, nil, slog.Default())
+	server := NewMCPServer(reactor, nil, zap.NewNop())
 
 	result, err := server.CallTool(t.Context(), "soul_factory_get_status", map[string]interface{}{"request_id": "req-1"})
 	if err != nil {
@@ -195,5 +195,5 @@ func newTestMCPServer(t *testing.T, client mcpSoulFactoryClient) *MCPServer {
 		return client, nil
 	}
 	t.Cleanup(func() { newMCPSoulFactoryClient = previous })
-	return NewMCPServer(NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), slog.Default()), nil, slog.Default())
+	return NewMCPServer(NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), zap.NewNop()), nil, zap.NewNop())
 }

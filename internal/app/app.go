@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -2114,7 +2113,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		blossomCfg.Servers = []string{cfg.Blossom.URL}
 	}
 	if len(blossomCfg.Servers) > 0 {
-		blossomClient = blossom.NewClient(blossomCfg, slog.Default())
+		blossomClient = blossom.NewClient(blossomCfg, logger)
 		logger.Info("blossom client enabled", zap.Strings("servers", blossomCfg.Servers))
 	}
 	// F75 operational view publications: Soul runtime policy and one bounded
@@ -2157,7 +2156,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create SBOM generator registry: %w", err)
 		}
-		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, slog.Default())
+		sbomStorageResolver = sbomAdapter.NewStorageResolver(blossomClient, nil, nil, logger)
 		// SBOM attestations are standard Nostr events signed by the service key.
 		if serviceKeyer == nil {
 			return nil, fmt.Errorf("configure SBOM attestation signer: nostr.private_key is required")
@@ -2778,13 +2777,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				BaseURL: cfg.Assistant.LLMBaseURL,
 				Model:   cfg.Assistant.LLMModel,
 				APIKey:  cfg.Assistant.LLMAPIKey,
-			}, slog.Default())
+			}, logger)
 		}
-		modelClient, modelClientErr := newAssistantAgentModelClient(cfg.Assistant.Agentic, slog.Default())
+		modelClient, modelClientErr := newAssistantAgentModelClient(cfg.Assistant.Agentic, logger)
 		if modelClientErr != nil {
 			return nil, modelClientErr
 		}
-		externalMCP, externalErr := loadAssistantExternalMCP(ctx, cfg.Assistant.MCP.ExternalServers, slog.Default())
+		externalMCP, externalErr := loadAssistantExternalMCP(ctx, cfg.Assistant.MCP.ExternalServers, logger)
 		if externalErr != nil {
 			return nil, externalErr
 		}
@@ -2805,6 +2804,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			KeyProvider:      transcriptKeys,
 			ExternalMCP:      externalMCP,
 			RelayConnections: controlPlanePool,
+			Logger:           logger,
 			LocalStore:       localEventStore,
 			Readiness:        bootstrapper,
 		})
@@ -3208,7 +3208,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			deploymentUnitRepo,
 			soulFactoryRuntime.reactor,
 			soulFactoryRuntime.reactor,
-			slog.Default(),
+			logger,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("configure legacy Soul reconciliation: %w", err)
@@ -5149,7 +5149,7 @@ func controlPlaneAuthorizedPubkeys(cfg *config.Config, servicePubkey string, ass
 	return out
 }
 
-func newAssistantAgentModelClient(cfg config.AssistantAgenticConfig, logger *slog.Logger) (llmadapter.AgentModelClient, error) {
+func newAssistantAgentModelClient(cfg config.AssistantAgenticConfig, logger *zap.Logger) (llmadapter.AgentModelClient, error) {
 	switch strings.ToLower(strings.TrimSpace(cfg.Provider)) {
 	case "", "openai_compatible":
 		if strings.ToLower(strings.TrimSpace(cfg.ToolMode)) == config.AssistantAgenticToolModePrompted {
@@ -5184,7 +5184,7 @@ type assistantExternalMCPRuntime struct {
 	permissionRules []service.AssistantPermissionRule
 }
 
-func loadAssistantExternalMCP(ctx context.Context, servers []config.AssistantExternalMCPServerConfig, logger *slog.Logger) (assistantExternalMCPRuntime, error) {
+func loadAssistantExternalMCP(ctx context.Context, servers []config.AssistantExternalMCPServerConfig, logger *zap.Logger) (assistantExternalMCPRuntime, error) {
 	bundle := assistantExternalMCPRuntime{clients: map[string]*mcpclient.Client{}}
 	for _, server := range servers {
 		if !server.Enabled {
@@ -5415,12 +5415,12 @@ func newLoomCanonicalProjectionSigner(cfg *config.Config, relays []string, logge
 		RequireReal:       !cfg.DevMode,
 		AllowMock:         cfg.DevMode,
 		ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget,
-	}, slog.Default())
+	}, logger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("initialize Signet client: %w", err)
 	}
 	manager := signetAdapter.NewConnectionManager(signetClient, signetAdapter.ConnectionManagerConfig{
-		Name: "loom", AttemptTimeout: projection.SignetConnectTimeout, Logger: slog.Default(),
+		Name: "loom", AttemptTimeout: projection.SignetConnectTimeout, Logger: logger,
 	})
 	logger.Info("Loom canonical projection Signet client configured for asynchronous connection")
 	return signetClient, manager, nil
@@ -5484,15 +5484,15 @@ func bootstrapOperatorAssistant(cfg *config.Config, servicePubkey string, relays
 	if cfg == nil || (!cfg.DevMode && !cfg.Assistant.SignetAllowMock && strings.TrimSpace(cfg.Assistant.SignetBunkerURI) == "") {
 		return identity, nil, nil, nil
 	}
-	slogLogger := slog.Default()
-	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget}, slogLogger)
+	componentLogger := logger.With(zap.String("component", "operator-assistant"))
+	signetClient, err := signetAdapter.NewClient(signetAdapter.Config{BunkerURI: cfg.Assistant.SignetBunkerURI, Relays: relays, RequireReal: !cfg.DevMode && !cfg.Assistant.SignetAllowMock, AllowMock: cfg.DevMode || cfg.Assistant.SignetAllowMock, ClosedRetryBudget: cfg.Nostr.ClosedRetryBudget}, componentLogger)
 	if err != nil {
 		logger.Warn("operator assistant signet client initialization failed; using service-key attribution fallback", zap.Error(err))
 		return identity, nil, nil, nil
 	}
-	soulReactor := soulfactory.NewReactor(soulfactory.Config{Relays: relays, AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys}, nil, signetClient, slogLogger)
+	soulReactor := soulfactory.NewReactor(soulfactory.Config{Relays: relays, AuthorizedPubkeys: cfg.Nostr.AuthorizedPubkeys}, nil, signetClient, componentLogger)
 	manager := signetAdapter.NewConnectionManager(signetClient, signetAdapter.ConnectionManagerConfig{
-		Name: "operator-assistant", AttemptTimeout: cfg.Assistant.SignetConnectTimeout, Logger: slogLogger,
+		Name: "operator-assistant", AttemptTimeout: cfg.Assistant.SignetConnectTimeout, Logger: componentLogger,
 	})
 	return identity, manager, &operatorAssistantBootstrapRunner{signer: signetClient, reactor: soulReactor, logger: logger}, signetClient
 }

@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 
@@ -541,17 +542,17 @@ type LegacyAgentReconciler struct {
 	units     LegacyDeploymentUnitStore
 	souls     LegacySoulSource
 	publisher LegacySoulLinkPublisher
-	logger    *slog.Logger
+	logger    *zap.Logger
 }
 
 // NewLegacyAgentReconciler builds the production-capable reconciler. All
 // dependencies are required so the supported surface fails closed.
-func NewLegacyAgentReconciler(registrar LegacyServiceRegistrar, services LegacyServiceStore, units LegacyDeploymentUnitStore, souls LegacySoulSource, publisher LegacySoulLinkPublisher, logger *slog.Logger) (*LegacyAgentReconciler, error) {
+func NewLegacyAgentReconciler(registrar LegacyServiceRegistrar, services LegacyServiceStore, units LegacyDeploymentUnitStore, souls LegacySoulSource, publisher LegacySoulLinkPublisher, logger *zap.Logger) (*LegacyAgentReconciler, error) {
 	if registrar == nil || services == nil || units == nil || souls == nil || publisher == nil {
 		return nil, fmt.Errorf("legacy agent reconciler requires registrar, service store, deployment units, authoritative soul source, and soul publisher")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &LegacyAgentReconciler{registrar: registrar, services: services, units: units, souls: souls, publisher: publisher, logger: logger}, nil
 }
@@ -709,7 +710,8 @@ func (r *LegacyAgentReconciler) ReconcileApprovedLink(ctx context.Context, reque
 	receipt.PreservedRuntimeBinding = linkedSoul.Runtime.RuntimeBinding
 	receipt.PreservedAgentPubkey = linkedSoul.NostrPubkey
 	receipt.Rollback = legacyReconcileRollback(previousEventID, existing == nil, serviceID, soul.AgentID)
-	r.logger.Info("reconciled legacy soul into Bahia without runtime mutation", "agent_id", soul.AgentID, "service_id", serviceID, "deployment_unit_id", unit.ID)
+	r.logger.Info("reconciled legacy soul into Bahia without runtime mutation", zap.String("agent_id", soul.AgentID), zap.Any("service_id", serviceID), zap.Any("deployment_unit_id", unit.ID))
+
 	return receipt, nil
 }
 

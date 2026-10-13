@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -16,7 +17,7 @@ import (
 type MCPServer struct {
 	reactor     *Reactor
 	provisioner *FullProvisioner
-	logger      *slog.Logger
+	logger      *zap.Logger
 }
 
 // MCPServerConfig holds MCP server configuration.
@@ -40,11 +41,11 @@ var newMCPSoulFactoryClient = func(relays []string, signer soulClientSigner) (mc
 }
 
 // NewMCPServer creates a new MCP server for Soul Factory.
-func NewMCPServer(reactor *Reactor, provisioner *FullProvisioner, logger *slog.Logger) *MCPServer {
+func NewMCPServer(reactor *Reactor, provisioner *FullProvisioner, logger *zap.Logger) *MCPServer {
 	return &MCPServer{
 		reactor:     reactor,
 		provisioner: provisioner,
-		logger:      logger.With("component", "mcp-server"),
+		logger:      logger.With(zap.String("component", "mcp-server")),
 	}
 }
 
@@ -213,7 +214,7 @@ type MCPContent struct {
 
 // CallTool handles an MCP tool call.
 func (s *MCPServer) CallTool(ctx context.Context, name string, arguments map[string]interface{}) (*MCPToolResult, error) {
-	s.logger.Info("tool call", "tool", name)
+	s.logger.Info("tool call", zap.String("tool", name))
 
 	switch name {
 	case "soul_factory_list_souls":

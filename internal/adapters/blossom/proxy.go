@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // BlobHead contains metadata returned by a HEAD request.
@@ -90,7 +92,10 @@ func (c *Client) UploadFile(ctx context.Context, path, contentType, expectedHash
 		if err != nil {
 			c.recordUpload(server, false)
 			lastErr = err
-			c.logger.Warn("file upload failed, trying next server", "server", server, "error", err)
+			c.logger.Warn("file upload failed, trying next server", zap.String("server",
+
+				server), zap.Error(err),
+			)
 			continue
 		}
 		c.recordUpload(server, true)

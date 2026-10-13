@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
@@ -59,7 +60,7 @@ func (s fakeSigner) SuspendAgent(ctx context.Context, pubkey string) error { ret
 func (s fakeSigner) ResumeAgent(ctx context.Context, pubkey string) error  { return nil }
 
 func TestDefaultReactorProvisioningFailsClosed(t *testing.T) {
-	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default())
+	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), zap.NewNop())
 	run := &domain.ProvisioningRun{ID: domain.NewUUID(), Steps: []domain.ProvisioningStepResult{}}
 	_, err := reactor.provisioner.Provision(t.Context(), &domain.ProvisioningRequest{AgentID: "agent", Brief: "brief"}, run)
 	if !errors.Is(err, ErrSoulFactoryUnavailable) {
@@ -72,7 +73,7 @@ func TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine(t *testing.T)
 	reactor := NewReactor(Config{
 		AuthorizedPubkeys: []string{signer.pubkey},
 		SoulFactoryPubkey: signer.pubkey,
-	}, fakeGenerator{}, signer, slog.Default())
+	}, fakeGenerator{}, signer, zap.NewNop())
 	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := attachPublishCapture(reactor)
 	request := buildProvisioningEvent(t, signer.pubkey, "no-engine", nostr.Tags{{"agent-id", "agent"}}, `{"brief":"brief"}`)
@@ -98,7 +99,7 @@ func TestDefaultReactorProvisioningPublishesOnlyErrorWithoutEngine(t *testing.T)
 }
 
 func TestFullProvisionerSkipsUnconfiguredOptionalSteps(t *testing.T) {
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, newFakeSigner(t), zap.NewNop())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	reactor.provisioner = full
@@ -140,7 +141,7 @@ func (m *failingAgentMemory) SeedMemory(context.Context, string, []agentmemory.M
 
 func TestFullProvisionerFailsMemoryStepWhenSeedingFails(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	full.agentMemory = &failingAgentMemory{seedErr: errors.New("memory store unavailable")}
@@ -166,7 +167,7 @@ func TestFullProvisionerFailsMemoryStepWhenSeedingFails(t *testing.T) {
 
 func TestFullProvisionerRequiresExplicitNIP05Relays(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	wellKnownDir := t.TempDir()
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{NIP05: NIP05Config{
@@ -194,7 +195,7 @@ func TestFullProvisionerRequiresExplicitNIP05Relays(t *testing.T) {
 
 func TestFullProvisionerAdvertisesOnlyConfiguredNIP05Relays(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	wellKnownDir := t.TempDir()
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{
@@ -227,7 +228,7 @@ func TestFullProvisionerAdvertisesOnlyConfiguredNIP05Relays(t *testing.T) {
 
 func TestFullProvisionerFailsDeployStepWhenNIP05RegistrationFails(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 
 	invalidDir := filepath.Join(t.TempDir(), "not-a-directory")
@@ -262,7 +263,7 @@ func TestFullProvisionerFailsDeployStepWhenNIP05RegistrationFails(t *testing.T) 
 }
 
 func TestMCPServerReturnsConfigurationErrorInsteadOfMockData(t *testing.T) {
-	server := NewMCPServer(NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default()), nil, slog.Default())
+	server := NewMCPServer(NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), zap.NewNop()), nil, zap.NewNop())
 	for _, tool := range []string{"soul_factory_list_souls", "soul_factory_list_templates"} {
 		result, err := server.CallTool(t.Context(), tool, map[string]interface{}{})
 		if err != nil {

@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,8 +21,8 @@ import (
 )
 
 // testLogger returns a slog logger that discards all output (for blossom)
-func testLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func testLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 // testZapLogger returns a zap logger for components that still use zap

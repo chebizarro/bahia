@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -169,7 +168,7 @@ type Bridge struct {
 	// relayBackoff, when set by tests, paces relay resyncs.
 	relayBackoff func() *nostradapter.Backoff
 	writer       hostsWriter
-	logger       *slog.Logger
+	logger       *zap.Logger
 	now          func() time.Time
 	// latest is the newest accepted event per (kind, pubkey, d) coordinate.
 	latest map[string]replaceableCursor
@@ -202,39 +201,36 @@ type hostRoute struct {
 }
 
 // NewBridge constructs a bridge using Bahia's Nostr relay pool implementation.
-func NewBridge(cfg Config, logger *slog.Logger) (*Bridge, error) {
+func NewBridge(cfg Config, logger *zap.Logger) (*Bridge, error) {
 	cfg.normalize()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
-	syncLogger, err := zap.NewProduction()
-	if err != nil {
-		return nil, fmt.Errorf("create relay sync logger: %w", err)
-	}
-	syncLogger = syncLogger.Named("fips-bahia-bridge")
+	syncLogger := logger.Named("fips-bahia-bridge")
 	bridge := newBridgeWithPool(cfg, nostradapter.NewRelayPool(cfg.RelayURLs, syncLogger), logger)
 	bridge.syncLogger = syncLogger
 	return bridge, nil
 }
 
-func newBridgeWithPool(cfg Config, pool *nostradapter.RelayPool, logger *slog.Logger) *Bridge {
+func newBridgeWithPool(cfg Config, pool *nostradapter.RelayPool, logger *zap.Logger) *Bridge {
 	cfg.normalize()
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &Bridge{
 		cfg:        cfg,
 		pool:       pool,
 		syncLogger: zap.NewNop(),
 		writer:     NewHostsWriter(cfg.HostsPath, cfg.ManagedSectionMarker),
-		logger:     logger.With("component", "fips-bahia-bridge"),
-		now:        func() time.Time { return time.Now().UTC() },
-		latest:     make(map[string]replaceableCursor),
-		routes:     make(map[string]hostRoute),
-		entries:    make(map[string]string),
+		logger:     logger.With(zap.String("component", "fips-bahia-bridge")),
+
+		now:     func() time.Time { return time.Now().UTC() },
+		latest:  make(map[string]replaceableCursor),
+		routes:  make(map[string]hostRoute),
+		entries: make(map[string]string),
 	}
 }
 
@@ -252,7 +248,8 @@ func (b *Bridge) Run(ctx context.Context) error {
 	}
 	defer store.Close()
 	filter := b.endpointFilter()
-	b.logger.Info("restored endpoints from the local event store", "store", storePath, "events", b.hydrate(ctx, store, filter))
+	b.logger.Info("restored endpoints from the local event store", zap.String("store", storePath), zap.Int("events", b.hydrate(ctx, store, filter)))
+
 	b.fetchRelayMetadata(ctx)
 	b.pool.Connect(ctx)
 	syncer := &nostradapter.ProcessSync{
@@ -262,16 +259,19 @@ func (b *Bridge) Run(ctx context.Context) error {
 		RelayBackoff: b.relayBackoff,
 		Apply: func(ctx context.Context, ev *nostr.Event) {
 			if err := b.HandleEvent(ctx, ev); err != nil {
-				b.logger.Warn("endpoint event ignored", "event_id", eventID(ev), "error", err)
+				b.logger.Warn("endpoint event ignored", zap.String("event_id", eventID(ev)), zap.Error(err))
+
 			}
 		},
 		RelayCaughtUp: func(relayURL string) {
-			b.logger.Info("relay caught up with stored endpoint events", "relay", relayURL)
+			b.logger.Info("relay caught up with stored endpoint events", zap.String("relay", relayURL))
+
 		},
 		CaughtUp: func() {
 			b.logger.Info("historical endpoint catch-up complete")
 			if err := b.markCaughtUp(ctx); err != nil {
-				b.logger.Warn("hosts write after catch-up failed", "error", err)
+				b.logger.Warn("hosts write after catch-up failed", zap.Error(err))
+
 			}
 		},
 	}
@@ -286,7 +286,8 @@ func (b *Bridge) hydrate(ctx context.Context, store *localstore.Store, filter no
 	for ev := range store.QueryEvents(filter) {
 		count++
 		if err := b.HandleEvent(ctx, &ev); err != nil {
-			b.logger.Debug("stored endpoint event ignored", "event_id", eventID(&ev), "error", err)
+			b.logger.Debug("stored endpoint event ignored", zap.String("event_id", eventID(&ev)), zap.Error(err))
+
 		}
 	}
 	return count
@@ -295,10 +296,12 @@ func (b *Bridge) hydrate(ctx context.Context, store *localstore.Store, filter no
 func (b *Bridge) fetchRelayMetadata(ctx context.Context) {
 	for relayURL, info := range b.pool.FetchAllRelayInfo(ctx) {
 		if info == nil {
-			b.logger.Warn("relay NIP-11 metadata unavailable", "relay", relayURL)
+			b.logger.Warn("relay NIP-11 metadata unavailable", zap.String("relay", relayURL))
+
 			continue
 		}
-		b.logger.Info("relay NIP-11 metadata loaded", "relay", relayURL, "name", info.Name, "supported_nips", info.SupportedNIPs)
+		b.logger.Info("relay NIP-11 metadata loaded", zap.String("relay", relayURL), zap.String("name", info.Name), zap.Any("supported_nips", info.SupportedNIPs))
+
 	}
 }
 

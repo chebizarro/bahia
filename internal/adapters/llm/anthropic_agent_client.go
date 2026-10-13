@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -34,11 +35,11 @@ type AnthropicAgentClient struct {
 	apiKey     string
 	maxTokens  int
 	httpClient *http.Client
-	logger     *slog.Logger
+	logger     *zap.Logger
 }
 
 // NewAnthropicAgentClient creates an Anthropic agent model client.
-func NewAnthropicAgentClient(config AnthropicAgentClientConfig, logger *slog.Logger) *AnthropicAgentClient {
+func NewAnthropicAgentClient(config AnthropicAgentClientConfig, logger *zap.Logger) *AnthropicAgentClient {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.anthropic.com"
 	}
@@ -52,7 +53,7 @@ func NewAnthropicAgentClient(config AnthropicAgentClientConfig, logger *slog.Log
 		config.HTTPClient = &http.Client{Timeout: config.Timeout}
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &AnthropicAgentClient{
 		baseURL:    strings.TrimRight(config.BaseURL, "/"),
@@ -60,7 +61,7 @@ func NewAnthropicAgentClient(config AnthropicAgentClientConfig, logger *slog.Log
 		apiKey:     config.APIKey,
 		maxTokens:  config.MaxTokens,
 		httpClient: config.HTTPClient,
-		logger:     logger.With("component", "llm_anthropic_agent_client"),
+		logger:     logger.With(zap.String("component", "llm_anthropic_agent_client")),
 	}
 }
 

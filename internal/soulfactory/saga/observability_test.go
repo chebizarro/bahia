@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 func TestMonitorExportsSecretFreeRunStageReadinessAndTerminalMetrics(t *testing.T) {
@@ -21,7 +23,7 @@ func TestMonitorExportsSecretFreeRunStageReadinessAndTerminalMetrics(t *testing.
 	var logs bytes.Buffer
 	monitor, err := NewMonitor(MonitorConfig{
 		Store: store, Instance: "bahia-canary-a", Build: "f88ec8fa418485670803c3ee72e2dd10d7de601e",
-		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+		Logger: zap.New(zapcore.NewCore(zapcore.NewJSONEncoder(zap.NewProductionEncoderConfig()), zapcore.AddSync(&logs), zapcore.InfoLevel)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +71,7 @@ func TestMonitorRetainsRetryRollbackAndSignetDenialEvidence(t *testing.T) {
 	}
 	monitor, err := NewMonitor(MonitorConfig{
 		Store: store, Instance: "test", Build: "build",
-		Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		Logger: zap.NewNop(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +135,7 @@ func TestMonitorWritePrometheusReturnsWriterFailure(t *testing.T) {
 	_, _, store := fixtureEngine(t, nil)
 	monitor, err := NewMonitor(MonitorConfig{
 		Store: store, Instance: "test", Build: "build",
-		Logger: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		Logger: zap.NewNop(),
 	})
 	if err != nil {
 		t.Fatal(err)

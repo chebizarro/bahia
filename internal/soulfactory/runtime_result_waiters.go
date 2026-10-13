@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 )
@@ -148,7 +149,7 @@ type unclaimedRuntimeResult struct {
 // runtimeResultWaiters matches late kind:38386 results with parked operations.
 // It is event-driven: nothing expires on a timer.
 type runtimeResultWaiters struct {
-	logger *slog.Logger
+	logger *zap.Logger
 	// limit bounds parked entries that hold no soul (maxParkedRuntimeResults).
 	limit int
 
@@ -159,9 +160,9 @@ type runtimeResultWaiters struct {
 	unclaimedCount int
 }
 
-func newRuntimeResultWaiters(logger *slog.Logger) *runtimeResultWaiters {
+func newRuntimeResultWaiters(logger *zap.Logger) *runtimeResultWaiters {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &runtimeResultWaiters{
 		logger:    logger,
@@ -208,8 +209,8 @@ func (w *runtimeResultWaiters) evictFollowUpsLocked() {
 			return
 		}
 		delete(w.parked, oldestID)
-		w.logger.Warn("dropping oldest late rollback follow-up awaiting a runtime terminal result; its action already reported rollback_status outcome_unknown",
-			"request_event", oldestID, "limit", w.limit)
+		w.logger.Warn("dropping oldest late rollback follow-up awaiting a runtime terminal result; its action already reported rollback_status outcome_unknown", zap.String("request_event", oldestID), zap.Int("limit", w.limit))
+
 	}
 }
 
@@ -241,9 +242,8 @@ func (w *runtimeResultWaiters) deliver(ctx context.Context, event *nostr.Event) 
 	}
 	delete(w.parked, result.RequestEvent)
 	w.mu.Unlock()
-	w.logger.Info("late runtime terminal result observed; resuming operation",
-		"request_event", result.RequestEvent, "result_event", event.ID.Hex(),
-		"method", result.Method, "status", result.Status)
+	w.logger.Info("late runtime terminal result observed; resuming operation", zap.String("request_event", result.RequestEvent), zap.String("result_event", event.ID.Hex()), zap.String("method", result.Method), zap.String("status", result.Status))
+
 	parked.op.resume(ctx, result)
 	return true
 }
@@ -297,7 +297,8 @@ func (w *runtimeResultWaiters) observeLateRollback(shardKey string, result *Runt
 	}
 	late, observed := w.park(pending, parkedOperation{shardKey: shardKey, resume: report})
 	if !observed {
-		w.logger.Info("rollback outcome unknown; its late runtime result will be reported as progress", "request_event", pending.requestID())
+		w.logger.Info("rollback outcome unknown; its late runtime result will be reported as progress", zap.String("request_event", pending.requestID()))
+
 		return result, err
 	}
 	return late, runtimeResultFailure(late)

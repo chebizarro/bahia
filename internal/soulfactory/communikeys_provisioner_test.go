@@ -3,9 +3,10 @@ package soulfactory
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -23,7 +24,7 @@ func (a *recordingCommunikeysAssigner) Assign(_ context.Context, pubkey string) 
 
 func TestFullProvisionerAssignsAndRecordsCommunikeysAfterSignet(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	assigner := &recordingCommunikeysAssigner{assigned: []string{"30000:" + signer.pubkey + ":" + opaqueCommunityID + "-apps"}}
@@ -58,7 +59,7 @@ func TestFullProvisionerAssignsAndRecordsCommunikeysAfterSignet(t *testing.T) {
 
 func TestFullProvisionerFailsClosedWhenCommunikeysAssignmentFails(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	full.communikeysMembership = &recordingCommunikeysAssigner{err: errors.New("relay rejected ACL replacement")}

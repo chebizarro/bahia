@@ -59,7 +59,7 @@ func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *
 			return running, release, nil
 		}
 	}
-	opts := servicesigner.Options{Admission: admission}
+	opts := servicesigner.Options{Admission: admission, Logger: logger}
 	if logger != nil {
 		opts.OnAuthURL = func(authURL string) { logger.Warn(servicesigner.AuthURLMessage, zap.String("url", authURL)) }
 	}

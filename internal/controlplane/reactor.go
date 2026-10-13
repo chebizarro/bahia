@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -147,7 +146,7 @@ type Reactor struct {
 	llmRegistry *service.LLMRegistryService
 	mlRegistry  *service.MLRegistryService
 	signer      nostr.Signer
-	logger      *slog.Logger
+	logger      *zap.Logger
 	zapLog      *zap.Logger
 	dedup       *nostrpool.EventDeduplicator
 	backoff     *nostrpool.Backoff
@@ -409,7 +408,7 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 		publisher:        pool,
 		registry:         registry,
 		signer:           signer,
-		logger:           slog.Default().With("component", "controlplane"),
+		logger:           zapLog.With(zap.String("component", "controlplane")),
 		zapLog:           zapLog,
 		dedup:            nostrpool.NewEventDeduplicator(10000),
 		backoff:          nostrpool.DefaultBackoff(),
@@ -440,19 +439,14 @@ func (r *Reactor) logPublishError(err error) {
 	if err == nil {
 		return
 	}
-	if r != nil && r.zapLog != nil {
-		r.zapLog.Warn("control-plane response publish failed", zap.Error(err))
-		return
+	if r != nil && r.logger != nil {
+		r.logger.Warn("control-plane response publish failed", zap.Error(err))
 	}
-	slog.Default().Warn("control-plane response publish failed", "error", err)
 }
 
 // Run starts the reactor and blocks until context is cancelled.
 func (r *Reactor) Run(ctx context.Context) error {
-	r.logger.Info("starting bahia control plane reactor",
-		"relays", r.config.Relays,
-		"additional_relays", r.config.AdditionalRelays,
-	)
+	r.logger.Info("starting bahia control plane reactor", zap.Strings("relays", r.config.Relays), zap.Strings("additional_relays", r.config.AdditionalRelays))
 
 	// Connect to relays
 	r.pool.Connect(ctx)
@@ -493,11 +487,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 				// internally (closedRetryBudget + authenticateLiveRelay). The
 				// consumer only needs to log terminal closures for diagnostics.
 				r.pool.RecordRelayClosed(closed.RelayURL, closed.Reason)
-				r.logger.Warn("relay closed control-plane subscription",
-					"relay", closed.RelayURL,
-					"subscription_id", closed.SubscriptionID,
-					"reason", closed.Reason,
-				)
+				r.logger.Warn("relay closed control-plane subscription", zap.String("relay", closed.RelayURL), zap.String("subscription_id", closed.SubscriptionID), zap.String("reason", closed.Reason))
 			} else {
 				merged.Closed = nil
 			}
@@ -511,14 +501,14 @@ func (r *Reactor) Run(ctx context.Context) error {
 				// reconnect, reconfigured AUTH), so wait event-driven instead
 				// of killing the consumer.
 				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					r.logger.Error("control-plane subscription gave up — waiting for topology change", "error", gaveUp)
+					r.logger.Error("control-plane subscription gave up — waiting for topology change", zap.NamedError("error", gaveUp))
 					if err := r.pool.WaitForTopologyChange(ctx); err != nil {
 						r.pool.Close()
 						return err
 					}
 				}
 				delay := r.backoff.Next()
-				r.logger.Warn("subscription closed, reconnecting...", "delay", delay)
+				r.logger.Warn("subscription closed, reconnecting...", zap.Duration("delay", delay))
 				select {
 				case <-ctx.Done():
 					r.logger.Info("reactor shutting down during reconnect backoff")
@@ -533,7 +523,7 @@ func (r *Reactor) Run(ctx context.Context) error {
 					return r.pool.SubscribeAllWithEOSE(ctx, filters)
 				})
 				if err != nil {
-					r.logger.Error("reconnect failed", "error", err)
+					r.logger.Error("reconnect failed", zap.Error(err))
 					continue
 				}
 				r.backoff.Reset()
@@ -560,7 +550,7 @@ func keepSubscriptionOnResubscribeFailure(current *nostrpool.MergedSubscription,
 }
 
 func (r *Reactor) handleRelayEOSE(eose nostrpool.RelayEOSE) {
-	r.logger.Debug("relay sent control-plane EOSE", "relay", eose.RelayURL, "subscription_id", eose.SubscriptionID)
+	r.logger.Debug("relay sent control-plane EOSE", zap.String("relay", eose.RelayURL), zap.String("subscription_id", eose.SubscriptionID))
 }
 
 func (r *Reactor) handleEOSE() {
@@ -575,7 +565,7 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 	}
 	tagsJSON, err := json.Marshal(event.Tags)
 	if err != nil {
-		r.logger.Warn("failed to marshal inbound control-plane event tags for audit", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
+		r.logger.Warn("failed to marshal inbound control-plane event tags for audit", zap.String("event_id", event.ID.Hex()), zap.Int("kind", int(event.Kind)), zap.Error(err))
 		tagsJSON = []byte("[]")
 	}
 	inserted, err := r.nostrEvents.Record(ctx, &repository.NostrEventRecord{
@@ -592,11 +582,11 @@ func (r *Reactor) auditInboundEvent(ctx context.Context, event *nostr.Event) boo
 		// The audit table is an archive, not the dedupe authority: a
 		// database error must not make the reactor deaf to its relays. The
 		// in-memory dedupe still stops relay replays within this process.
-		r.logger.Warn("failed to audit inbound control-plane event; handling it anyway", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", err)
+		r.logger.Warn("failed to audit inbound control-plane event; handling it anyway", zap.String("event_id", event.ID.Hex()), zap.Int("kind", int(event.Kind)), zap.Error(err))
 		return true
 	}
 	if !inserted {
-		r.logger.Debug("skipping already-audited control-plane event", "event_id", event.ID, "kind", event.Kind)
+		r.logger.Debug("skipping already-audited control-plane event", zap.Any("event_id", event.ID), zap.Any("kind", event.Kind))
 		return false
 	}
 	return true
@@ -612,13 +602,13 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 		if event != nil {
 			eventID = event.ID.Hex()
 		}
-		r.logger.Warn("dropping invalid control-plane event", "event_id", eventID, "error", err)
+		r.logger.Warn("dropping invalid control-plane event", zap.String("event_id", eventID), zap.Error(err))
 		return
 	}
 	eventID := event.ID.Hex()
 	eventKind := int(event.Kind)
 	if !isCanonicalRuntimeReplayKind(eventKind) {
-		r.logger.Debug("ignoring non-canonical replay event", "kind", eventKind)
+		r.logger.Debug("ignoring non-canonical replay event", zap.Int("kind", eventKind))
 		return
 	}
 
@@ -1212,7 +1202,7 @@ func (r *Reactor) publishEvent(ctx context.Context, event *nostr.Event) (int, er
 	if err == nil && published > 0 && r.nostrEvents != nil {
 		tagsJSON, marshalErr := json.Marshal(event.Tags)
 		if marshalErr != nil {
-			r.logger.Warn("failed to marshal outbound event tags for audit", "event_id", event.ID.Hex(), "error", marshalErr)
+			r.logger.Warn("failed to marshal outbound event tags for audit", zap.String("event_id", event.ID.Hex()), zap.Error(marshalErr))
 		} else if _, recordErr := r.nostrEvents.Record(ctx, &repository.NostrEventRecord{
 			ID:         event.ID.Hex(),
 			Kind:       int(event.Kind),
@@ -1223,7 +1213,7 @@ func (r *Reactor) publishEvent(ctx context.Context, event *nostr.Event) (int, er
 			CreatedAt:  event.CreatedAt.Time(),
 			ReceivedAt: time.Now().UTC(),
 		}); recordErr != nil {
-			r.logger.Warn("failed to audit outbound control-plane event", "event_id", event.ID.Hex(), "kind", int(event.Kind), "error", recordErr)
+			r.logger.Warn("failed to audit outbound control-plane event", zap.String("event_id", event.ID.Hex()), zap.Int("kind", int(event.Kind)), zap.Error(recordErr))
 		}
 	}
 	return published, err
@@ -1344,7 +1334,7 @@ func (r *Reactor) cleanupRuns(ctx context.Context) {
 			}
 			r.mu.Unlock()
 			if deleted > 0 {
-				r.logger.Info("cleaned up completed runs", "deleted", deleted)
+				r.logger.Info("cleaned up completed runs", zap.Int("deleted", deleted))
 			}
 		}
 	}

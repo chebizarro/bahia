@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Download downloads a blob by URL and verifies its SHA-256 hash.
@@ -28,10 +30,11 @@ func (c *Client) Download(ctx context.Context, url string) ([]byte, error) {
 	}
 
 	c.recordDownload(server, true)
-	c.logger.Debug("downloaded from Blossom",
-		"url", url,
-		"sha256", expectedHash,
-		"size", len(data),
+	c.logger.Debug("downloaded from Blossom", zap.String("url", url), zap.String("sha256",
+
+		expectedHash,
+	), zap.Int("size",
+		len(data)),
 	)
 
 	return data, nil
@@ -50,10 +53,11 @@ func (c *Client) DownloadByHash(ctx context.Context, hash string) ([]byte, error
 		if err != nil {
 			c.recordDownload(server, false)
 			lastErr = err
-			c.logger.Debug("download failed, trying next server",
-				"server", server,
-				"hash", hash,
-				"error", err,
+			c.logger.Debug("download failed, trying next server", zap.String("server",
+
+				server), zap.String("hash",
+				hash,
+			), zap.Error(err),
 			)
 			continue
 		}
@@ -66,10 +70,12 @@ func (c *Client) DownloadByHash(ctx context.Context, hash string) ([]byte, error
 		}
 
 		c.recordDownload(server, true)
-		c.logger.Info("downloaded from Blossom",
-			"server", server,
-			"sha256", hash,
-			"size", len(data),
+		c.logger.Info("downloaded from Blossom", zap.String("server",
+
+			server), zap.String("sha256",
+
+			hash), zap.Int("size",
+			len(data)),
 		)
 
 		return data, nil
@@ -96,10 +102,7 @@ func (c *Client) DownloadWithFallback(ctx context.Context, url string) ([]byte, 
 		c.recordDownload(server, false)
 	} else {
 		c.recordDownload(server, false)
-		c.logger.Debug("primary server failed, trying fallbacks",
-			"url", url,
-			"error", err,
-		)
+		c.logger.Debug("primary server failed, trying fallbacks", zap.String("url", url), zap.Error(err))
 	}
 
 	// Try configured servers

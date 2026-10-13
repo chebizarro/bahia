@@ -3,9 +3,10 @@ package sbom
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -21,7 +22,7 @@ func TestStorageResolver_ResolveFromBlossom(t *testing.T) {
 		},
 	}
 
-	logger := slog.Default()
+	logger := zap.NewNop()
 	resolver := NewStorageResolver(mockBlossom, nil, nil, logger)
 
 	// Test successful resolution.
@@ -58,7 +59,7 @@ func TestStorageResolver_StoreToBlossom(t *testing.T) {
 		Blobs: make(map[string][]byte),
 	}
 
-	logger := slog.Default()
+	logger := zap.NewNop()
 	resolver := NewStorageResolver(mockBlossom, nil, nil, logger)
 
 	sbomData := []byte(`{"spdxVersion": "SPDX-2.3", "name": "test"}`)
@@ -133,7 +134,7 @@ func TestStorageResolver_NilLoggerUsesNoOpLogger(t *testing.T) {
 func TestStorageResolver_ResolveAndVerify(t *testing.T) {
 	sbomData := []byte(`{"spdxVersion": "SPDX-2.3"}`)
 	mockBlossom := &MockBlossomClient{Blobs: make(map[string][]byte)}
-	resolver := NewStorageResolver(mockBlossom, nil, nil, slog.Default())
+	resolver := NewStorageResolver(mockBlossom, nil, nil, zap.NewNop())
 
 	stored, err := resolver.Store(context.Background(), StoreInput{
 		Data:        sbomData,
@@ -165,7 +166,7 @@ func TestStorageResolver_ResolveAndVerify(t *testing.T) {
 }
 
 func TestStorageResolver_StoreRejectsNonCanonicalBackends(t *testing.T) {
-	resolver := NewStorageResolver(&MockBlossomClient{Blobs: make(map[string][]byte)}, nil, nil, slog.Default())
+	resolver := NewStorageResolver(&MockBlossomClient{Blobs: make(map[string][]byte)}, nil, nil, zap.NewNop())
 
 	for _, backend := range []domain.SBOMStorageType{domain.SBOMStorageOCI, domain.SBOMStoragePackage} {
 		_, err := resolver.Store(context.Background(), StoreInput{Data: []byte(`{}`), Format: domain.SBOMFormatSPDX, BackendType: backend})
@@ -229,7 +230,7 @@ func TestExtractBlossomHash(t *testing.T) {
 }
 
 func TestStorageResolver_UnsupportedBackend(t *testing.T) {
-	logger := slog.Default()
+	logger := zap.NewNop()
 	resolver := NewStorageResolver(nil, nil, nil, logger)
 
 	// Test unsupported storage type.
@@ -245,7 +246,7 @@ func TestStorageResolver_UnsupportedBackend(t *testing.T) {
 }
 
 func TestStorageResolver_MissingClient(t *testing.T) {
-	logger := slog.Default()
+	logger := zap.NewNop()
 	resolver := NewStorageResolver(nil, nil, nil, logger)
 
 	// Test Blossom without client.
@@ -289,7 +290,7 @@ func TestStorageResolver_ResolveFromBlossomPassesCanonicalURLToClient(t *testing
 	client := &recordingBlossomClient{
 		data: []byte(`{"spdxVersion": "SPDX-2.3"}`),
 	}
-	resolver := NewStorageResolver(client, nil, nil, slog.Default())
+	resolver := NewStorageResolver(client, nil, nil, zap.NewNop())
 	uri := "https://blossom.example.com/" + testHash + ".json"
 
 	_, err := resolver.Resolve(context.Background(), ResolveInput{

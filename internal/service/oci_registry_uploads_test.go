@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,7 +151,7 @@ func newUploadService(t *testing.T) (*OCIRegistryService, *uploadRepoMock, *blob
 		config.OCIServerConfig{SpoolDir: filepath.Join(t.TempDir(), "spool"), UploadExpiry: time.Hour},
 		repo,
 		uploads,
-		blossom.NewClient(blossom.Config{Servers: []string{ts.URL}}, slog.Default()),
+		blossom.NewClient(blossom.Config{Servers: []string{ts.URL}}, zap.NewNop()),
 		zap.NewNop(),
 	)
 	if err != nil {

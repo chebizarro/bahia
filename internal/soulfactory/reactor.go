@@ -12,11 +12,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -78,7 +79,7 @@ type Reactor struct {
 	provisioner           ProvisioningEngine
 	lifecycleHandler      *LifecycleHandler
 	fleetConfigReconciler *FleetConfigReconciler
-	logger                *slog.Logger
+	logger                *zap.Logger
 	// relayClient is the one relay client for the reactor's relay set: its
 	// subscription, reads and publishes share its pool. ownsRelayClient is
 	// false when WithRelayClient supplied it (its creator closes it).
@@ -192,9 +193,9 @@ type Signer interface {
 }
 
 // NewReactor creates a new Soul Factory reactor.
-func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *slog.Logger, opts ...ReactorOption) *Reactor {
+func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *zap.Logger, opts ...ReactorOption) *Reactor {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	r := &Reactor{
@@ -202,7 +203,7 @@ func NewReactor(config Config, generator SoulGenerator, signer Signer, logger *s
 		generator:   generator,
 		signer:      signer,
 		provisioner: unavailableProvisioningEngine{},
-		logger:      logger.With("component", "soulfactory"),
+		logger:      logger.With(zap.String("component", "soulfactory")),
 		runs:        make(map[string]*domain.ProvisioningRun),
 	}
 	r.runtimeResults = newRuntimeResultWaiters(r.logger)
@@ -271,10 +272,7 @@ func (r *Reactor) fleetReconciler() *FleetConfigReconciler {
 
 // Run starts the reactor and blocks until context is cancelled.
 func (r *Reactor) Run(ctx context.Context) error {
-	r.logger.Info("starting soul factory reactor",
-		"relays", r.config.Relays,
-		"additional_relays", r.config.AdditionalRelays,
-	)
+	r.logger.Info("starting soul factory reactor", zap.Strings("relays", r.config.Relays), zap.Strings("additional_relays", r.config.AdditionalRelays))
 
 	// Backfill the queued request/action backlog so accepted events resume after
 	// a reactor or signer outage. Existing terminal-result checks make replay
@@ -370,7 +368,8 @@ func (r *Reactor) Run(ctx context.Context) error {
 		case <-eose:
 			eose = nil
 			if err := sub.StoredEventsIncomplete(nil); err != nil {
-				r.logger.Warn("soul factory request backfill incomplete; processing realtime events", "error", err)
+				r.logger.Warn("soul factory request backfill incomplete; processing realtime events", zap.Error(err))
+
 				continue
 			}
 			r.logger.Info("soul factory request backfill complete; processing realtime events")
@@ -413,7 +412,8 @@ func (r *Reactor) handleEvent(ctx context.Context, event *nostr.Event) {
 	case nostr.Kind(domain.KindSoulFleetConfig):
 		r.handleFleetConfigUpdate(ctx, event)
 	default:
-		r.logger.Warn("unexpected event kind", "kind", event.Kind)
+		r.logger.Warn("unexpected event kind", zap.Any("kind", event.Kind))
+
 	}
 }
 
@@ -480,14 +480,16 @@ func (r *Reactor) handleLateRuntimeResult(ctx context.Context, event *nostr.Even
 	}
 	soul, err := soulFromRuntimeCheckpoint(control, result)
 	if err != nil {
-		r.logger.Warn("late runtime result has no usable Soul checkpoint", "event_id", event.ID, "error", err)
+		r.logger.Warn("late runtime result has no usable Soul checkpoint", zap.Any("event_id", event.ID), zap.Error(err))
+
 		return
 	}
 	// A late runtime-control success proves only configuration. It cannot stand
 	// in for Bahia's independent external DM probe, so it must never resurrect
 	// an unverified soul as running.
 	if soul.Readiness == nil || soul.Readiness.RequestID != result.OperatorRequestEvent || soul.Readiness.RunID == "" {
-		r.logger.Warn("ignoring late runtime success without independent readiness evidence", "event_id", event.ID, "agent_id", soul.AgentID)
+		r.logger.Warn("ignoring late runtime success without independent readiness evidence", zap.Any("event_id", event.ID), zap.String("agent_id", soul.AgentID))
+
 		return
 	}
 	if current, err := r.GetSoul(ctx, soul.AgentID); err == nil && current != nil &&
@@ -496,14 +498,17 @@ func (r *Reactor) handleLateRuntimeResult(ctx context.Context, event *nostr.Even
 		return
 	}
 	if err := r.PublishSoul(ctx, soul); err != nil {
-		r.logger.Error("failed to project late runtime success", "event_id", event.ID, "error", err)
+		r.logger.Error("failed to project late runtime success", zap.Any("event_id", event.ID), zap.Error(err))
+
 		return
 	}
 	if err := r.publishResult(ctx, requestEvent, soul); err != nil {
-		r.logger.Error("failed to publish late runtime provisioning success", "event_id", event.ID, "error", err)
+		r.logger.Error("failed to publish late runtime provisioning success", zap.Any("event_id", event.ID), zap.Error(err))
+
 		return
 	}
-	r.logger.Info("late runtime success reconciled", "event_id", event.ID, "agent_id", soul.AgentID, "soul_event", soul.EventID)
+	r.logger.Info("late runtime success reconciled", zap.Any("event_id", event.ID), zap.String("agent_id", soul.AgentID), zap.String("soul_event", soul.EventID))
+
 }
 
 func (r *Reactor) correlatedRuntimeRecoveryState(ctx context.Context, result *RuntimeControlResultEnvelope) (*nostr.Event, *RuntimeControlEnvelope, bool) {
@@ -613,14 +618,15 @@ func provisioningResultNeedsRuntimeReconciliation(event *nostr.Event) bool {
 
 // handleProvisioningRequest processes a kind:5950 provisioning request.
 func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "requester", event.PubKey)
+	logger := r.logger.With(zap.Any("event_id", event.ID), zap.Any("requester", event.PubKey))
 	logger.Info("received provisioning request")
 
 	// Validate authorization
 	if !r.isAuthorizedProvisioner(event.PubKey.Hex()) {
 		logger.Warn("unauthorized provisioning request")
 		if err := r.publishError(ctx, event, "unauthorized", "requester not in authorized provisioners list"); err != nil {
-			logger.Error("failed to publish provisioning error", "error", err)
+			logger.Error("failed to publish provisioning error", zap.Error(err))
+
 		}
 		return
 	}
@@ -629,7 +635,8 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	if factoryPubkey == "" {
 		logger.Error("SoulFactory pubkey is not configured")
 		if err := r.publishError(ctx, event, "config_error", "SoulFactory pubkey is required"); err != nil {
-			logger.Error("failed to publish provisioning error", "error", err)
+			logger.Error("failed to publish provisioning error", zap.Error(err))
+
 		}
 		return
 	}
@@ -637,19 +644,23 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	// Parse request
 	req, err := r.parseProvisioningRequest(event)
 	if err != nil {
-		logger.Error("failed to parse request", "error", err)
+		logger.Error("failed to parse request", zap.Error(err))
+
 		if publishErr := r.publishError(ctx, event, "parse_error", err.Error()); publishErr != nil {
-			logger.Error("failed to publish provisioning error", "error", publishErr)
+			logger.Error("failed to publish provisioning error", zap.Error(publishErr))
+
 		}
 		return
 	}
 
-	logger = logger.With("agent_id", req.AgentID)
+	logger = logger.With(zap.String("agent_id", req.AgentID))
 
 	if existing, err := r.findExistingProvisioningResult(ctx, event); err != nil {
-		logger.Warn("failed to check existing provisioning terminal result", "error", err)
+		logger.Warn("failed to check existing provisioning terminal result", zap.Error(err))
+
 	} else if existing != nil {
-		logger.Info("ignoring provisioning request with existing terminal result", "result_event", existing.ID)
+		logger.Info("ignoring provisioning request with existing terminal result", zap.Any("result_event", existing.ID))
+
 		return
 	}
 
@@ -683,7 +694,8 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	// Run provisioning workflow
 	result, err := r.provisioner.Provision(context.WithValue(ctx, provisioningRequestMethodKey{}, tagValue(event.Tags, "method")), req, run)
 	if err != nil {
-		logger.Error("provisioning failed", "error", err, "step", run.CurrentStep)
+		logger.Error("provisioning failed", zap.Error(err), zap.Any("step", run.CurrentStep))
+
 		run.Status = domain.ProvisioningStatusFailed
 		run.Error = err.Error()
 		now := time.Now()
@@ -692,7 +704,8 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 		_, governed := r.provisioner.(interface{ ownsTerminalFailureProjection() })
 		if !governed || errors.As(err, &missing) {
 			if publishErr := r.publishError(ctx, event, string(run.CurrentStep), err.Error(), run.ID.String()); publishErr != nil {
-				logger.Error("failed to publish provisioning error", "error", publishErr)
+				logger.Error("failed to publish provisioning error", zap.Error(publishErr))
+
 			}
 		}
 		return
@@ -702,15 +715,12 @@ func (r *Reactor) handleProvisioningRequest(ctx context.Context, event *nostr.Ev
 	run.Status = domain.ProvisioningStatusCompleted
 	now := time.Now()
 	run.CompletedAt = &now
-
-	logger.Info("provisioning completed",
-		"npub", result.NostrNpub,
-		"service_id", result.BahiaServiceID,
-	)
+	logger.Info("provisioning completed", zap.String("npub", result.NostrNpub), zap.Any("service_id", result.BahiaServiceID))
 
 	if _, governed := r.provisioner.(interface{ ownsTerminalSuccessProjection() }); !governed {
 		if err := r.publishResult(ctx, event, result); err != nil {
-			logger.Error("failed to publish provisioning result", "error", err)
+			logger.Error("failed to publish provisioning result", zap.Error(err))
+
 			run.Status = domain.ProvisioningStatusFailed
 			run.Error = fmt.Sprintf("publish provisioning result: %v", err)
 		}
@@ -725,30 +735,35 @@ func (r *Reactor) handleFleetConfigUpdate(ctx context.Context, event *nostr.Even
 	}
 	snapshot, err := ParseFleetConfigEvent(event, r.config.AuthorizedPubkeys)
 	if err != nil {
-		r.logger.Warn("rejected fleet config update", "event_id", event.ID, "error", err)
+		r.logger.Warn("rejected fleet config update", zap.Any("event_id", event.ID), zap.Error(err))
+
 		return
 	}
 	latest, err := r.getProvisioningFleetConfig(ctx)
 	if err != nil {
-		r.logger.Error("resolve authoritative fleet config", "event_id", event.ID, "error", err)
+		r.logger.Error("resolve authoritative fleet config", zap.Any("event_id", event.ID), zap.Error(err))
+
 		return
 	}
 	if latest != nil && latest.EventID != snapshot.EventID {
-		r.logger.Info("ignoring superseded fleet config revision", "event_id", event.ID, "latest_event_id", latest.EventID)
+		r.logger.Info("ignoring superseded fleet config revision", zap.Any("event_id", event.ID), zap.String("latest_event_id", latest.EventID))
+
 		return
 	}
 	if err := r.fleetReconciler().Reconcile(ctx, snapshot); err != nil {
-		r.logger.Error("fleet config reconciliation completed with failures", "event_id", event.ID, "error", err)
+		r.logger.Error("fleet config reconciliation completed with failures", zap.Any("event_id", event.ID), zap.Error(err))
+
 	}
 }
 
 // handleSoulAction processes a kind:1950 lifecycle action through the single
 // lifecycle_handler.go orchestration path.
 func (r *Reactor) handleSoulAction(ctx context.Context, event *nostr.Event) {
-	logger := r.logger.With("event_id", event.ID, "initiator", event.PubKey)
+	logger := r.logger.With(zap.Any("event_id", event.ID), zap.Any("initiator", event.PubKey))
 	logger.Info("received soul action")
 	if err := r.lifecycle().HandleAction(ctx, event); err != nil {
-		logger.Error("soul action failed", "error", err)
+		logger.Error("soul action failed", zap.Error(err))
+
 	}
 }
 

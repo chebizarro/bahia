@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+
 	"sort"
 	"strings"
 	"sync"
@@ -41,7 +41,7 @@ func TestSecurityScannerSBOMScanVerifiesHashQueriesOSVPersistsAndPublishes(t *te
 	repo := newMemorySecurityRepo(target, run)
 	publisher := &recordingSecurityPublisher{secret: "1111111111111111111111111111111111111111111111111111111111111111", results: []sbomadapter.PublishOKResult{{RelayURL: "wss://relay", Accepted: true}}}
 	osv := &recordingOSVClient{results: []securityadapter.OSVQueryResult{{Vulnerabilities: []securityadapter.Vulnerability{{ID: "GHSA-1", Summary: "vuln", Severity: "HIGH", CVE: "CVE-1"}}}}}
-	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{hash: payload}}, nil, nil, slog.Default()), OSV: osv, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t), FindingChunkSize: 10})
+	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{hash: payload}}, nil, nil, zap.NewNop()), OSV: osv, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t), FindingChunkSize: 10})
 
 	err = scanner.executeRun(ctx, run.ID)
 
@@ -77,7 +77,7 @@ func TestSecurityScannerSBOMHashMismatchFailsBeforeOSV(t *testing.T) {
 	repo := newMemorySecurityRepo(target, run)
 	publisher := &recordingSecurityPublisher{secret: "1111111111111111111111111111111111111111111111111111111111111111", results: []sbomadapter.PublishOKResult{{RelayURL: "wss://relay", Accepted: true}}}
 	osv := &recordingOSVClient{}
-	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{actualHash: payload}}, nil, nil, slog.Default()), OSV: osv, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t)})
+	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{actualHash: payload}}, nil, nil, zap.NewNop()), OSV: osv, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t)})
 
 	err = scanner.executeRun(ctx, run.ID)
 
@@ -166,7 +166,7 @@ func TestSecurityScannerCompletionUpdatesCompatibilityAndDispatchesNewBreachOnly
 	})
 	policy := domain.DeploymentPolicy{ID: uuid.New(), Name: "block-high", Enforcement: domain.PolicyEnforcementBlock, Enabled: true, UpdatedAt: time.Now().UTC(), Rules: []domain.PolicyRule{{Type: domain.RuleMaxHighVulns, Params: map[string]any{"max": 0}}}}
 	compat := &recordingSBOMCompatibilityUpdater{}
-	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, SBOMs: compat, Policies: staticSecurityPolicyProvider{policies: []domain.DeploymentPolicy{policy}}, Events: eventPub, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{hash: payload}}, nil, nil, slog.Default()), OSV: &recordingOSVClient{results: []securityadapter.OSVQueryResult{{Vulnerabilities: []securityadapter.Vulnerability{{ID: "GHSA-1", Severity: "HIGH"}}}}}, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t)})
+	scanner := NewSecurityScanner(SecurityScannerConfig{Repo: repo, SBOMs: compat, Policies: staticSecurityPolicyProvider{policies: []domain.DeploymentPolicy{policy}}, Events: eventPub, Storage: sbomadapter.NewStorageResolver(fakeBlossom{payloads: map[string][]byte{hash: payload}}, nil, nil, zap.NewNop()), OSV: &recordingOSVClient{results: []securityadapter.OSVQueryResult{{Vulnerabilities: []securityadapter.Vulnerability{{ID: "GHSA-1", Severity: "HIGH"}}}}}, Publisher: publisher, Logger: zap.NewNop(), Pubkey: publisher.pubkey(t)})
 
 	require.NoError(t, scanner.executeRun(ctx, run.ID))
 	<-dispatchedCh

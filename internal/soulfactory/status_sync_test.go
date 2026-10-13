@@ -1,9 +1,10 @@
 package soulfactory
 
 import (
-	"log/slog"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -11,8 +12,8 @@ import (
 )
 
 func TestStatusSyncHandlerUsesBahiaEventsToUpdateDeployStatus(t *testing.T) {
-	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default())
-	handler := NewStatusSyncHandler(reactor, nil, slog.Default())
+	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), zap.NewNop())
+	handler := NewStatusSyncHandler(reactor, nil, zap.NewNop())
 	serviceID := uuid.New()
 	soul := &domain.AgentSoul{
 		AgentID:        "scout",
@@ -38,8 +39,8 @@ func TestStatusSyncHandlerUsesBahiaEventsToUpdateDeployStatus(t *testing.T) {
 }
 
 func TestStatusSyncHandlerIgnoresUnknownServices(t *testing.T) {
-	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), slog.Default())
-	handler := NewStatusSyncHandler(reactor, nil, slog.Default())
+	reactor := NewReactor(Config{}, fakeGenerator{}, newFakeSigner(t), zap.NewNop())
+	handler := NewStatusSyncHandler(reactor, nil, zap.NewNop())
 	soul := &domain.AgentSoul{AgentID: "scout", DeployStatus: "pending"}
 
 	handler.HandleEvent(t.Context(), events.Event{Type: events.EventDeploymentRunCompleted, EntityID: uuid.NewString(), Data: map[string]string{"status": string(domain.RunStatusFailed)}})

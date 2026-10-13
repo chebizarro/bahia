@@ -5,10 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	casqdrant "git.sharegap.net/cascadia/cascadia-go/qdrant"
 )
@@ -22,7 +23,7 @@ var ErrMissingAuth = errors.New("qdrant auth not configured")
 // Client communicates with Qdrant REST API through cascadia-go/qdrant.
 type Client struct {
 	shared *casqdrant.Client
-	logger *slog.Logger
+	logger *zap.Logger
 }
 
 // Config holds Qdrant client configuration.
@@ -43,7 +44,7 @@ func DefaultCollectionConfig() CollectionConfig {
 }
 
 // NewClient creates a new Qdrant client.
-func NewClient(config Config, logger *slog.Logger) *Client {
+func NewClient(config Config, logger *zap.Logger) *Client {
 	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
 	config.APIKey = strings.TrimSpace(config.APIKey)
 	config.AuthHeaderName = strings.TrimSpace(config.AuthHeaderName)
@@ -54,7 +55,7 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 		config.Timeout = 30 * time.Second
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	httpClient := &http.Client{Timeout: config.Timeout}
 	return &Client{
@@ -66,7 +67,7 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 			HTTPClient:                    httpClient,
 			AllowUnauthenticatedLocalhost: config.AllowUnauthenticatedLocal,
 		}),
-		logger: logger.With("component", "qdrant"),
+		logger: logger.With(zap.String("component", "qdrant")),
 	}
 }
 
@@ -87,11 +88,13 @@ func (c *Client) CreateCollection(ctx context.Context, name string, config Colle
 	if err := c.requireConfigured(); err != nil {
 		return err
 	}
-	c.logger.Info("creating Qdrant collection", "name", name, "vector_size", config.VectorSize, "distance", config.Distance)
+	c.logger.Info("creating Qdrant collection", zap.String("name", name), zap.Int("vector_size", config.VectorSize), zap.String("distance", config.Distance))
+
 	if err := c.shared.EnsureCollection(ctx, name, config); err != nil {
 		return err
 	}
-	c.logger.Info("Qdrant collection ready", "name", name)
+	c.logger.Info("Qdrant collection ready", zap.String("name", name))
+
 	return nil
 }
 
@@ -108,7 +111,8 @@ func (c *Client) DeleteCollection(ctx context.Context, name string) error {
 	if err := c.requireConfigured(); err != nil {
 		return err
 	}
-	c.logger.Info("deleting Qdrant collection", "name", name)
+	c.logger.Info("deleting Qdrant collection", zap.String("name", name))
+
 	return c.shared.DeleteCollection(ctx, name)
 }
 

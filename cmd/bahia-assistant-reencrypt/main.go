@@ -74,10 +74,16 @@ type deps struct {
 }
 
 func defaultDeps() deps {
+	logConfig := zap.NewDevelopmentConfig()
+	logConfig.Level.SetLevel(zap.InfoLevel)
+	logger, err := logConfig.Build()
+	if err != nil {
+		logger = zap.NewNop()
+	}
 	return deps{
 		loadConfig: config.Load,
 		openSigner: func(ctx context.Context, cfg *config.Config, admission *nostrout.Admission) (nostr.Keyer, error) {
-			return servicesigner.Open(ctx, cfg.Nostr, servicesigner.Options{Admission: admission})
+			return servicesigner.Open(ctx, cfg.Nostr, servicesigner.Options{Admission: admission, Logger: logger})
 		},
 		resolveKeys: func(ctx context.Context, cfg *config.Config, servicePubkey string, admission *nostrout.Admission) (*secretstore.Keyring, func(), error) {
 			return app.ResolveSystemKeys(ctx, cfg, servicePubkey, admission, zap.NewNop())

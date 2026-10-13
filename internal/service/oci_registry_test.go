@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,7 +97,7 @@ func newTestOCIService(t *testing.T, repo *mockOCIRegistryRepo, serverURL string
 		config.OCIServerConfig{SpoolDir: spool, UploadExpiry: time.Hour},
 		repo,
 		&mockUploadSessionRepo{},
-		blossom.NewClient(blossom.Config{Servers: []string{serverURL}}, slog.Default()),
+		blossom.NewClient(blossom.Config{Servers: []string{serverURL}}, zap.NewNop()),
 		zap.NewNop(),
 	)
 	if err != nil {
@@ -270,7 +270,7 @@ func TestNewOCIRegistryService_CreatesSpoolDir(t *testing.T) {
 		config.OCIServerConfig{SpoolDir: spool, UploadExpiry: time.Hour},
 		repo,
 		&mockUploadSessionRepo{},
-		blossom.NewClient(blossom.Config{Servers: []string{"http://example.invalid"}}, slog.Default()),
+		blossom.NewClient(blossom.Config{Servers: []string{"http://example.invalid"}}, zap.NewNop()),
 		zap.NewNop(),
 	)
 	if err != nil {

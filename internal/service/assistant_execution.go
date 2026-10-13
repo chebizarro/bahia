@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -113,7 +114,7 @@ type AssistantExecutionEngineConfig struct {
 	// belongs to the iterative proposer, which owns model history.
 	MaxWorkItems               int
 	MaxConsecutiveToolFailures int
-	Logger                     *slog.Logger
+	Logger                     *zap.Logger
 }
 
 // assistantCheckpointFault fences a session after a checkpoint commit failed.
@@ -232,7 +233,7 @@ func (f *assistantHealFlight) end() (again bool) {
 // boundary shared with cancellation.
 type AssistantExecutionEngine struct {
 	cfg      AssistantExecutionEngineConfig
-	logger   *slog.Logger
+	logger   *zap.Logger
 	mu       sync.Mutex
 	sessions map[string]*assistantEngineSession
 	wg       sync.WaitGroup
@@ -263,9 +264,11 @@ func NewAssistantExecutionEngine(cfg AssistantExecutionEngineConfig) *AssistantE
 	}
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
-	return &AssistantExecutionEngine{cfg: cfg, logger: logger.With("component", "assistant_execution"), sessions: make(map[string]*assistantEngineSession)}
+	return &AssistantExecutionEngine{cfg: cfg, logger: logger.With(zap.String("component", "assistant_execution")),
+
+		sessions: make(map[string]*assistantEngineSession)}
 }
 
 // Wait blocks until every execution and observation goroutine has exited. Call
@@ -482,7 +485,8 @@ func (e *AssistantExecutionEngine) startProposalLocked(s *assistantEngineSession
 			return
 		}
 		if s.fault != nil || s.execution.RunID != x.RunID || s.execution.Revision != token || s.execution.Cancellation != nil {
-			e.logger.Info("assistant late proposal discarded", "session_id", x.SessionID, "run_id", x.RunID)
+			e.logger.Info("assistant late proposal discarded", zap.String("session_id", x.SessionID), zap.String("run_id", x.RunID))
+
 			return
 		}
 		next, _ := e.applyProposal(s.execution, proposal, proposeErr)
@@ -526,14 +530,16 @@ func (e *AssistantExecutionEngine) applyProposal(current domain.AssistantExecuti
 	}
 	block := func(reason string) (domain.AssistantExecution, string) {
 		next.Phase = domain.AssistantExecutionBlocked
-		e.logger.Warn("assistant proposal blocked", "session_id", next.SessionID, "run_id", next.RunID, "reason", reason)
+		e.logger.Warn("assistant proposal blocked", zap.String("session_id", next.SessionID), zap.String("run_id", next.RunID), zap.String("reason", reason))
+
 		return next, "proposal_blocked: " + reason
 	}
 	if proposeErr != nil {
 		// The proposer (model) failed. Nothing was dispatched, so the run
 		// ends failed rather than blocking the session.
 		next.Phase = domain.AssistantExecutionFailed
-		e.logger.Warn("assistant proposal failed", "session_id", next.SessionID, "run_id", next.RunID, "error", proposeErr)
+		e.logger.Warn("assistant proposal failed", zap.String("session_id", next.SessionID), zap.String("run_id", next.RunID), zap.Error(proposeErr))
+
 		return next, "proposal_failed: " + proposeErr.Error()
 	}
 	switch proposal.Kind {
@@ -1088,7 +1094,8 @@ func (e *AssistantExecutionEngine) abandon(ctx context.Context, req AssistantTur
 	if err = e.commitLocked(s, next); err != nil {
 		return AssistantTurnResult{}, err
 	}
-	e.logger.Warn("assistant uncertain work abandoned by operator attestation", "session_id", next.SessionID, "run_id", next.RunID, "work_id", q.WorkID, "tool", w.ToolName, "operator", req.OperatorPubkey, "request_event_id", req.RequestEventID, "attestation", q.Attestation, "phase", next.Phase)
+	e.logger.Warn("assistant uncertain work abandoned by operator attestation", zap.String("session_id", next.SessionID), zap.String("run_id", next.RunID), zap.String("work_id", q.WorkID), zap.String("tool", w.ToolName), zap.String("operator", req.OperatorPubkey), zap.String("request_event_id", req.RequestEventID), zap.String("attestation", q.Attestation), zap.Any("phase", next.Phase))
+
 	e.kickLocked(s)
 	return e.resultLocked(s, "abandoned"), nil
 }
@@ -1220,10 +1227,12 @@ func (e *AssistantExecutionEngine) healFencedAttempt(ctx context.Context, s *ass
 		return false
 	}
 	if err := e.Recover(ctx, AssistantExecutionReference{SessionID: s.id, RunID: runID}); err != nil {
-		e.logger.Info("assistant fenced session not healed after relay reconnect", "session_id", s.id, "run_id", runID, "error", err)
+		e.logger.Info("assistant fenced session not healed after relay reconnect", zap.String("session_id", s.id), zap.String("run_id", runID), zap.Error(err))
+
 		return false
 	}
-	e.logger.Info("assistant fenced session healed after relay reconnect", "session_id", s.id, "run_id", runID)
+	e.logger.Info("assistant fenced session healed after relay reconnect", zap.String("session_id", s.id), zap.String("run_id", runID))
+
 	return true
 }
 
@@ -1358,7 +1367,8 @@ func (e *AssistantExecutionEngine) dispatchReady(s *assistantEngineSession, snap
 		w.Observation = e.deniedObservation(*w, denial.Reason, "")
 		w.State = domain.AssistantWorkObserved
 	default:
-		e.logger.Error("assistant work preparation failed; run parked", "session_id", next.SessionID, "run_id", next.RunID, "work_id", w.WorkID, "error", prepErr)
+		e.logger.Error("assistant work preparation failed; run parked", zap.String("session_id", next.SessionID), zap.String("run_id", next.RunID), zap.String("work_id", w.WorkID), zap.Error(prepErr))
+
 		next.Phase = domain.AssistantExecutionBlocked
 		_ = e.commitLocked(s, next)
 		s.mu.Unlock()
@@ -1375,7 +1385,8 @@ func (e *AssistantExecutionEngine) dispatchReady(s *assistantEngineSession, snap
 func (e *AssistantExecutionEngine) invoke(s *assistantEngineSession, runID, workID string, prepared AssistantPreparedWork) bool {
 	obs, receipt, dispatchErr := e.cfg.Runtime.DispatchPreparedWork(e.cfg.Lifecycle, prepared)
 	if dispatchErr != nil {
-		e.logger.Warn("assistant dispatch outcome ambiguous; work becomes uncertain", "session_id", s.id, "run_id", runID, "work_id", workID, "error", dispatchErr)
+		e.logger.Warn("assistant dispatch outcome ambiguous; work becomes uncertain", zap.String("session_id", s.id), zap.String("run_id", runID), zap.String("work_id", workID), zap.Error(dispatchErr))
+
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1445,7 +1456,8 @@ func (e *AssistantExecutionEngine) consume(s *assistantEngineSession, runID, wor
 			if e.cfg.Lifecycle.Err() != nil {
 				return false
 			}
-			e.logger.Error("assistant observation transcript append failed; run parked", "session_id", snapshot.SessionID, "run_id", runID, "work_id", workID, "error", appendErr)
+			e.logger.Error("assistant observation transcript append failed; run parked", zap.String("session_id", snapshot.SessionID), zap.String("run_id", runID), zap.String("work_id", workID), zap.Error(appendErr))
+
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			if s.execution.RunID == runID && s.execution.Revision == snapshot.Revision && s.execution.Phase != domain.AssistantExecutionBlocked {
@@ -1511,7 +1523,8 @@ func (e *AssistantExecutionEngine) continueIterative(s *assistantEngineSession) 
 		reason = "iterative proposer not configured"
 	}
 	if reason != "" {
-		e.logger.Warn("assistant iterative run blocked", "session_id", x.SessionID, "run_id", x.RunID, "reason", reason)
+		e.logger.Warn("assistant iterative run blocked", zap.String("session_id", x.SessionID), zap.String("run_id", x.RunID), zap.String("reason", reason))
+
 		next.Phase = domain.AssistantExecutionBlocked
 		_ = e.commitLocked(s, next)
 		s.mu.Unlock()
@@ -1646,7 +1659,8 @@ func (e *AssistantExecutionEngine) setObservationBlockedLocked(s *assistantEngin
 		return
 	}
 	s.observationBlocked[workID] = reason
-	e.logger.Warn("assistant observation blocked", "session_id", s.id, "run_id", runID, "work_id", workID, "reason", reason)
+	e.logger.Warn("assistant observation blocked", zap.String("session_id", s.id), zap.String("run_id", runID), zap.String("work_id", workID), zap.String("reason", reason))
+
 	e.refreshProjectionLocked(s)
 }
 
@@ -1669,7 +1683,8 @@ func (e *AssistantExecutionEngine) commitLocked(s *assistantEngineSession, next 
 	} else {
 		next.Revision = s.execution.Revision + 1
 		if err := validateAssistantExecutionTransition(s.execution, next); err != nil {
-			e.logger.Error("assistant execution transition rejected", "session_id", next.SessionID, "run_id", next.RunID, "error", err)
+			e.logger.Error("assistant execution transition rejected", zap.String("session_id", next.SessionID), zap.String("run_id", next.RunID), zap.Error(err))
+
 			return err
 		}
 	}
@@ -1679,7 +1694,8 @@ func (e *AssistantExecutionEngine) commitLocked(s *assistantEngineSession, next 
 	}
 	id, err := e.cfg.Store.Append(e.cfg.Lifecycle, snapshot, previous)
 	if err != nil {
-		e.logger.Error("assistant checkpoint not confirmed", "session_id", next.SessionID, "run_id", next.RunID, "revision", next.Revision, "error", err)
+		e.logger.Error("assistant checkpoint not confirmed", zap.String("session_id", next.SessionID), zap.String("run_id", next.RunID), zap.Uint64("revision", next.Revision), zap.Error(err))
+
 		if newRun && len(snapshot.Work) == 0 {
 			// A new run's root has no effects; it is simply not adopted.
 			return fmt.Errorf("%w: %v", ErrAssistantCheckpointUnconfirmed, err)
@@ -1902,7 +1918,8 @@ func (e *AssistantExecutionEngine) publishProjectionLocked(s *assistantEngineSes
 	p := s.projection
 	content, err := json.Marshal(p)
 	if err != nil {
-		e.logger.Error("assistant projection encode failed", "session_id", p.SessionID, "error", err)
+		e.logger.Error("assistant projection encode failed", zap.String("session_id", p.SessionID), zap.Error(err))
+
 		return
 	}
 	created := nostr.Timestamp(e.cfg.Now().UTC().Unix())
@@ -1912,12 +1929,14 @@ func (e *AssistantExecutionEngine) publishProjectionLocked(s *assistantEngineSes
 	s.projectionAt = created
 	ev := nostr.Event{Kind: nostr.Kind(domain.KindAssistantSessionState), CreatedAt: created, Tags: assistantProjectionTags(p), Content: string(content)}
 	if err = signGoNostrEvent(e.cfg.Lifecycle, e.cfg.Signer, &ev); err != nil {
-		e.logger.Error("assistant projection sign failed", "session_id", p.SessionID, "error", err)
+		e.logger.Error("assistant projection sign failed", zap.String("session_id", p.SessionID), zap.Error(err))
+
 		return
 	}
 	if e.cfg.LocalStore != nil {
 		if _, err := e.cfg.LocalStore.SaveEvent(ev); err != nil {
-			e.logger.Error("assistant projection local retention failed", "session_id", p.SessionID, "event_id", ev.ID.Hex(), "error", err)
+			e.logger.Error("assistant projection local retention failed", zap.String("session_id", p.SessionID), zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+
 			return
 		}
 		retained := false
@@ -1925,7 +1944,8 @@ func (e *AssistantExecutionEngine) publishProjectionLocked(s *assistantEngineSes
 			retained = true
 		}
 		if !retained {
-			e.logger.Error("assistant projection was not retained locally", "session_id", p.SessionID, "event_id", ev.ID.Hex())
+			e.logger.Error("assistant projection was not retained locally", zap.String("session_id", p.SessionID), zap.String("event_id", ev.ID.Hex()))
+
 			return
 		}
 	}
@@ -1934,7 +1954,8 @@ func (e *AssistantExecutionEngine) publishProjectionLocked(s *assistantEngineSes
 		err = errors.New("no relay accepted projection")
 	}
 	if err != nil {
-		e.logger.Warn("assistant projection publication failed; checkpoint remains authoritative", "session_id", p.SessionID, "error", err)
+		e.logger.Warn("assistant projection publication failed; checkpoint remains authoritative", zap.String("session_id", p.SessionID), zap.Error(err))
+
 	}
 }
 
@@ -1954,7 +1975,8 @@ func (e *AssistantExecutionEngine) ensureProjectionClock(ctx context.Context, s 
 	}
 	latest, err := e.latestProjectionAt(ctx, s.id)
 	if err != nil {
-		e.logger.Warn("assistant projection clock lookup failed; will retry", "session_id", s.id, "error", err)
+		e.logger.Warn("assistant projection clock lookup failed; will retry", zap.String("session_id", s.id), zap.Error(err))
+
 		return
 	}
 	s.mu.Lock()

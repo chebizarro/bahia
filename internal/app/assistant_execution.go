@@ -3,7 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
-	"log/slog"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -18,6 +19,7 @@ import (
 // executor. Publisher and Subscriber are interfaces so the wiring can be
 // exercised against a deterministic relay.
 type assistantExecutionDeps struct {
+	Logger          *zap.Logger
 	Config          *config.Config
 	MCPServer       *mcp.Server
 	ContextBuilder  *service.AssistantContextBuilder
@@ -75,6 +77,10 @@ const assistantBatchUnavailableReason = "assistant.llm_model (batch proposer mod
 
 func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWiring, error) {
 	cfg := deps.Config
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	if cfg == nil || deps.MCPServer == nil || deps.Publisher == nil || deps.Subscriber == nil || deps.Signer == nil || deps.Transcript == nil || deps.KeyProvider == nil {
 		return nil, fmt.Errorf("assistant executor wiring requires config, MCP server, relay publisher/subscriber, signer, transcript store and key provider")
 	}
@@ -150,7 +156,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 			Status:           status,
 			AllowedToolNames: assistantToolNames(deps.MCPServer),
 			StreamingEnabled: cfg.Assistant.LLMStreaming,
-			Logger:           slog.Default(),
+			Logger:           logger,
 		})
 		batchProposer = batch
 	}
@@ -166,7 +172,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Subagents:      subagents,
 		Skills:         skills,
 		Hooks:          hooks,
-		Logger:         slog.Default(),
+		Logger:         logger,
 	})
 	if err != nil {
 		return nil, err
@@ -189,7 +195,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Identity:                   deps.Identity,
 		Lifecycle:                  lifecycle.ctx,
 		MaxConsecutiveToolFailures: cfg.Assistant.Agentic.MaxConsecutiveToolFailures,
-		Logger:                     slog.Default(),
+		Logger:                     logger,
 	})
 	lifecycle.engine = engine
 	orchestrator := service.NewAssistantOrchestrator(service.AssistantOrchestratorConfig{
@@ -201,9 +207,9 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Identity:        deps.Identity,
 		InitialSessions: deps.InitialSessions,
 		LocalStore:      deps.LocalStore,
-		Logger:          slog.Default(),
+		Logger:          logger,
 	})
-	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{PageLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber, LocalStore: deps.LocalStore, Readiness: deps.Readiness})
+	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{PageLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: logger, Engine: engine, Store: store, Subscriber: deps.Subscriber, LocalStore: deps.LocalStore, Readiness: deps.Readiness})
 	// attach the startup topic migration so recovery re-tags
 	// old-topic assistant session events before querying the relay with #t.
 	if deps.LocalStore != nil && deps.Signer != nil && deps.Publisher != nil {

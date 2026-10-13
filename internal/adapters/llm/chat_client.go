@@ -8,10 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -66,11 +67,11 @@ type ChatClient struct {
 	maxTokens   int
 	temperature float64
 	httpClient  *http.Client
-	logger      *slog.Logger
+	logger      *zap.Logger
 }
 
 // NewChatClient creates a new planning chat client.
-func NewChatClient(config ChatClientConfig, logger *slog.Logger) *ChatClient {
+func NewChatClient(config ChatClientConfig, logger *zap.Logger) *ChatClient {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.openai.com"
 	}
@@ -81,7 +82,7 @@ func NewChatClient(config ChatClientConfig, logger *slog.Logger) *ChatClient {
 		config.Timeout = 120 * time.Second
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &ChatClient{
 		baseURL:     strings.TrimRight(config.BaseURL, "/"),
@@ -90,7 +91,7 @@ func NewChatClient(config ChatClientConfig, logger *slog.Logger) *ChatClient {
 		maxTokens:   config.MaxTokens,
 		temperature: config.Temperature,
 		httpClient:  &http.Client{Timeout: config.Timeout},
-		logger:      logger.With("component", "llm_chat_client"),
+		logger:      logger.With(zap.String("component", "llm_chat_client")),
 	}
 }
 
@@ -128,7 +129,8 @@ func (c *ChatClient) PlanFromPromptStreaming(ctx context.Context, systemPrompt, 
 func (c *ChatClient) planFromContent(content, refusal string) (*domain.AssistantPlan, error) {
 	if strings.TrimSpace(content) == "" {
 		if refusal = strings.TrimSpace(refusal); refusal != "" {
-			c.logger.Warn("planning model refused the request", "refusal", refusal)
+			c.logger.Warn("planning model refused the request", zap.String("refusal", refusal))
+
 			return &domain.AssistantPlan{
 				Summary:            "The planning model declined to produce a plan.",
 				NeedsClarification: true,
@@ -141,7 +143,8 @@ func (c *ChatClient) planFromContent(content, refusal string) (*domain.Assistant
 	}
 	plan, err := parseAssistantPlan(content)
 	if err != nil {
-		c.logger.Warn("invalid assistant plan JSON", "error", err)
+		c.logger.Warn("invalid assistant plan JSON", zap.Error(err))
+
 		return &domain.AssistantPlan{
 			Summary:            "The planning model returned invalid JSON.",
 			NeedsClarification: true,

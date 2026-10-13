@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -117,7 +118,7 @@ type AssistantOrchestratorConfig struct {
 	// turns; it never authorizes an unknown session as new.
 	InitialSessions []domain.AssistantSession
 	LocalStore      SupervisionEventStore
-	Logger          *slog.Logger
+	Logger          *zap.Logger
 }
 
 // AssistantOrchestrator is request routing for the operator assistant: it
@@ -132,7 +133,7 @@ type AssistantOrchestrator struct {
 	signer          nostr.Signer
 	identity        AssistantIdentity
 	status          *AssistantStatusEventPublisher
-	logger          *slog.Logger
+	logger          *zap.Logger
 
 	mu     sync.Mutex
 	legacy map[string]domain.AssistantSession
@@ -142,7 +143,7 @@ type AssistantOrchestrator struct {
 func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrchestrator {
 	logger := config.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	identity := config.Identity
 	if strings.TrimSpace(identity.AgentID) == "" {
@@ -161,8 +162,9 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 		signer:          config.Signer,
 		identity:        identity,
 		status:          NewAssistantStatusEventPublisher(config.Publisher, config.Signer, identity),
-		logger:          logger.With("component", "assistant_orchestrator"),
-		legacy:          make(map[string]domain.AssistantSession),
+		logger:          logger.With(zap.String("component", "assistant_orchestrator")),
+
+		legacy: make(map[string]domain.AssistantSession),
 	}
 	for _, session := range config.InitialSessions {
 		copySession := session
@@ -203,7 +205,8 @@ func (o *AssistantOrchestrator) HandlePromptRequest(ctx context.Context, source 
 		}
 		return o.refusal(event, req.SessionID, code, msg, nil), nil
 	}
-	o.logger.Info("assistant prompt received", "session_id", req.SessionID, "turn_id", req.TurnID, "request_event_id", source.RequestID, "workflow", string(req.Workflow))
+	o.logger.Info("assistant prompt received", zap.String("session_id", req.SessionID), zap.String("turn_id", req.TurnID), zap.String("request_event_id", source.RequestID), zap.String("workflow", string(req.Workflow)))
+
 	result, err := o.engine.StartTurn(ctx, AssistantTurnStartRequest{Prompt: req, OperatorPubkey: source.OperatorPubkey, RequestEventID: source.RequestID, ExistingSession: existing, DefaultWorkflow: o.defaultWorkflow})
 	return o.engineResult(event, req.SessionID, result, err), nil
 }
@@ -532,7 +535,8 @@ func (o *AssistantOrchestrator) engineResult(event *nostr.Event, sessionID strin
 		if result.Session.SessionID != "" {
 			extra = map[string]any{"run_id": result.Session.CurrentRunID, "phase": string(result.Session.Phase), "session": result.Session}
 		}
-		o.logger.Info("assistant request refused", "session_id", sessionID, "code", code, "error", err)
+		o.logger.Info("assistant request refused", zap.String("session_id", sessionID), zap.String("code", code), zap.Error(err))
+
 		return o.refusal(event, sessionID, code, message, extra)
 	}
 	p := result.Session

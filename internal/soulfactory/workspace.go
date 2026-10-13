@@ -6,12 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -27,7 +28,7 @@ type WorkspaceManager struct {
 	agentMemoryMCPURLRef     string
 	ngitRelays               []string
 	gatewayPort              int
-	logger                   *slog.Logger
+	logger                   *zap.Logger
 }
 
 // WorkspaceConfig holds workspace manager configuration.
@@ -44,9 +45,9 @@ type WorkspaceConfig struct {
 }
 
 // NewWorkspaceManager creates a new workspace manager.
-func NewWorkspaceManager(config WorkspaceConfig, logger *slog.Logger) *WorkspaceManager {
+func NewWorkspaceManager(config WorkspaceConfig, logger *zap.Logger) *WorkspaceManager {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	return &WorkspaceManager{
@@ -59,7 +60,7 @@ func NewWorkspaceManager(config WorkspaceConfig, logger *slog.Logger) *Workspace
 		agentMemoryMCPURLRef:     strings.TrimSpace(config.AgentMemoryMCPURLRef),
 		ngitRelays:               normalizeSoulRelays(config.NgitRelays),
 		gatewayPort:              config.GatewayPort,
-		logger:                   logger.With("component", "workspace"),
+		logger:                   logger.With(zap.String("component", "workspace")),
 	}
 }
 
@@ -68,10 +69,7 @@ func (m *WorkspaceManager) InitWorkspace(ctx context.Context, soul *domain.Agent
 	if m.giteaURL == "" {
 		return "", ErrWorkspaceNotConfigured
 	}
-	m.logger.Info("initializing workspace",
-		"agent_id", soul.AgentID,
-		"name", soul.Name,
-	)
+	m.logger.Info("initializing workspace", zap.String("agent_id", soul.AgentID), zap.String("name", soul.Name))
 
 	// Create temp directory for workspace
 	tmpDir, err := os.MkdirTemp("", "soul-workspace-*")
@@ -105,11 +103,7 @@ func (m *WorkspaceManager) InitWorkspace(ctx context.Context, soul *domain.Agent
 	if err != nil {
 		return "", fmt.Errorf("ngit push: %w", err)
 	}
-
-	m.logger.Info("workspace initialized",
-		"agent_id", soul.AgentID,
-		"repo_url", repoURL,
-	)
+	m.logger.Info("workspace initialized", zap.String("agent_id", soul.AgentID), zap.String("repo_url", repoURL))
 
 	return repoURL, nil
 }

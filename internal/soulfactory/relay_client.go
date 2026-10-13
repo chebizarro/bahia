@@ -3,10 +3,11 @@ package soulfactory
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -66,7 +67,7 @@ func WithRelaySigner(signer relayAuthSigner) RelayClientOption {
 }
 
 // WithRelayLogger sets the logger for the client and its pool.
-func WithRelayLogger(logger *slog.Logger) RelayClientOption {
+func WithRelayLogger(logger *zap.Logger) RelayClientOption {
 	return func(c *RelayClient) {
 		if logger != nil {
 			c.logger = logger
@@ -132,7 +133,7 @@ type RelayClient struct {
 	// for some of its relays and does not own (or close) that pool.
 	view               bool
 	signer             relayAuthSigner
-	logger             *slog.Logger
+	logger             *zap.Logger
 	validateEvent      func(*nostr.Event) bool
 	publishQuorum      int
 	resubscribeBackoff func() *nostradapter.Backoff
@@ -147,7 +148,8 @@ func NewRelayClient(relays []string, opts ...RelayClientOption) (*RelayClient, e
 		return nil, fmt.Errorf("at least one SoulFactory relay is required")
 	}
 	c := &RelayClient{
-		logger:        slog.Default().With("component", "soulfactory-relays"),
+		logger: zap.NewNop().With(zap.String("component", "soulfactory-relays")),
+
 		validateEvent: validSignedEvent,
 		publishQuorum: RelayPublishQuorumDefault,
 	}
@@ -166,7 +168,7 @@ func NewRelayClient(relays []string, opts ...RelayClientOption) (*RelayClient, e
 	if c.resubscribeBackoff != nil {
 		poolOpts = append(poolOpts, nostradapter.WithResubscribeBackoff(c.resubscribeBackoff))
 	}
-	c.pool = nostradapter.NewRelayPool(relays, nostradapter.NewSlogZapLogger(c.logger), poolOpts...)
+	c.pool = nostradapter.NewRelayPool(relays, c.logger, poolOpts...)
 	c.relays = c.pool.URLs()
 	return c, nil
 }
@@ -238,11 +240,11 @@ func (c *RelayClient) holds(relay string) bool {
 	return false
 }
 
-func (c *RelayClient) log() *slog.Logger {
+func (c *RelayClient) log() *zap.Logger {
 	if c != nil && c.logger != nil {
 		return c.logger
 	}
-	return slog.Default()
+	return zap.NewNop()
 }
 
 // Publish sends ev to every relay and waits for each relay's OK. It returns
@@ -268,8 +270,8 @@ func (c *RelayClient) PublishWithResults(ctx context.Context, ev nostr.Event) ([
 	failures := relayPublishFailures(results)
 	if accepted >= required {
 		if len(failures) > 0 {
-			c.log().Warn("event accepted by publish quorum; some relays did not accept",
-				"event_id", ev.ID.Hex(), "accepted", accepted, "relays", len(c.relays), "failures", strings.Join(failures, "; "))
+			c.log().Warn("event accepted by publish quorum; some relays did not accept", zap.String("event_id", ev.ID.Hex()), zap.Int("accepted", accepted), zap.Int("relays", len(c.relays)), zap.String("failures", strings.Join(failures, "; ")))
+
 		}
 		return results, nil
 	}
@@ -461,7 +463,8 @@ func (c *RelayClient) watchProtocolFrames(merged *nostradapter.MergedSubscriptio
 				continue
 			}
 			c.pool.RecordRelayClosed(info.RelayURL, info.Reason)
-			c.log().Warn("relay closed subscription", "relay", info.RelayURL, "reason", info.Reason, "terminal", info.Terminal)
+			c.log().Warn("relay closed subscription", zap.String("relay", info.RelayURL), zap.String("reason", info.Reason), zap.Bool("terminal", info.Terminal))
+
 		}
 	}
 }

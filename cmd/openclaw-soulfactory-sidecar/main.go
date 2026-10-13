@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -100,8 +101,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "open controller policy: %v\n", err)
 		os.Exit(1)
 	}
+	logConfig := zap.NewDevelopmentConfig()
+	logConfig.Level.SetLevel(zap.InfoLevel)
+	logger, err := logConfig.Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configure logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
 	if seeded {
-		slog.Info("seeded persisted SoulFactory controller policy from environment configuration")
+		logger.Info("seeded persisted SoulFactory controller policy from environment configuration")
 	}
 	store, err := soulfactory.NewFileOpenClawIdempotencyStore(*storePath)
 	if err != nil {
@@ -127,7 +136,7 @@ func main() {
 			MethodsList: strutil.SplitCSV(*methods),
 		},
 		IdempotencyStore: store,
-		Logger:           slog.Default(),
+		Logger:           logger,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configure sidecar: %v\n", err)
@@ -147,11 +156,13 @@ func main() {
 				return
 			case <-hup:
 				if err := sidecar.ReloadControllerPolicy(); err != nil {
-					slog.Error("reload SoulFactory controller policy", "error", err)
+					logger.Error("reload SoulFactory controller policy", zap.Error(err))
+
 					continue
 				}
 				if err := sidecar.PublishCapability(ctx); err != nil {
-					slog.Error("publish capability after controller policy reload", "error", err)
+					logger.Error("publish capability after controller policy reload", zap.Error(err))
+
 				}
 			}
 		}

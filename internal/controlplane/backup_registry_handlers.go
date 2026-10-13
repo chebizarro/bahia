@@ -282,7 +282,11 @@ func (r *Reactor) handleBackupRepositoryProbeRequest(ctx context.Context, event 
 	r.publishBackupRegistryMutationResult(ctx, event, KindBackupRepositoryProbeResult, "backup_repository_probe", "queued", "backup repository probe queued", map[string]any{"repository_id": repo.ID.String(), "name": repo.Name, "backend": string(repo.Backend)}, nostr.Tags{{"repository", repo.Name}, {"repository_id", repo.ID.String()}, {"backend", string(repo.Backend)}})
 	go func(repositoryID uuid.UUID, requestEventID string) {
 		if err := r.backupRepositoryProbeExecutor.ProcessBackupRepositoryProbe(ctx, repositoryID, requestEventID); err != nil {
-			r.logger.Warn("backup repository probe executor failed", "repository_id", repositoryID.String(), "error", err)
+			r.logger.Warn("backup repository probe executor failed", zap.String("repository_id",
+
+				repositoryID.
+					String()), zap.Error(err),
+			)
 		}
 	}(repo.ID, event.ID.Hex())
 }
@@ -350,7 +354,11 @@ func (r *Reactor) handleBackupVerificationRequest(ctx context.Context, event *no
 	r.publishBackupRegistryMutationResult(ctx, event, KindBackupVerificationResult, "backup_verification", "queued", "backup verification queued", map[string]any{"verification_id": record.ID.String(), "backup_run_id": run.ID.String(), "mode": string(record.Mode), "verification_status": string(record.Status)}, nostr.Tags{{"run", run.ID.String()}, {"backup_run_id", run.ID.String()}, {"verification_id", record.ID.String()}, {"verification_status", string(record.Status)}})
 	go func(verificationID uuid.UUID) {
 		if err := r.backupVerificationExecutor.ProcessBackupVerification(ctx, verificationID); err != nil {
-			r.logger.Warn("backup verification executor failed", "verification_id", verificationID.String(), "error", err)
+			r.logger.Warn("backup verification executor failed", zap.String("verification_id",
+
+				verificationID.
+					String()), zap.Error(err),
+			)
 		}
 	}(record.ID)
 }

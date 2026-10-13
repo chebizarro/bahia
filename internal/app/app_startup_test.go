@@ -3,7 +3,7 @@ package app
 import (
 	"context"
 	"errors"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -151,7 +151,7 @@ func TestNewDoesNotRegisterSoulFactoryWhenDisabled(t *testing.T) {
 		t.Fatalf("OpenClaw adapter factory called while SoulFactory disabled: %+v", cfg)
 	})
 	previousSignetFactory := newSoulFactorySignetClient
-	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *zap.Logger) (soulFactorySignerClient, error) {
 		signetFactoryCalls++
 		return previousSignetFactory(cfg, logger)
 	}
@@ -218,7 +218,7 @@ func TestNewWiresBahiaIntegrationIntoSoulFactory(t *testing.T) {
 	defer restoreSoulFactoryHooks()
 	previousFactory := newSoulFactoryBahiaIntegration
 	var wiredRegistry *service.RegistryService
-	newSoulFactoryBahiaIntegration = func(registry *service.RegistryService, cfg soulfactory.BahiaIntegrationConfig, logger *slog.Logger) (*soulfactory.BahiaIntegration, error) {
+	newSoulFactoryBahiaIntegration = func(registry *service.RegistryService, cfg soulfactory.BahiaIntegrationConfig, logger *zap.Logger) (*soulfactory.BahiaIntegration, error) {
 		wiredRegistry = registry
 		return previousFactory(registry, cfg, logger)
 	}
@@ -242,7 +242,7 @@ func TestNewFailsClosedWhenBahiaIntegrationCannotStart(t *testing.T) {
 	restoreSoulFactoryHooks := stubSoulFactoryHooks(t, signer, nil)
 	defer restoreSoulFactoryHooks()
 	previousFactory := newSoulFactoryBahiaIntegration
-	newSoulFactoryBahiaIntegration = func(*service.RegistryService, soulfactory.BahiaIntegrationConfig, *slog.Logger) (*soulfactory.BahiaIntegration, error) {
+	newSoulFactoryBahiaIntegration = func(*service.RegistryService, soulfactory.BahiaIntegrationConfig, *zap.Logger) (*soulfactory.BahiaIntegration, error) {
 		return nil, errors.New("Bahia registry unavailable")
 	}
 	defer func() { newSoulFactoryBahiaIntegration = previousFactory }()
@@ -315,7 +315,7 @@ func TestNewRejectsInvalidSoulFactoryConfig(t *testing.T) {
 
 	factoryCalled := false
 	previousSignetFactory := newSoulFactorySignetClient
-	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *zap.Logger) (soulFactorySignerClient, error) {
 		factoryCalled = true
 		return previousSignetFactory(cfg, logger)
 	}
@@ -454,7 +454,7 @@ func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAd
 	previousSignetFactory := newSoulFactorySignetClient
 	previousAdapterFactory := newSoulFactoryRuntimeAdapter
 	previousGeneratorFactory := newSoulFactorySoulGenerator
-	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *zap.Logger) (soulFactorySignerClient, error) {
 		if cfg.AllowMock {
 			t.Fatal("SoulFactory app wiring must not enable Signet mock mode")
 		}
@@ -466,7 +466,7 @@ func stubSoulFactoryHooks(t *testing.T, signer *fakeSoulFactorySigner, captureAd
 		}
 		return fakeSoulFactoryRuntimeAdapter{target: cfg.Target}, nil
 	}
-	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *slog.Logger) soulfactory.SoulGenerator {
+	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *zap.Logger) soulfactory.SoulGenerator {
 		return fakeSoulFactoryGenerator{}
 	}
 	return func() {

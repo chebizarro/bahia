@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"fiatjaf.com/nostr"
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -158,8 +159,14 @@ func (r *FleetConfigReconciler) reconcileGated(ctx context.Context, agentID stri
 		return parked
 	}}
 	if r.reactor.soulOperations().do(ctx, agentID, now, r.redriveOperation(agentID)) == soulOperationDeferred {
-		r.reactor.logger.Info("fleet config revision deferred for soul held by another operation; it is re-driven to the latest revision once that finishes",
-			"agent_id", agentID, "fleet_revision", snapshot.EventID)
+		r.reactor.logger.Info("fleet config revision deferred for soul held by another operation; it is re-driven to the latest revision once that finishes", zap.String("agent_id",
+			agentID,
+		), zap.String("fleet_revision",
+
+			snapshot.
+				EventID,
+		),
+		)
 	}
 	return reconcileErr
 }
@@ -168,12 +175,15 @@ func (r *FleetConfigReconciler) reconcileGated(ctx context.Context, agentID stri
 // behind other work on the soul, or after a restart.
 func (r *FleetConfigReconciler) redriveOperation(agentID string) soulOperation {
 	return soulOperation{key: fleetRedriveOperationKey, run: func(ctx context.Context, hold *soulHold) bool {
-		logger := r.reactor.logger.With("agent_id", agentID)
+		logger := r.reactor.logger.With(zap.String("agent_id",
+			agentID,
+		),
+		)
 		latest := r.latestRevision()
 		if latest == nil {
 			var err error
 			if latest, err = r.reactor.getProvisioningFleetConfig(ctx); err != nil {
-				logger.Warn("cannot re-drive soul to the latest fleet revision; the next revision or a restart re-drives it", "error", err)
+				logger.Warn("cannot re-drive soul to the latest fleet revision; the next revision or a restart re-drives it", zap.Error(err))
 				return false
 			}
 		}
@@ -182,7 +192,12 @@ func (r *FleetConfigReconciler) redriveOperation(agentID string) soulOperation {
 		}
 		parked, err := r.reconcileHeld(ctx, hold, agentID, latest)
 		if err != nil {
-			logger.Error("deferred fleet config reconciliation failed", "latest_revision", latest.EventID, "error", err)
+			logger.Error("deferred fleet config reconciliation failed", zap.String("latest_revision",
+
+				latest.
+					EventID,
+			), zap.Error(err),
+			)
 		}
 		return parked
 	}}
@@ -308,13 +323,20 @@ func (r *FleetConfigReconciler) awaitApply(
 	pending *runtimeResultPending,
 	cause error,
 ) (parked bool, _ error) {
-	logger := r.reactor.logger.With("agent_id", soul.AgentID, "fleet_revision", next.EventID)
+	logger := r.reactor.logger.With(zap.String("agent_id",
+		soul.
+			AgentID,
+	), zap.String("fleet_revision",
+
+		next.
+			EventID),
+	)
 	message := fmt.Sprintf("%s: fleet config apply outcome unknown: %v; no rollback without an observed runtime failure", actionStatusAwaitingTerminal, cause)
 	if err := r.publishProgress(ctx, action, next, actionStatusAwaitingTerminal, message, awaitingTerminalTags()...); err != nil {
-		logger.Warn("failed to publish fleet awaiting_terminal progress", "error", err)
+		logger.Warn("failed to publish fleet awaiting_terminal progress", zap.Error(err))
 	}
 	if pending == nil {
-		logger.Warn("fleet config apply outcome unknown and not correlatable; the soul is re-driven by the next revision or restart", "error", cause)
+		logger.Warn("fleet config apply outcome unknown and not correlatable; the soul is re-driven by the next revision or restart", zap.NamedError("error", cause))
 		return false, nil
 	}
 	late, observed := r.reactor.resultWaiters().park(pending, parkedOperation{
@@ -327,7 +349,11 @@ func (r *FleetConfigReconciler) awaitApply(
 		},
 	})
 	if !observed {
-		logger.Info("fleet config apply awaiting runtime terminal result", "request_event", pending.requestID())
+		logger.Info("fleet config apply awaiting runtime terminal result", zap.String("request_event",
+
+			pending.
+				requestID()),
+		)
 		return true, nil
 	}
 	_, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil)
@@ -349,8 +375,14 @@ func (r *FleetConfigReconciler) resumeApply(
 ) {
 	defer r.reactor.soulOperations().release(ctx, hold)
 	if _, err := r.finishApply(ctx, adapter, action, soul, next, previous, changed, late, nil); err != nil {
-		r.reactor.logger.Error("fleet config reconciliation failed after late runtime result",
-			"agent_id", soul.AgentID, "fleet_revision", next.EventID, "error", err)
+		r.reactor.logger.Error("fleet config reconciliation failed after late runtime result", zap.String("agent_id",
+			soul.
+				AgentID,
+		), zap.String("fleet_revision",
+
+			next.
+				EventID), zap.Error(err),
+		)
 	}
 }
 
@@ -381,7 +413,14 @@ func (r *FleetConfigReconciler) rollbackSoul(
 	result, err = r.reactor.resultWaiters().observeLateRollback(soul.AgentID, result, err, func(ctx context.Context, late *RuntimeControlResultEnvelope) {
 		status, message := lateRollbackProgress("rollback fleet config", late)
 		if err := r.publishProgress(ctx, action, failed, actionStatusRollbackResolved, message, nostr.Tag{tagRollbackStatus, status}); err != nil {
-			r.reactor.logger.Warn("failed to publish late fleet rollback progress", "agent_id", soul.AgentID, "fleet_revision", failed.EventID, "error", err)
+			r.reactor.logger.Warn("failed to publish late fleet rollback progress", zap.String("agent_id",
+				soul.
+					AgentID,
+			), zap.String("fleet_revision",
+
+				failed.
+					EventID), zap.Error(err),
+			)
 		}
 	})
 	if err != nil {

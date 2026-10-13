@@ -8,6 +8,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/events"
+	"go.uber.org/zap"
 )
 
 func (r *Reactor) handleContinuityProfileDefinition(ctx context.Context, event *gonostr.Event) {
@@ -16,7 +17,9 @@ func (r *Reactor) handleContinuityProfileDefinition(ctx context.Context, event *
 	}
 	profile, err := nostradapter.DecodeContinuityProfileEvent(event)
 	if err != nil {
-		r.logger.Warn("invalid continuity profile event", "event_id", event.ID, "error", err)
+		r.logger.Warn("invalid continuity profile event", zap.Any("event_id", event.
+			ID), zap.Error(err),
+		)
 		return
 	}
 	r.eventBus.Publish(ctx, events.Event{
@@ -62,7 +65,9 @@ func (r *Reactor) handleHeartbeatObservation(ctx context.Context, event *gonostr
 	}
 	observation, err := nostradapter.DecodeHeartbeatObservationEvent(event)
 	if err != nil {
-		r.logger.Warn("invalid heartbeat observation event", "event_id", event.ID, "error", err)
+		r.logger.Warn("invalid heartbeat observation event", zap.Any("event_id", event.
+			ID), zap.Error(err),
+		)
 		return
 	}
 	r.eventBus.Publish(ctx, events.Event{
@@ -81,7 +86,13 @@ func (r *Reactor) authorizeContinuityDefinition(event *gonostr.Event) bool {
 		return false
 	}
 	if !r.isAuthorized(event.PubKey.Hex()) {
-		r.logger.Warn("unauthorized continuity definition event", "event_id", event.ID, "kind", event.Kind, "requester", event.PubKey)
+		r.logger.Warn("unauthorized continuity definition event", zap.Any("event_id", event.
+			ID), zap.Any("kind", event.
+			Kind), zap.Any("requester",
+			event.
+				PubKey,
+		),
+		)
 		return false
 	}
 	return true

@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -199,7 +200,7 @@ func newAssistantJoinedStack(t *testing.T, relay *assistantTestRelay, signer nos
 	proposal := NewAssistantProposalContext(AssistantProposalContextConfig{Commands: opts.commands})
 	contextBuilder := NewAssistantContextBuilder(nil, nil, nil, nil, nil, nil, AssistantContextBuilderConfig{TranscriptHistory: transcript})
 	batch := NewAssistantBatchPlanner(AssistantBatchPlannerConfig{
-		ChatClient:       llm.NewChatClient(llm.ChatClientConfig{BaseURL: provider.server.URL, Model: "planner-model"}, slog.Default()),
+		ChatClient:       llm.NewChatClient(llm.ChatClientConfig{BaseURL: provider.server.URL, Model: "planner-model"}, zap.NewNop()),
 		ContextBuilder:   contextBuilder,
 		Context:          proposal,
 		History:          transcript,
@@ -208,7 +209,7 @@ func newAssistantJoinedStack(t *testing.T, relay *assistantTestRelay, signer nos
 		AllowedToolNames: []string{"read-one", "read-two", "mutate"},
 	})
 	iterative, err := NewAssistantAgentLoop(AssistantAgentLoopConfig{
-		ModelClient:    llm.NewOpenAIAgentClient(llm.OpenAIAgentClientConfig{BaseURL: provider.server.URL, Model: "agent-model"}, slog.Default()),
+		ModelClient:    llm.NewOpenAIAgentClient(llm.OpenAIAgentClientConfig{BaseURL: provider.server.URL, Model: "agent-model"}, zap.NewNop()),
 		ToolRuntime:    runtime,
 		ContextBuilder: contextBuilder,
 		ToolSchemas:    assistantLoopSchemas{schemas: schemasFromRuntimeRegistry(registry)},

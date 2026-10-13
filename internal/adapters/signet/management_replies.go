@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
@@ -27,7 +28,7 @@ type managementReplyStream struct {
 	bunker      *nostrout.Bunker
 	signetPK    nostr.PubKey
 	provisioner nostr.PubKey
-	logger      *slog.Logger
+	logger      *zap.Logger
 	cancel      context.CancelFunc
 	done        chan struct{}
 
@@ -38,7 +39,7 @@ type managementReplyStream struct {
 	seen    map[string]struct{} // event-id dedupe across REQ reopens
 }
 
-func newManagementReplyStream(ctx context.Context, pool *nostrpool.RelayPool, bunker *nostrout.Bunker, signetPK, provisioner nostr.PubKey, logger *slog.Logger) *managementReplyStream {
+func newManagementReplyStream(ctx context.Context, pool *nostrpool.RelayPool, bunker *nostrout.Bunker, signetPK, provisioner nostr.PubKey, logger *zap.Logger) *managementReplyStream {
 	ctx, cancel := context.WithCancel(ctx)
 	s := &managementReplyStream{
 		pool: pool, bunker: bunker, signetPK: signetPK, provisioner: provisioner,
@@ -116,7 +117,8 @@ func (s *managementReplyStream) supervise(ctx context.Context) {
 			return
 		}
 		s.setDown(err)
-		s.logger.Warn("Signet management reply subscription ended; reconnecting", "error", err, "backoff", backoff)
+		s.logger.Warn("Signet management reply subscription ended; reconnecting", zap.Error(err), zap.Duration("backoff", backoff))
+
 		if caughtUp {
 			backoff = defaultReconnectMin
 		}
@@ -184,7 +186,8 @@ func (s *managementReplyStream) readReplies(ctx context.Context) (caughtUp bool,
 				closed = nil
 				continue
 			}
-			s.logger.Warn("Signet management relay closed reply subscription", "relay", c.RelayURL, "reason", c.Reason, "terminal", c.Terminal)
+			s.logger.Warn("Signet management relay closed reply subscription", zap.String("relay", c.RelayURL), zap.String("reason", c.Reason), zap.Bool("terminal", c.Terminal))
+
 		}
 	}
 }

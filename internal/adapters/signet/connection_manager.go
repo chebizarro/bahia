@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -34,7 +35,7 @@ type ConnectionManagerConfig struct {
 	MaxBackoff        time.Duration
 	HeartbeatInterval time.Duration
 	JitterFraction    float64
-	Logger            *slog.Logger
+	Logger            *zap.Logger
 }
 
 // ConnectionState is a point-in-time view of a managed Signet dependency.
@@ -88,7 +89,7 @@ func NewConnectionManager(client ManagedClient, cfg ConnectionManagerConfig) *Co
 		cfg.JitterFraction = 1
 	}
 	if cfg.Logger == nil {
-		cfg.Logger = slog.Default()
+		cfg.Logger = zap.NewNop()
 	}
 	return &ConnectionManager{client: client, cfg: cfg, state: ConnectionState{Name: cfg.Name}, changes: make(chan ConnectionState, 16)}
 }
@@ -131,7 +132,8 @@ func (m *ConnectionManager) Run(ctx context.Context) error {
 			return nil
 		}
 		m.recordFailure(err)
-		m.cfg.Logger.Warn("signet connection unavailable; retrying", "signer", m.cfg.Name, "error", err)
+		m.cfg.Logger.Warn("signet connection unavailable; retrying", zap.String("signer", m.cfg.Name), zap.Error(err))
+
 		if err := waitContext(ctx, m.jitter(backoff)); err != nil {
 			return nil
 		}

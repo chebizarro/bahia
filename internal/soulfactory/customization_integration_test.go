@@ -3,11 +3,12 @@ package soulfactory
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func TestIntegrationCreateSoulWithFullCustomization(t *testing.T) {
 	draft.Content.Runtime.RuntimePubkey = "runtime-pubkey"
 	draft.Content.Runtime.CapabilityRef = "capability-full"
 
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, zap.NewNop())
 	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
@@ -103,7 +104,7 @@ func TestIntegrationApplyTemplatePresetToNewSoul(t *testing.T) {
 	draft.Content.Runtime.RuntimePubkey = "runtime-pubkey"
 	draft.Content.SpecHash = "sha256:template-preset"
 
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, &capturingGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, &capturingGenerator{}, signer, zap.NewNop())
 	capture := attachPublishCapture(reactor)
 	reactor.getDraftFn = func(context.Context, string, string) (*domain.SoulDraft, error) { return draft, nil }
 	reactor.getTemplateFn = func(_ context.Context, got string) (*domain.SoulTemplate, error) {
@@ -201,7 +202,7 @@ func runIntegrationProvisionForRuntime(t *testing.T, signer fakeSigner, target d
 	content.Runtime.CapabilityRef = string(target) + "-capability"
 	content.SpecHash = "sha256:" + string(target)
 	draft := &domain.SoulDraft{EventID: string(target) + "-draft", AgentID: "parity-" + string(target), Name: "Parity", Tier: domain.SoulTierHeavy, CreatedBy: signer.pubkey, Content: content}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}, SoulFactoryPubkey: signer.pubkey}, scriptedGenerator{}, signer, zap.NewNop())
 	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
@@ -232,7 +233,7 @@ func runIntegrationHotReload(t *testing.T, signer fakeSigner, current, proposed 
 	currentDraft := &domain.SoulDraft{EventID: "draft-current", AgentID: "scout", CreatedBy: signer.pubkey, Content: current}
 	proposedDraft := &domain.SoulDraft{EventID: "draft-proposed", AgentID: "scout", CreatedBy: signer.pubkey, Content: proposed}
 	soul := &domain.AgentSoul{ID: uuid.New(), AgentID: "scout", Name: current.Identity.Name, Purpose: current.Identity.Purpose, Tier: current.Identity.Tier, Status: domain.SoulStatusActive, DraftRef: "31952:" + signer.pubkey + ":scout", DraftEventID: currentDraft.EventID, SpecHash: current.SpecHash, Runtime: current.Runtime, Assets: current.Assets, CreatedAt: time.Now().UTC()}
-	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{signer.pubkey}}, scriptedGenerator{}, signer, zap.NewNop())
 	endpoint := newFakeRelayEndpoint(t)
 	subscription := newFakeRelaySubscription()
 	endpoint.subscribeQueue <- subscription
@@ -254,7 +255,7 @@ func runIntegrationHotReload(t *testing.T, signer fakeSigner, current, proposed 
 			return nil, nil
 		}
 	}
-	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler := NewLifecycleHandler(reactor, nil, nil, zap.NewNop())
 	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{runtime.runtime: runtime})
 	err = handler.HandleAction(t.Context(), buildActionEvent(t, signer, "hot-reload", nostr.Tags{{"soul", buildSoulRefForTest(soul)}, {"action", string(domain.SoulActionHotReload)}, {"draft-event", proposedDraft.EventID}, {"spec-hash", proposed.SpecHash}, {"previous-spec-hash", current.SpecHash}}, ""))
 	if wantErr == nil && err != nil {

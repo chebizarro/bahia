@@ -3,10 +3,12 @@ package soulfactory
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"fiatjaf.com/nostr"
 
@@ -36,7 +38,7 @@ func neverReissueBackoff() *nostradapter.Backoff {
 
 // newScriptedRelayClient builds a bus over fake relays that answer the first REQ
 // per script. It returns the bus and the relay URLs in script order.
-func newScriptedRelayClient(t *testing.T, logger *slog.Logger, scripts ...fakeRelayScript) (*RelayClient, []string) {
+func newScriptedRelayClient(t *testing.T, logger *zap.Logger, scripts ...fakeRelayScript) (*RelayClient, []string) {
 	t.Helper()
 	endpoints := make([]*fakeRelayEndpoint, 0, len(scripts))
 	urls := make([]string, 0, len(scripts))
@@ -66,36 +68,23 @@ func newScriptedRelayClient(t *testing.T, logger *slog.Logger, scripts ...fakeRe
 }
 
 // recordingLogHandler keeps every record for assertions.
-type recordingLogHandler struct {
-	mu      sync.Mutex
-	records []slog.Record
+type recordingLogHandler struct{ logs *observer.ObservedLogs }
+
+func newRecordingLogHandler() (*recordingLogHandler, *zap.Logger) {
+	core, logs := observer.New(zapcore.DebugLevel)
+	return &recordingLogHandler{logs: logs}, zap.New(core)
 }
 
-func (h *recordingLogHandler) Enabled(context.Context, slog.Level) bool { return true }
-func (h *recordingLogHandler) Handle(_ context.Context, record slog.Record) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.records = append(h.records, record.Clone())
-	return nil
-}
-func (h *recordingLogHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
-func (h *recordingLogHandler) WithGroup(string) slog.Handler      { return h }
-
-// degradedCallers returns the caller attribute of every degraded-read warning.
+// degradedCallers returns the caller field of every degraded-read warning.
 func (h *recordingLogHandler) degradedCallers() []string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	var callers []string
-	for _, record := range h.records {
-		if record.Level != slog.LevelWarn || record.Message != "soul factory relay read degraded; accepting partial result" {
+	for _, entry := range h.logs.All() {
+		if entry.Level != zapcore.WarnLevel || entry.Message != "soul factory relay read degraded; accepting partial result" {
 			continue
 		}
-		record.Attrs(func(attr slog.Attr) bool {
-			if attr.Key == "caller" {
-				callers = append(callers, attr.Value.String())
-			}
-			return true
-		})
+		if caller, ok := entry.ContextMap()["caller"].(string); ok {
+			callers = append(callers, caller)
+		}
 	}
 	return callers
 }
@@ -135,8 +124,7 @@ func TestRelayReadQuorumLookupReturnsNewestAndReportsDegradation(t *testing.T) {
 
 	for name, third := range map[string]fakeRelayAnswer{"silent relay": relayStaysSilent, "CLOSED relay": relayAnswersClosed} {
 		t.Run(name, func(t *testing.T) {
-			logs := &recordingLogHandler{}
-			logger := slog.New(logs)
+			_, logger := newRecordingLogHandler()
 			bus, urls := newScriptedRelayClient(t, logger,
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{older}},
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{newer}},
@@ -172,8 +160,7 @@ func TestRelayReadQuorumLookupReturnsNewestAndReportsDegradation(t *testing.T) {
 	}
 
 	t.Run("reactor template lookup", func(t *testing.T) {
-		logs := &recordingLogHandler{}
-		logger := slog.New(logs)
+		logs, logger := newRecordingLogHandler()
 		bus, _ := newScriptedRelayClient(t, logger,
 			fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{older}},
 			fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{newer}},
@@ -213,7 +200,7 @@ func TestRelayReadFailClosedCallersErrorWithOneSilentRelay(t *testing.T) {
 		call  func(context.Context, *RelayClient) error
 	}{
 		"fleet reconcile souls": {soul, func(ctx context.Context, bus *RelayClient) error {
-			reactor := NewReactor(Config{Relays: []string{"wss://relay-a.example"}, SoulFactoryPubkey: signer.pubkey}, nil, signer, slog.Default())
+			reactor := NewReactor(Config{Relays: []string{"wss://relay-a.example"}, SoulFactoryPubkey: signer.pubkey}, nil, signer, zap.NewNop())
 			reactor.relayClient = bus
 			_, err := reactor.listFleetReconcileSouls(ctx)
 			return err
@@ -225,7 +212,7 @@ func TestRelayReadFailClosedCallersErrorWithOneSilentRelay(t *testing.T) {
 	}
 	for name, caller := range callers {
 		t.Run(name, func(t *testing.T) {
-			bus, urls := newScriptedRelayClient(t, slog.Default(),
+			bus, urls := newScriptedRelayClient(t, zap.NewNop(),
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{caller.event}},
 				fakeRelayScript{answer: relayAnswersEOSE, events: []*nostr.Event{caller.event}},
 				fakeRelayScript{answer: relayStaysSilent},
@@ -273,7 +260,7 @@ func TestResolveRelayReadPolicies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			read, err := resolveRelayRead(t.Context(), slog.Default(), "test", tc.policy, tc.events, tc.err)
+			read, err := resolveRelayRead(t.Context(), zap.NewNop(), "test", tc.policy, tc.events, tc.err)
 			if tc.accept {
 				if err != nil {
 					t.Fatalf("resolveRelayRead() error = %v, want accepted", err)

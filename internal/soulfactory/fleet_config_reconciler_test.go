@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"sync"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -125,7 +126,7 @@ func TestReactorSubscribesToTrustedFleetConfigRevisions(t *testing.T) {
 		AuthorizedPubkeys:  []string{signer.pubkey},
 		SoulFactoryPubkey:  signer.pubkey,
 		FleetConfigEnabled: true,
-	}, nil, signer, slog.Default())
+	}, nil, signer, zap.NewNop())
 	reactor.relayClient = bus
 	ctx, cancel := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
@@ -313,7 +314,7 @@ func newFleetReconcileTestReactorWithRuntime(
 		SoulFactoryPubkey:         signer.pubkey,
 		FleetConfigEnabled:        true,
 		FleetReconcileConcurrency: 2,
-	}, scriptedGenerator{}, signer, slog.Default())
+	}, scriptedGenerator{}, signer, zap.NewNop())
 	capture := &fleetReconcilePublishCapture{}
 	reactor.publishFn = capture.publish
 	reactor.listSoulsFn = func(context.Context) ([]*domain.AgentSoul, error) {
@@ -326,7 +327,7 @@ func newFleetReconcileTestReactorWithRuntime(
 		}
 		return nil, nil
 	}
-	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler := NewLifecycleHandler(reactor, nil, nil, zap.NewNop())
 	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{
 		domain.RuntimeTargetOpenClaw: runtime,
 	})
