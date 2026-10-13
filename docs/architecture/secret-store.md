@@ -226,14 +226,17 @@ management request, including requests whose replies are NIP-59-backdated.
   from its clock (`request_time_skew`, `ErrUnavailable`).
 - Every request is one gift wrap ([outbound
   admission](../runbooks/nostr-outbound-admission.md)): an `Inspect` or
-  `Health` costs one, a `Resolve` one to three (below), plus the reply
+  `Health` costs one, a `Resolve` one to four (below), plus the reply
   subscription's NIP-42 AUTH. A lone `Resolve`, `Inspect` or `Health` goes
   on the process-wide `priority` lane and fails fast: an exhausted budget is
   `ErrUnavailable` and the request is not queued or retried. `ResolveAll`
   declares one bounded operation (four gift wraps per request at most: a
   one-round-trip delivery without a version, then the bracket) and
-  is paced on the `bulk` lane instead; its requests are sent one at a time,
-  each after the previous one's relay OKs.
+  is paced on the `bulk` lane instead. Signet has no multi-credential
+  delivery method, so up to four resolves share the supervised reply
+  subscription. The operation serializes outbound gift-wrap publications
+  through relay OK, while replies to those requests may overlap. A failure
+  zeroizes every successful value before returning the failing request index.
 
 ### Pinning a version
 

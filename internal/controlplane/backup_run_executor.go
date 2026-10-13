@@ -183,6 +183,21 @@ func (r *BackupRunExecutor) reconcile(ctx context.Context, record localstore.Bac
 	if err != nil || pending == nil {
 		return fmt.Errorf("accepted signed request unavailable: %w", err)
 	}
+	if pending.RequestEvent.Kind == 0 {
+		raw, err := r.Outbox.GetControlRecord(backupRunEffectFamily, current.IntentID)
+		if err != nil {
+			return err
+		}
+		if raw == nil {
+			return fmt.Errorf("compacted backup run lacks terminal effect receipt")
+		}
+		var receipt backupRunEffectReceipt
+		if json.Unmarshal(raw, &receipt) != nil || receipt.IntentID != current.IntentID || receipt.Coordinate != current.Coordinate ||
+			receipt.RequestEventID != current.RequestEventID || receipt.StepID != backupRunStep || receipt.TerminalStatus == nil {
+			return fmt.Errorf("compacted backup run terminal receipt is inconsistent")
+		}
+		return r.Outbox.CompactBackupRunAccepted(current.IntentID, current.Coordinate, current.RequestEventID, *receipt.TerminalStatus, r.StatusTarget)
+	}
 	intent, err := ParseSignedBackupRunRequestForReplay(&pending.RequestEvent, current.Actor)
 	if err != nil {
 		return err
@@ -230,7 +245,7 @@ func (r *BackupRunExecutor) reconcile(ctx context.Context, record localstore.Bac
 		}
 	}
 	if receipt.TerminalStatus != nil {
-		return r.deliver(ctx, *receipt.TerminalStatus, "backup_run.terminal_status")
+		return r.finishTerminal(ctx, *current, *receipt.TerminalStatus)
 	}
 	if receipt.Failure == "" && receipt.Checkpoint == nil {
 		value, err := backup.ResolvePinnedKopiaCredential(ctx, run.ExecutionSnapshot, r.CredentialRecords, r.CredentialValues)
@@ -369,7 +384,18 @@ func (r *BackupRunExecutor) reconcile(ctx context.Context, record localstore.Bac
 			return err
 		}
 	}
-	return r.deliver(ctx, *receipt.TerminalStatus, "backup_run.terminal_status")
+	return r.finishTerminal(ctx, *current, *receipt.TerminalStatus)
+}
+
+func (r *BackupRunExecutor) finishTerminal(ctx context.Context, admission localstore.BackupRunAdmission, status nostr.Event) error {
+	if err := r.deliver(ctx, status, "backup_run.terminal_status"); err != nil {
+		return err
+	}
+	ready, err := r.proven(status)
+	if err != nil || !ready {
+		return err
+	}
+	return r.Outbox.CompactBackupRunAccepted(admission.IntentID, admission.Coordinate, admission.RequestEventID, status, r.StatusTarget)
 }
 
 func (r *BackupRunExecutor) save(key string, receipt *backupRunEffectReceipt) error {

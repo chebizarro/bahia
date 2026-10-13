@@ -2,6 +2,7 @@ package localstore
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.etcd.io/bbolt"
 )
@@ -20,9 +22,10 @@ const (
 	BackupRunRefusedState  = "refused"
 )
 
-// BackupRunPending is the immutable, signed operator request and its bounded
-// history retry state. It lives with the outbox, never in the rebuildable
-// inbound cache or PostgreSQL. No service-signed state exists at this phase.
+// BackupRunPending holds a signed operator request while admission or effect
+// recovery still needs it, then retains its compact exact-identity proof.
+// It lives with the outbox, never in the rebuildable inbound cache or
+// PostgreSQL.
 type BackupRunPending struct {
 	IntentID        string      `json:"intent_id"`
 	Coordinate      string      `json:"coordinate"`
@@ -40,6 +43,152 @@ type BackupRunPending struct {
 	StatusDelivered bool        `json:"status_delivered,omitempty"`
 }
 
+// indexBackupRunPending upgrades old outboxes once. Only live work is indexed;
+// terminal identity bindings stay in the primary ledger for exact replay.
+func indexBackupRunPending(tx *bbolt.Tx) error {
+	due, refusals := tx.Bucket(backupRunDueBucket), tx.Bucket(backupRunRefusalsBucket)
+	if due.Sequence() == 1 && refusals.Sequence() == 1 {
+		return nil
+	}
+	if err := due.SetSequence(1); err != nil {
+		return err
+	}
+	if err := refusals.SetSequence(1); err != nil {
+		return err
+	}
+	cursor := tx.Bucket(backupRunPendingBucket).Cursor()
+	for key, raw := cursor.First(); key != nil; key, raw = cursor.Next() {
+		var record BackupRunPending
+		if err := json.Unmarshal(raw, &record); err != nil {
+			return fmt.Errorf("index backup run pending %q: %w", key, err)
+		}
+		if record.IntentID != string(key) {
+			return fmt.Errorf("index backup run pending %q: intent mismatch", key)
+		}
+		switch record.State {
+		case BackupRunPendingState:
+			if err := due.Put(backupRunDueKey(record), nil); err != nil {
+				return err
+			}
+		case BackupRunRefusedState:
+			if record.StatusEventID == "" {
+				if err := refusals.Put(key, nil); err != nil {
+					return err
+				}
+			} else {
+				compactBackupRunPending(&record)
+				if err := putBackupRunPending(tx, record); err != nil {
+					return err
+				}
+			}
+		case BackupRunAcceptedState:
+			// Execution still needs the signed request until its terminal
+			// status has exact publisher-quorum proof.
+		default:
+			return fmt.Errorf("index backup run pending %q: unknown state %q", key, record.State)
+		}
+	}
+	return nil
+}
+
+func backupRunDueKey(record BackupRunPending) []byte {
+	at := record.NextAttemptAt
+	if at.IsZero() {
+		at = record.ReceivedAt
+	}
+	key := make([]byte, 8, 8+len(record.IntentID))
+	binary.BigEndian.PutUint64(key, uint64(at.UnixNano())^(uint64(1)<<63))
+	return append(key, record.IntentID...)
+}
+
+func backupRunDueAt(key []byte) time.Time {
+	return time.Unix(0, int64(binary.BigEndian.Uint64(key[:8])^(uint64(1)<<63))).UTC()
+}
+
+func compactBackupRunPending(record *BackupRunPending) {
+	record.RequestEvent = nostr.Event{ID: record.RequestEvent.ID, PubKey: record.RequestEvent.PubKey, Sig: record.RequestEvent.Sig}
+	record.NextAttemptAt = time.Time{}
+	record.Attempts = 0
+	if record.State == BackupRunAcceptedState {
+		record.LastFailure = ""
+	}
+}
+
+func putBackupRunPending(tx *bbolt.Tx, record BackupRunPending) error {
+	raw, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+	return tx.Bucket(backupRunPendingBucket).Put([]byte(record.IntentID), raw)
+}
+
+// CompactBackupRunAccepted drops the signed request body only after the
+// executor's terminal status has exact publisher-quorum proof. Until then the
+// executor still needs the full request to recover an interrupted effect.
+func (o *Outbox) CompactBackupRunAccepted(intentID, coordinate, requestEventID string, terminal nostr.Event, target string) error {
+	if o == nil || o.shared == nil || o.shared.readOnly || terminal.ID == nostr.ZeroID || target == "" {
+		return ErrReadOnly
+	}
+	o.shared.backupRunStatusMu.Lock()
+	defer o.shared.backupRunStatusMu.Unlock()
+	return o.shared.db.Update(func(tx *bbolt.Tx) error {
+		var record BackupRunPending
+		raw := tx.Bucket(backupRunPendingBucket).Get([]byte(intentID))
+		if raw == nil || json.Unmarshal(raw, &record) != nil || !validRetainedBackupRunIdentity(record) ||
+			record.State != BackupRunAcceptedState || record.Coordinate != coordinate || record.RequestEvent.ID.Hex() != requestEventID ||
+			string(tx.Bucket(backupRunPendingCoordsBucket).Get([]byte(coordinate))) != intentID ||
+			string(tx.Bucket(backupRunPendingEventsBucket).Get([]byte(requestEventID))) != intentID {
+			return fmt.Errorf("backup run accepted request is unavailable for compaction")
+		}
+		var admission BackupRunAdmission
+		raw = tx.Bucket(backupRunIntentsBucket).Get([]byte(intentID))
+		if raw == nil || json.Unmarshal(raw, &admission) != nil || admission.Coordinate != coordinate ||
+			admission.RequestEventID != requestEventID || !admission.StatusDelivered || admission.StatusOutcome != "accepted" {
+			return fmt.Errorf("backup run accepted status lacks durable proof")
+		}
+		var proof DeliveryProof
+		raw = tx.Bucket(outboxDeliveryProofsBucket).Get(terminal.ID[:])
+		if raw == nil || json.Unmarshal(raw, &proof) != nil || !proof.ValidFor(terminal, target) ||
+			terminal.Kind != 30315 || terminal.PubKey.Hex() != record.ServicePubkey ||
+			!oneBackupRunTag(terminal.Tags, "d", "intent-status:"+record.Actor+":"+coordinate) ||
+			!oneBackupRunTag(terminal.Tags, "e", requestEventID) ||
+			!oneBackupRunTag(terminal.Tags, "intent_id", intentID) ||
+			!oneBackupRunTag(terminal.Tags, "p", record.Actor) ||
+			(!oneBackupRunTag(terminal.Tags, "status", "success") && !oneBackupRunTag(terminal.Tags, "status", "error")) {
+			return fmt.Errorf("backup run terminal status lacks exact relay quorum proof")
+		}
+		if record.RequestEvent.Kind == 0 {
+			return nil
+		}
+		compactBackupRunPending(&record)
+		return putBackupRunPending(tx, record)
+	})
+}
+
+func validRetainedBackupRunIdentity(record BackupRunPending) bool {
+	if record.State == BackupRunPendingState || record.StatusEventID == "" && record.State == BackupRunRefusedState {
+		return validBackupRunPendingIdentity(record)
+	}
+	if record.State != BackupRunAcceptedState && record.State != BackupRunRefusedState {
+		return false
+	}
+	if record.RequestEvent.Kind != 0 {
+		return validBackupRunPendingIdentity(record)
+	}
+	if record.IntentID == "" || !strings.HasPrefix(record.Coordinate, "backup-run:") ||
+		record.RequestEvent.ID == nostr.ZeroID || record.RequestEvent.PubKey.Hex() != record.Actor ||
+		record.RequestEvent.CreatedAt != 0 || len(record.RequestEvent.Tags) != 0 || record.RequestEvent.Content != "" ||
+		record.ServicePubkey == "" || record.ExpiresAt.IsZero() || !record.ExpiresAt.After(record.ReceivedAt) {
+		return false
+	}
+	pubkey, err := schnorr.ParsePubKey(record.RequestEvent.PubKey[:])
+	if err != nil {
+		return false
+	}
+	sig, err := schnorr.ParseSignature(record.RequestEvent.Sig[:])
+	return err == nil && sig.Verify(record.RequestEvent.ID[:], pubkey)
+}
+
 func (o *Outbox) GetBackupRunPending(intentID, coordinate, requestEventID string) (*BackupRunPending, error) {
 	if o == nil || o.shared == nil || intentID == "" || coordinate == "" || requestEventID == "" {
 		return nil, fmt.Errorf("backup run pending lookup requires an outbox and exact request keys")
@@ -55,9 +204,8 @@ func (o *Outbox) GetBackupRunPending(intentID, coordinate, requestEventID string
 			if err := json.Unmarshal(raw, &record); err != nil {
 				return fmt.Errorf("decode backup run pending record: %w", err)
 			}
-			if !validBackupRunPendingIdentity(record) || record.IntentID != intentID || record.Coordinate != coordinate || record.RequestEvent.ID.Hex() != requestEventID ||
-				string(coords.Get([]byte(coordinate))) != intentID || string(events.Get([]byte(requestEventID))) != intentID ||
-				!record.RequestEvent.CheckID() || !record.RequestEvent.VerifySignature() {
+			if !validRetainedBackupRunIdentity(record) || record.IntentID != intentID || record.Coordinate != coordinate || record.RequestEvent.ID.Hex() != requestEventID ||
+				string(coords.Get([]byte(coordinate))) != intentID || string(events.Get([]byte(requestEventID))) != intentID {
 				return fmt.Errorf("backup run pending request conflicts with immutable signed keys")
 			}
 			if record.StatusDelivered {
@@ -164,7 +312,7 @@ func (o *Outbox) PutBackupRunPending(record BackupRunPending) (*BackupRunPending
 			if err := json.Unmarshal(raw, &prior); err != nil {
 				return err
 			}
-			if !validBackupRunPendingIdentity(prior) || prior.Coordinate != record.Coordinate || prior.RequestEvent.ID != record.RequestEvent.ID ||
+			if !validRetainedBackupRunIdentity(prior) || prior.Coordinate != record.Coordinate || prior.RequestEvent.ID != record.RequestEvent.ID ||
 				prior.Actor != record.Actor || prior.ServicePubkey != record.ServicePubkey ||
 				string(coords.Get([]byte(record.Coordinate))) != record.IntentID ||
 				string(events.Get([]byte(record.RequestEvent.ID.Hex()))) != record.IntentID {
@@ -187,6 +335,9 @@ func (o *Outbox) PutBackupRunPending(record BackupRunPending) (*BackupRunPending
 		if err := events.Put([]byte(record.RequestEvent.ID.Hex()), []byte(record.IntentID)); err != nil {
 			return err
 		}
+		if err := tx.Bucket(backupRunDueBucket).Put(backupRunDueKey(record), nil); err != nil {
+			return err
+		}
 		inserted = true
 		return nil
 	})
@@ -196,48 +347,64 @@ func (o *Outbox) PutBackupRunPending(record BackupRunPending) (*BackupRunPending
 	return &record, inserted, nil
 }
 
-// ListBackupRunPending paginates the durable inbox. Refused records remain
-// bound but are not returned to the history worker.
-func (o *Outbox) ListBackupRunPending(after string, limit int) ([]BackupRunPending, string, error) {
+// ListBackupRunPendingDue traverses only active requests whose retry or
+// expiration deadline has arrived. The cursor is an opaque due-index key;
+// nextWake is the first future deadline, if any.
+func (o *Outbox) ListBackupRunPendingDue(after string, now time.Time, limit int) ([]BackupRunPending, string, time.Time, error) {
 	if o == nil || o.shared == nil {
-		return nil, "", fmt.Errorf("backup run pending ledger is unavailable")
+		return nil, "", time.Time{}, fmt.Errorf("backup run pending ledger is unavailable")
 	}
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 	var records []BackupRunPending
 	var next string
+	var nextWake time.Time
 	err := o.shared.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(backupRunPendingBucket)
-		if bucket == nil {
-			return fmt.Errorf("backup run pending ledger is unavailable")
+		index, pending := tx.Bucket(backupRunDueBucket), tx.Bucket(backupRunPendingBucket)
+		if index == nil || pending == nil {
+			return fmt.Errorf("backup run due index is unavailable")
 		}
-		cursor := bucket.Cursor()
-		key, raw := cursor.First()
+		cursor := index.Cursor()
+		key, _ := cursor.First()
 		if after != "" {
-			key, raw = cursor.Seek([]byte(after))
+			key, _ = cursor.Seek([]byte(after))
 			if bytes.Equal(key, []byte(after)) {
-				key, raw = cursor.Next()
+				key, _ = cursor.Next()
 			}
 		}
-		visited := 0
-		for ; key != nil && visited < limit; key, raw = cursor.Next() {
-			visited++
-			next = string(key)
+		for key != nil && len(records) < limit {
+			if len(key) < 9 {
+				return fmt.Errorf("backup run due index has malformed key")
+			}
+			at := backupRunDueAt(key)
+			if at.After(now) {
+				nextWake = at
+				return nil
+			}
+			intentID := key[8:]
 			var record BackupRunPending
-			if err := json.Unmarshal(raw, &record); err != nil {
-				return fmt.Errorf("decode backup run pending %q: %w", key, err)
+			if raw := pending.Get(intentID); raw == nil || json.Unmarshal(raw, &record) != nil ||
+				record.State != BackupRunPendingState || record.IntentID != string(intentID) ||
+				!bytes.Equal(backupRunDueKey(record), key) {
+				return fmt.Errorf("backup run due index %q is inconsistent", intentID)
 			}
-			if record.State == BackupRunPendingState {
-				records = append(records, record)
-			}
+			records = append(records, record)
+			next = string(key)
+			key, _ = cursor.Next()
+		}
+		if key != nil && len(key) < 9 {
+			return fmt.Errorf("backup run due index has malformed key")
 		}
 		if key == nil {
+			next = ""
+		} else if backupRunDueAt(key).After(now) {
+			nextWake = backupRunDueAt(key)
 			next = ""
 		}
 		return nil
 	})
-	return records, next, err
+	return records, next, nextWake, err
 }
 
 // ListBackupRunRefusalsNeedingStatus finds local terminal decisions not yet
@@ -254,29 +421,31 @@ func (o *Outbox) ListBackupRunRefusalsNeedingStatus(after string, limit int) ([]
 	var next string
 	var decodeErr error
 	err := o.shared.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(backupRunPendingBucket)
-		if bucket == nil {
+		bucket, index := tx.Bucket(backupRunPendingBucket), tx.Bucket(backupRunRefusalsBucket)
+		if bucket == nil || index == nil {
 			return fmt.Errorf("backup run pending ledger is unavailable")
 		}
-		cursor := bucket.Cursor()
-		key, raw := cursor.First()
+		cursor := index.Cursor()
+		key, _ := cursor.First()
 		if after != "" {
-			key, raw = cursor.Seek([]byte(after))
+			key, _ = cursor.Seek([]byte(after))
 			if bytes.Equal(key, []byte(after)) {
-				key, raw = cursor.Next()
+				key, _ = cursor.Next()
 			}
 		}
-		for visited := 0; key != nil && visited < limit; key, raw = cursor.Next() {
+		for visited := 0; key != nil && visited < limit; key, _ = cursor.Next() {
 			visited++
 			next = string(key)
 			var record BackupRunPending
-			if err := json.Unmarshal(raw, &record); err != nil {
-				decodeErr = errors.Join(decodeErr, fmt.Errorf("decode backup run pending %q: %w", key, err))
+			if raw := bucket.Get(key); raw == nil || json.Unmarshal(raw, &record) != nil {
+				decodeErr = errors.Join(decodeErr, fmt.Errorf("decode backup run pending %q", key))
 				continue
 			}
-			if record.State == BackupRunRefusedState && record.StatusEventID == "" {
-				records = append(records, record)
+			if record.State != BackupRunRefusedState || record.StatusEventID != "" {
+				decodeErr = errors.Join(decodeErr, fmt.Errorf("backup run refusal index %q is inconsistent", key))
+				continue
 			}
+			records = append(records, record)
 		}
 		if key == nil {
 			next = ""
@@ -310,6 +479,7 @@ func (o *Outbox) RecordBackupRunPendingAttempt(intentID, requestEventID string, 
 		if tx.Bucket(backupRunCoordsBucket).Get([]byte(record.Coordinate)) != nil {
 			return nil
 		}
+		oldDue := backupRunDueKey(record)
 		record.Attempts++
 		record.LastFailure = reason
 		if !now.Before(record.ExpiresAt) {
@@ -324,7 +494,16 @@ func (o *Outbox) RecordBackupRunPendingAttempt(intentID, requestEventID string, 
 		if err != nil {
 			return err
 		}
-		return bucket.Put([]byte(intentID), encoded)
+		if err := bucket.Put([]byte(intentID), encoded); err != nil {
+			return err
+		}
+		if err := tx.Bucket(backupRunDueBucket).Delete(oldDue); err != nil {
+			return err
+		}
+		if record.State == BackupRunRefusedState {
+			return tx.Bucket(backupRunRefusalsBucket).Put([]byte(intentID), nil)
+		}
+		return tx.Bucket(backupRunDueBucket).Put(backupRunDueKey(record), nil)
 	})
 }
 
@@ -348,6 +527,7 @@ func (o *Outbox) RefuseBackupRunPending(intentID, requestEventID, reason string)
 		if tx.Bucket(backupRunCoordsBucket).Get([]byte(record.Coordinate)) != nil {
 			return nil
 		}
+		oldDue := backupRunDueKey(record)
 		record.State = BackupRunRefusedState
 		record.LastFailure = reason
 		record.NextAttemptAt = time.Time{}
@@ -355,7 +535,13 @@ func (o *Outbox) RefuseBackupRunPending(intentID, requestEventID, reason string)
 		if err != nil {
 			return err
 		}
-		return bucket.Put([]byte(intentID), raw)
+		if err := bucket.Put([]byte(intentID), raw); err != nil {
+			return err
+		}
+		if err := tx.Bucket(backupRunDueBucket).Delete(oldDue); err != nil {
+			return err
+		}
+		return tx.Bucket(backupRunRefusalsBucket).Put([]byte(intentID), nil)
 	})
 }
 
@@ -443,11 +629,15 @@ func (o *Outbox) StageBackupRunRefusedStatus(record BackupRunPending, event nost
 		}
 		current.StatusEventID = event.ID.Hex()
 		current.StatusTarget = target
+		compactBackupRunPending(&current)
 		raw, err := json.Marshal(current)
 		if err != nil {
 			return err
 		}
 		if err := pending.Put([]byte(current.IntentID), raw); err != nil {
+			return err
+		}
+		if err := tx.Bucket(backupRunRefusalsBucket).Delete([]byte(current.IntentID)); err != nil {
 			return err
 		}
 		statusID = current.StatusEventID

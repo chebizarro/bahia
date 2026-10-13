@@ -40,20 +40,21 @@ import (
 // and nostrc-edjyc (refusals echo the request id); off, the fake behaves like
 // Signet before them.
 type fakeVault struct {
-	key             nostr.SecretKey
-	pool            *nostrpool.RelayPool
-	backdate        time.Duration
-	mu              sync.Mutex
-	provisioners    map[nostr.PubKey]bool
-	grants          map[string]nostr.PubKey
-	creds           map[string]*fakeCredential
-	afterDeliver    func(id string)
-	methods         []string
-	silent          bool
-	reportVersion   bool
-	rotateOnDeliver bool
-	echoRefusalID   bool
-	rewriteID       func(string) string
+	key               nostr.SecretKey
+	pool              *nostrpool.RelayPool
+	backdate          time.Duration
+	mu                sync.Mutex
+	provisioners      map[nostr.PubKey]bool
+	grants            map[string]nostr.PubKey
+	creds             map[string]*fakeCredential
+	afterDeliver      func(id string)
+	concurrentReplies bool
+	methods           []string
+	silent            bool
+	reportVersion     bool
+	rotateOnDeliver   bool
+	echoRefusalID     bool
+	rewriteID         func(string) string
 }
 
 type fakeCredential struct {
@@ -87,10 +88,20 @@ func startFakeVault(t *testing.T, ctx context.Context, relayURL string) *fakeVau
 	}
 	go func() {
 		defer sub.Close()
-		for ev := range sub.Events {
-			reply, err := v.answer(*ev)
+		respond := func(ev nostr.Event) {
+			reply, err := v.answer(ev)
 			if err == nil {
 				_, _ = v.pool.Publish(ctx, reply)
+			}
+		}
+		for ev := range sub.Events {
+			v.mu.Lock()
+			concurrent := v.concurrentReplies
+			v.mu.Unlock()
+			if concurrent {
+				go respond(*ev)
+			} else {
+				respond(*ev)
 			}
 		}
 	}()
