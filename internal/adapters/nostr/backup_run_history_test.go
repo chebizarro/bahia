@@ -150,7 +150,7 @@ func TestBackupRunHistoryRunnerPersistsRetryThenRefusesExpiredRequestAfterRestar
 	require.NoError(t, err)
 	runner.now = func() time.Time { return now }
 	_, err = runner.ReconcileOnce(t.Context())
-	require.ErrorContains(t, err, "cross-process service-key signer fence")
+	require.ErrorContains(t, err, "backup run admission is paused")
 	pending, err := outbox.GetBackupRunPending("intent-1", coordinate, request.ID.Hex())
 	require.NoError(t, err)
 	require.Equal(t, localstore.BackupRunPendingState, pending.State)
@@ -195,6 +195,86 @@ func TestBackupRunHistoryLocalPreledgerCoordinateVetoesEmptyRelay(t *testing.T) 
 	require.Nil(t, proof)
 	require.ErrorContains(t, err, "already exists in local relay cache")
 	require.Empty(t, relay.requests(), "a known coordinate need not issue a relay REQ")
+}
+
+func TestBackupRunHistoryCoordinateConflictWakesTerminalStatusWithoutExpiry(t *testing.T) {
+	relay := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
+	defer pool.Close()
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	actor, service := gonostr.Generate(), gonostr.Generate()
+	now := time.Now().UTC().Truncate(time.Second)
+	coordinate := "backup-run:conflict"
+	old := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", coordinate}}}
+	require.NoError(t, old.Sign(service))
+	_, err = store.SaveEvent(old)
+	require.NoError(t, err)
+	request := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Timestamp(now.Unix()),
+		Tags: gonostr.Tags{{"d", coordinate}, {"intent_id", "intent-conflict"}, {"expiration", fmt.Sprint(now.Add(time.Minute).Unix())}}}
+	require.NoError(t, request.Sign(actor))
+	_, inserted, err := outbox.PutBackupRunPending(localstore.BackupRunPending{IntentID: "intent-conflict", Coordinate: coordinate,
+		RequestEvent: request, Actor: actor.Public().Hex(), ServicePubkey: service.Public().Hex(), ReceivedAt: now, ExpiresAt: now.Add(time.Minute)})
+	require.NoError(t, err)
+	require.True(t, inserted)
+	runner, err := NewBackupRunHistoryRunner(outbox, pool, store, zap.NewNop())
+	require.NoError(t, err)
+	runner.now = func() time.Time { return now }
+	wakes := 0
+	runner.SetStatusWake(func() { wakes++ })
+	next, err := runner.ReconcileOnce(t.Context())
+	require.NoError(t, err)
+	require.True(t, next.IsZero())
+	require.Equal(t, 1, wakes)
+	refused, err := outbox.GetBackupRunPending("intent-conflict", coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, localstore.BackupRunRefusedState, refused.State)
+	require.Contains(t, refused.LastFailure, "already exists")
+	_, err = runner.ReconcileOnce(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, wakes, "duplicate history pass does not cause another status")
+}
+
+func TestBackupRunHistoryInspectionCrossingExpiryWakesTerminalStatus(t *testing.T) {
+	relay := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
+	defer pool.Close()
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	actor, service := gonostr.Generate(), gonostr.Generate()
+	now := time.Now().UTC().Truncate(time.Second)
+	coordinate := "backup-run:deadline"
+	request := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Timestamp(now.Unix()),
+		Tags: gonostr.Tags{{"d", coordinate}, {"intent_id", "intent-deadline"}, {"expiration", fmt.Sprint(now.Add(time.Minute).Unix())}}}
+	require.NoError(t, request.Sign(actor))
+	_, inserted, err := outbox.PutBackupRunPending(localstore.BackupRunPending{IntentID: "intent-deadline", Coordinate: coordinate,
+		RequestEvent: request, Actor: actor.Public().Hex(), ServicePubkey: service.Public().Hex(), ReceivedAt: now, ExpiresAt: now.Add(time.Minute)})
+	require.NoError(t, err)
+	require.True(t, inserted)
+	runner, err := NewBackupRunHistoryRunner(outbox, pool, store, zap.NewNop())
+	require.NoError(t, err)
+	clock := now
+	runner.now = func() time.Time { return clock }
+	runner.inspect = func(context.Context, BackupRunHistoryStore, gonostr.PubKey, string) (*BackupRunHistoryProof, error) {
+		clock = now.Add(time.Minute)
+		return nil, fmt.Errorf("relay CLOSED before EOSE")
+	}
+	wakes := 0
+	runner.SetStatusWake(func() { wakes++ })
+	_, err = runner.ReconcileOnce(t.Context())
+	require.ErrorContains(t, err, "CLOSED")
+	require.Equal(t, 1, wakes)
+	refused, err := outbox.GetBackupRunPending("intent-deadline", coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	require.Equal(t, localstore.BackupRunRefusedState, refused.State)
 }
 
 func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {

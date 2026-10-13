@@ -14,10 +14,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// BackupRunStatusReconciler turns a durable run-state relay outcome into one
-// signed final intent status. Outbox delivery callbacks wake it but never
-// publish while the publisher holds its per-event lock. Startup scans cover a
-// crash between the run-state ACK and status staging.
+// BackupRunStatusReconciler turns a durable run-state ACK or pending-run
+// refusal into one signed final intent status. Outbox and history callbacks
+// wake it outside publisher locks; startup scans repair interrupted staging.
 type BackupRunStatusReconciler struct {
 	outbox     *localstore.Outbox
 	status     *IntentStatusPublisher
@@ -55,14 +54,18 @@ func (r *BackupRunStatusReconciler) Notify(ev nostr.Event) {
 	if ev.Kind != nostr.Kind(kinds.CASControlState) || backupReceiptTag(ev.Tags, "t") != kinds.CPStateTopicBackupRun {
 		return
 	}
+	r.Wake()
+}
+
+func (r *BackupRunStatusReconciler) Wake() {
 	select {
 	case r.wake <- struct{}{}:
 	default:
 	}
 }
 
-// Run reconciles once at startup, then only after an outbox settlement
-// callback. Local signing/storage errors retry with backoff, not a protocol
+// Run reconciles once at startup, then after a delivery or history wake.
+// Local signing/storage errors retry with backoff, not a protocol
 // completion timer; relay delivery remains the publisher runner's job.
 func (r *BackupRunStatusReconciler) Run(ctx context.Context) error {
 	for {
@@ -112,16 +115,77 @@ func (r *BackupRunStatusReconciler) ReconcileOnce(ctx context.Context) error {
 			}
 		}
 		if next == "" {
-			result := errors.Join(failures...)
-			if result != nil {
-				r.lastError.Store(result.Error())
-			} else {
-				r.lastError.Store("")
-			}
-			return result
+			break
 		}
 		after = next
 	}
+	after = ""
+	for {
+		if err := ctx.Err(); err != nil {
+			r.lastError.Store(err.Error())
+			return err
+		}
+		records, next, err := r.outbox.ListBackupRunRefusalsNeedingStatus(after, 100)
+		if err != nil {
+			failures = append(failures, err)
+		}
+		for _, record := range records {
+			if err := r.reconcileRefusal(ctx, record); err != nil {
+				failures = append(failures, fmt.Errorf("backup run %s refusal status: %w", record.IntentID, err))
+			}
+		}
+		if next == "" {
+			break
+		}
+		after = next
+	}
+	result := errors.Join(failures...)
+	if result != nil {
+		r.lastError.Store(result.Error())
+	} else {
+		r.lastError.Store("")
+	}
+	return result
+}
+
+func (r *BackupRunStatusReconciler) reconcileRefusal(ctx context.Context, record localstore.BackupRunPending) error {
+	current, err := r.outbox.GetBackupRunPending(record.IntentID, record.Coordinate, record.RequestEvent.ID.Hex())
+	if err != nil {
+		return fmt.Errorf("read exact pending request: %w", err)
+	}
+	if current == nil {
+		return fmt.Errorf("backup run pending request disappeared before refusal status staging")
+	}
+	if current.State != localstore.BackupRunRefusedState || current.StatusEventID != "" {
+		return nil
+	}
+	intent := &Intent{IntentID: current.IntentID, Actor: current.Actor, Coordinate: current.Coordinate, Event: &current.RequestEvent}
+	floor, err := r.outbox.BackupRunStatusTimestampFloor(current.ServicePubkey, current.Actor, current.Coordinate)
+	if err != nil {
+		return err
+	}
+	now := nostr.Now()
+	createdAt := max(now, floor+1)
+	if createdAt > now+30 {
+		return fmt.Errorf("backup run refusal status waits for prior coordinate timestamp %d", floor)
+	}
+	event, err := r.status.buildStatusEventWithExpiryAt(ctx, intent, "rejected", "rejected", current.LastFailure, nil, 0, createdAt)
+	if err != nil {
+		return err
+	}
+	_, inserted, err := r.outbox.StageBackupRunRefusedStatus(*current, event, r.target)
+	if err != nil {
+		return err
+	}
+	if inserted {
+		if r.events != nil {
+			if _, err := r.events.SaveEvent(event); err != nil {
+				r.logger.Warn("backup refusal status local cache write failed", zap.String("event_id", event.ID.Hex()), zap.Error(err))
+			}
+		}
+		r.statusWake()
+	}
+	return nil
 }
 
 func (r *BackupRunStatusReconciler) reconcileRecord(ctx context.Context, record localstore.BackupRunAdmission) error {

@@ -123,6 +123,15 @@ func (o *Outbox) PublishUnadmittedBackupRunStatus(coordinate string, event nostr
 		if coords.Get([]byte(coordinate)) != nil {
 			return fmt.Errorf("backup run coordinate has an immutable admission outcome")
 		}
+		if owner := tx.Bucket(backupRunPendingCoordsBucket).Get([]byte(coordinate)); owner != nil {
+			var pending BackupRunPending
+			if raw := tx.Bucket(backupRunPendingBucket).Get(owner); raw == nil || json.Unmarshal(raw, &pending) != nil {
+				return fmt.Errorf("backup run pending coordinate is unavailable")
+			}
+			if pending.State == BackupRunRefusedState || pending.StatusEventID != "" {
+				return fmt.Errorf("backup run coordinate has an immutable refusal outcome")
+			}
+		}
 		key := backupRunStatusEventClockKey(event)
 		floor, err := backupRunStatusTimestampFloor(tx, key)
 		if err != nil {
@@ -226,6 +235,14 @@ func (o *Outbox) EnqueueBackupRun(entry OutboxEntry, intentID, coordinate, reque
 		if coords.Get([]byte(coordinate)) != nil {
 			return fmt.Errorf("backup run coordinate already belongs to another signed request")
 		}
+		if owner := tx.Bucket(backupRunPendingCoordsBucket).Get([]byte(coordinate)); owner != nil {
+			var pending BackupRunPending
+			if raw := tx.Bucket(backupRunPendingBucket).Get(owner); raw == nil || json.Unmarshal(raw, &pending) != nil ||
+				pending.IntentID != intentID || pending.RequestEvent.ID.Hex() != requestEventID ||
+				pending.State != BackupRunPendingState || pending.StatusEventID != "" {
+				return fmt.Errorf("backup run coordinate has an immutable pending outcome")
+			}
+		}
 		if tx.Bucket(outboxEntriesBucket).Get(entry.Event.ID[:]) != nil {
 			return fmt.Errorf("backup run state event id is already held without its admission record")
 		}
@@ -306,8 +323,10 @@ func updateBackupRunStatusDelivery(tx *bbolt.Tx, entry OutboxEntry) error {
 	}
 	intents := tx.Bucket(backupRunIntentsBucket)
 	var record BackupRunAdmission
-	if raw := intents.Get(intentID); raw == nil || json.Unmarshal(raw, &record) != nil {
-		return fmt.Errorf("backup run admission for accepted status is unavailable")
+	if raw := intents.Get(intentID); raw == nil {
+		return updateBackupRunRefusalDelivery(tx, entry, intentID)
+	} else if json.Unmarshal(raw, &record) != nil {
+		return fmt.Errorf("backup run admission for accepted status is malformed")
 	}
 	if record.StatusEventID != entry.Event.ID.Hex() || record.StatusTarget != entry.Target ||
 		!record.Delivered || record.StatusOutcome != "accepted" {
@@ -369,8 +388,14 @@ func backupRunAdmissionUnresolved(tx *bbolt.Tx, eventID nostr.ID) (bool, error) 
 	}
 	bucket := tx.Bucket(backupRunIntentsBucket)
 	var record BackupRunAdmission
-	if raw := bucket.Get(intentID); raw == nil || json.Unmarshal(raw, &record) != nil {
-		return true, fmt.Errorf("backup run admission is unavailable")
+	if raw := bucket.Get(intentID); raw == nil {
+		var pending BackupRunPending
+		if raw := tx.Bucket(backupRunPendingBucket).Get(intentID); raw == nil || json.Unmarshal(raw, &pending) != nil || pending.StatusEventID != eventID.Hex() {
+			return true, fmt.Errorf("backup run refusal status is unavailable")
+		}
+		return !pending.StatusDelivered, nil
+	} else if json.Unmarshal(raw, &record) != nil {
+		return true, fmt.Errorf("backup run admission is malformed")
 	}
 	return !record.StatusDelivered, nil
 }

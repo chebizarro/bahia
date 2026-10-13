@@ -43,9 +43,8 @@ type BackupRunPendingWriter interface {
 	StagePendingRun(context.Context, string, string, gonostr.Event, string, time.Time) (*localstore.BackupRunPending, error)
 }
 
-// New async intake remains paused until terminal signed-status settlement is
-// implemented; history/retry groundwork must not promise an immortal pending
-// outcome to operators.
+// New async intake remains paused until canonical credential recovery and
+// exactly-once execution are available.
 const backupRunAsyncIntakeEnabled = false
 
 // ErrBackupRunPending means the operator-signed request is durably queued but
@@ -391,16 +390,19 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	}
 	if pending != nil {
 		if pending.State == localstore.BackupRunRefusedState || !time.Now().UTC().Before(pending.ExpiresAt) {
-			return fmt.Errorf("%w: signed request expired without complete relay-history and signer proof", ErrBackupRunAdmissionConflict)
+			if pending.StatusDelivered {
+				return fmt.Errorf("%w: signed backup run rejected: %s", ErrBackupRunAdmissionConflict, pending.LastFailure)
+			}
+			return fmt.Errorf("%w: signed request expired or refused; terminal status awaits operator-relay quorum", ErrBackupRunAdmissionConflict)
 		}
 		if !backupRunAsyncIntakeEnabled {
-			return fmt.Errorf("%w: backup run request intake paused: terminal signed status settlement is unavailable", ErrBackupRunAdmissionConflict)
+			return fmt.Errorf("%w: backup run request intake paused: credential recovery and exactly-once execution are unavailable", ErrBackupRunAdmissionConflict)
 		}
 		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
 		return ErrBackupRunPending
 	}
 	if !backupRunAsyncIntakeEnabled {
-		return fmt.Errorf("backup run request intake paused: terminal signed status settlement is unavailable")
+		return fmt.Errorf("backup run request intake paused: credential recovery and exactly-once execution are unavailable")
 	}
 	if _, err := ValidateSignedBackupRunRequest(intent.Event, intent.Actor); err != nil {
 		return fmt.Errorf("backup run request is invalid: %w", err)

@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -13,17 +14,18 @@ import (
 
 // BackupRunHistoryRunner inspects cold-cache run coordinates outside the
 // ProcessSync path. It deliberately has no service-key signer: complete relay
-// history is only one prerequisite for future fenced admission.
+// history is only one prerequisite for future admission.
 type BackupRunHistoryRunner struct {
-	outbox    *localstore.Outbox
-	pool      *RelayPool
-	store     BackupRunHistoryStore
-	logger    *zap.Logger
-	wake      chan struct{}
-	now       func() time.Time
-	inspect   func(context.Context, BackupRunHistoryStore, nostr.PubKey, string) (*BackupRunHistoryProof, error)
-	mu        sync.Mutex
-	lastError string
+	outbox     *localstore.Outbox
+	pool       *RelayPool
+	store      BackupRunHistoryStore
+	logger     *zap.Logger
+	wake       chan struct{}
+	now        func() time.Time
+	inspect    func(context.Context, BackupRunHistoryStore, nostr.PubKey, string) (*BackupRunHistoryProof, error)
+	statusWake func()
+	mu         sync.Mutex
+	lastError  string
 }
 
 func NewBackupRunHistoryRunner(outbox *localstore.Outbox, pool *RelayPool, store BackupRunHistoryStore, logger *zap.Logger) (*BackupRunHistoryRunner, error) {
@@ -38,6 +40,8 @@ func NewBackupRunHistoryRunner(outbox *localstore.Outbox, pool *RelayPool, store
 }
 
 func (r *BackupRunHistoryRunner) Name() string { return "backup-run-history" }
+
+func (r *BackupRunHistoryRunner) SetStatusWake(wake func()) { r.statusWake = wake }
 
 func (r *BackupRunHistoryRunner) Wake() {
 	select {
@@ -62,8 +66,7 @@ func (r *BackupRunHistoryRunner) setError(err error) {
 
 // ReconcileOnce makes one bounded pass over the durable inbox. A failed or
 // stalled relay does not hold the sync goroutine, and one bad request does not
-// starve later records. Without a writer fence, even a complete proof cannot
-// cause service signing; the request remains pending until expiration.
+// starve later records. Complete history alone cannot enable paused admission.
 func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, error) {
 	if r == nil {
 		return time.Time{}, fmt.Errorf("backup run history runner unavailable")
@@ -83,8 +86,12 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 			}
 			now := r.now().UTC()
 			if !now.Before(record.ExpiresAt) {
-				if err := r.outbox.RecordBackupRunPendingAttempt(record.IntentID, record.RequestEvent.ID.Hex(), now, time.Time{}, "signed request expired before complete relay-history and signer proof"); err != nil && firstErr == nil {
-					firstErr = err
+				if err := r.outbox.RecordBackupRunPendingAttempt(record.IntentID, record.RequestEvent.ID.Hex(), now, time.Time{}, "signed request expired before backup-run admission"); err != nil {
+					if firstErr == nil {
+						firstErr = err
+					}
+				} else if r.statusWake != nil {
+					r.statusWake()
 				}
 				continue
 			}
@@ -110,7 +117,17 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 				cancel()
 			}
 			if err == nil {
-				err = fmt.Errorf("cross-process service-key signer fence is unavailable")
+				err = fmt.Errorf("backup run admission is paused")
+			}
+			if errors.Is(err, ErrBackupRunCoordinateExists) {
+				if writeErr := r.outbox.RefuseBackupRunPending(record.IntentID, record.RequestEvent.ID.Hex(), err.Error()); writeErr != nil {
+					if firstErr == nil {
+						firstErr = writeErr
+					}
+				} else if r.statusWake != nil {
+					r.statusWake()
+				}
+				continue
 			}
 			if firstErr == nil {
 				firstErr = err
@@ -131,6 +148,8 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 			}
 			if now.Before(record.ExpiresAt) {
 				earliest = earlierBackupRunHistoryWake(earliest, attempt)
+			} else if r.statusWake != nil {
+				r.statusWake()
 			}
 		}
 		if next == "" {
