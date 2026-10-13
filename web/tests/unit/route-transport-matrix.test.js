@@ -7,6 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../../..');
 const matrixPath = resolve(__dirname, '../fixtures/route-transport-matrix.json');
 const routesRoot = resolve(repoRoot, 'web/src/routes');
+const libRoot = resolve(repoRoot, 'web/src/lib');
 
 const matrix = JSON.parse(readFileSync(matrixPath, 'utf8'));
 const allowedClasses = new Set(matrix.taxonomy);
@@ -39,13 +40,13 @@ const mandatoryEntryIds = [
   'backend-rest-compatibility-routes'
 ];
 
-function walkRouteFiles(dir = routesRoot) {
+function walkSourceFiles(dir) {
   const files = [];
   for (const entry of readdirSync(dir)) {
     const fullPath = resolve(dir, entry);
     const stats = statSync(fullPath);
     if (stats.isDirectory()) {
-      files.push(...walkRouteFiles(fullPath));
+      files.push(...walkSourceFiles(fullPath));
       continue;
     }
     if (/\.(svelte|js|ts)$/.test(entry)) {
@@ -59,8 +60,8 @@ function repoRelative(path) {
   return relative(repoRoot, path).replaceAll('\\', '/');
 }
 
-function routeApiImports() {
-  return walkRouteFiles()
+function apiImports(root) {
+  return walkSourceFiles(root)
     .map((file) => {
       const source = readFileSync(file, 'utf8');
       const imports = [...source.matchAll(apiRouteImportScanPattern)].map((match) => match[1]);
@@ -70,7 +71,7 @@ function routeApiImports() {
 }
 
 function routePageFiles() {
-  return walkRouteFiles()
+  return walkSourceFiles(routesRoot)
     .map(repoRelative)
     .filter((file) => basename(file).startsWith('+page.'))
     .sort();
@@ -122,7 +123,7 @@ describe('route transport matrix', () => {
   });
 
   it('keeps REST/API route imports explicit and limited to non-signer-first surfaces', () => {
-    const actualImports = routeApiImports();
+    const actualImports = apiImports(routesRoot);
     const actualImportFiles = actualImports.map((entry) => entry.file).sort();
     const allowlistedFiles = matrix.route_file_rest_import_allowlist.map((entry) => entry.file).sort();
 
@@ -137,6 +138,23 @@ describe('route transport matrix', () => {
         expect(allowedClasses.has(transportClass), `${allow.file} references valid class ${transportClass}`).toBe(true);
         expect(signerFirstClasses.has(transportClass), `${allow.file} must not allow REST imports for signer-first classes`).toBe(false);
       }
+    }
+  });
+
+  it('keeps REST imports in $lib components explicit and shrinking', () => {
+    const actualImports = apiImports(libRoot);
+    const allowlist = matrix.lib_rest_import_allowlist;
+    expect(Array.isArray(allowlist)).toBe(true);
+    expect(actualImports.map((entry) => entry.file).sort()).toEqual(allowlist.map((entry) => entry.file).sort());
+
+    const actualByFile = new Map(actualImports.map((entry) => [entry.file, entry.imports]));
+    for (const allow of allowlist) {
+      expect(allow.file.startsWith('web/src/lib/'), 'allowlist entry is a $lib file').toBe(true);
+      expect(allow.allowed_usage, allow.file + ' documents why REST remains').toBeTruthy();
+      expect(allow.allowed_imports.length, allow.file + ' pins exact REST imports').toBeGreaterThan(0);
+      expect(actualByFile.get(allow.file)).toEqual([...allow.allowed_imports].sort());
+      expect(matrix.entries.some((entry) => (entry.control_files || []).includes(allow.file) &&
+        !signerFirstClasses.has(entry.transport_class)), allow.file + ' belongs to a non-signer-first surface').toBe(true);
     }
   });
 

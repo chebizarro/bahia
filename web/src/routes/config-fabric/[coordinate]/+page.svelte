@@ -17,7 +17,7 @@
   } from '$lib/config-fabric/model.js';
   import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
   import { configFabricDrift } from '$lib/config-fabric/store.js';
-  import { authorizedWrite } from '$lib/api/write.js';
+  import { publishConfigEvent } from '$lib/config-fabric/publish.js';
   import { ConfiguredIcon, RollbackIcon } from '$lib/icons/domain-icons.js';
 
   let rows = $state([]);
@@ -70,7 +70,7 @@
       const payload = { kind: source.kind, service_id: record.service_id, policy_name: record.policy_name,
         scope: record.scope, version, schema: source.schema,
         ...(source.kind === 30000 ? { items: source.items } : { policy: source.policy, secret_refs: source.secret_refs }) };
-      await authorizedWrite('/config-fabric/events', 'POST', payload);
+      await publishConfigEvent(payload);
       rollbackTarget = null;
       await loadDetail();
     } catch (err) {
