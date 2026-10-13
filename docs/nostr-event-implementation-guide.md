@@ -115,3 +115,12 @@ Only the signed canonical `30900` outbox event and relay OK proof permit
 - **Loom.** Job requests, status and results use Loom kinds; Bahia projects
   run health into `30315` and, when `loom.canonical_projection.enabled`,
   job state into `30900`/`4903`.
+
+## Hostname reservation family
+
+Use the existing `30900` intent and cp-state envelopes for public-hostname
+ownership; never allocate a wire kind. The plaintext reservation family is
+`CPStateFamilyHostnameReservation` (32049), `d=hostname:reservation:<host>`,
+`#t=hostname-reservation`. The plaintext recovery family is
+`CPStateFamilyHostnameRecovery` (32050), `d=hostname:recovery:<host>`,
+`#t=hostname-recovery`. See the [wire contract](event-spec.md#public-hostname-reservations).

@@ -49,3 +49,13 @@ For an end-to-end service hostname flow, see [Managed DNS and HTTPS Routes](../g
 - [Services](services.md)
 - [Deployments](deployments.md)
 - [Route Canaries](route-canaries.md)
+
+## Managed public hostname withdrawal
+
+A public hostname has a service-signed reservation separate from DNS zone and
+record state. The signed `hostname` `remove` intent checks the current
+reservation revision, re-reads the provider state, deletes only the
+Bahia-marked DNS record before removing the matching Tunnel ingress, then
+removes an owned internal HTTPS vhost when configured. Canonical recovery
+receipts expose the last completed phase after a restart. Foreign DNS records
+or a changed Tunnel origin stop withdrawal rather than being deleted.

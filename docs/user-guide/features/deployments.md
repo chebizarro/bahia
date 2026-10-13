@@ -34,6 +34,21 @@ bahia logs run <run-id> --tail 100
 
 `bahia rollback` creates a new desired-state intent for an explicit successful artifact and identifies the intent it supersedes. `bahia deployments route-attach` attaches managed HTTPS to a current deployment.
 
+Public HTTPS requires a separate signed hostname `set` intent for the exact
+reviewed plan before route attachment or deployment. `preserve` keeps the
+canonical reservation unchanged; `remove` withdraws the owned DNS record
+first, then Tunnel ingress and managed internal HTTPS, and signs a tombstone.
+A later `service/deploy` or `service/deploy-preview` request defaults to
+`route_mutation=preserve` when `public_route` is absent: it carries the current
+claimed route into the new desired-state hash. `route_mutation=set` requires a
+`public_route` and an exact claim before deployment; `route_mutation=remove`
+requires the prior route's signed release tombstone and no `public_route`.
+This prevents an omitted field from silently removing a route. Reclaim uses
+the tombstone's `updated_at` as `expected_updated_at`. See
+[Nostr integration](../nostr-integration.md#public-hostname-mutation). Direct
+route auto-apply remains guarded where the revision-fenced runtime effect
+adapter is unavailable; a reservation is ownership, not proof of deployment.
+
 ## MCP
 
 Deployment tools include `bahia_deploy`, `bahia_rollback`, intent list/get/approve/reject tools, run list/get/create/complete tools, status, and run-log retrieval. A `pending` tool result is successful admission, not final convergence.

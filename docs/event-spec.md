@@ -653,3 +653,35 @@ raw environment values, Docker TLS material or credentials:
 | `runtime.deploy`, `runtime.restart`, `runtime.stop` | `service_id`, `environment_id`, `runtime_target`, `observation_id`, `health_status` |
 | `llm_route.created/updated`, `llm_release.registered`, `llm_deployment_intent.*`, `llm_deployment_run.*`, `llm_route.observation`, `llm_route_state.changed`, `llm_route.drift_detected`, `llm_gateway_route.synced` | `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id` |
 | `security.policy_breached` | `policy_id`, `target_key_hash`, `fingerprint`, `severity_counts`, `violated_rules`; emitted only when the breach fingerprint is new or materially changed |
+
+## Public hostname reservations
+
+Public-hostname mutation is an operator-signed `30900` intent with
+`domain=hostname`, `schema=bahia.intent.hostname.v1`, `t=bahia-intent`,
+`d=hostname:reservation:<normalized-hostname>`, `org=<owner-org>`, and a
+UUIDv7 `intent_id`. The explicit `op` is `set`, `preserve`, or `remove`.
+Content includes `hostname`, `service_id`, `environment_id`,
+`deployment_unit_id`, and the same `intent_id`. `set` additionally carries
+one complete `plan` (`DesiredPublicRoutePlan`); the other operations carry no
+plan. A first set omits `expected_updated_at`. Every operation against an
+existing live record or tombstone carries that record's RFC3339Nano
+`updated_at`. The service and environment must have matching service-signed
+canonical organization records. A stale token receives a checked `conflict`
+status; an older observed trusted intent receives `superseded`. Intent winners
+use latest `created_at`, lowest event ID on ties.
+
+The service signs a plaintext `30900` cp-state reservation with
+`legacy_kind=32049`, `domain=route`, `t=hostname-reservation`, and
+`d=hostname:reservation:<normalized-hostname>`. Its content binds owner IDs,
+complete route plan, `updated_at`, requester, and signed intent event ID.
+Removal signs a `deleted=true` tombstone on the same coordinate, retaining
+owner IDs and the revision required for reclamation. The separate plaintext
+`legacy_kind=32050`, `t=hostname-recovery`,
+`d=hostname:recovery:<normalized-hostname>` record binds the exact removal
+intent and plan and advances through `prepared`, `dns_withdrawn`,
+`tunnel_withdrawn`, and (when configured) `internal_withdrawn`. The provider
+re-reads DNS and Tunnel state under the active canonical claim; DNS is
+withdrawn before Tunnel ingress. A failed receipt stops the next effect, and
+replay rechecks provider state before resuming. No PostgreSQL row, lease, or
+cache lookup decides ownership. The configured service signer is the single
+writer; route application refuses plans without an exact canonical claim.

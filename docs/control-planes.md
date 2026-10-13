@@ -170,3 +170,13 @@ filter after decryption. Older tagged records remain readable.
   NIP-42 challenge. See [web app setup](web-app-setup.md).
 - **MCP**: tool names, arguments and auth are in the
   [MCP tools reference](user-guide/mcp-tools.md).
+
+## Public hostname control
+
+An operator signs a `hostname` `30900` intent (`set`, `preserve`, or `remove`)
+for the normalized hostname coordinate. The service-signed reservation and
+recovery receipts are subscribed by `#t=hostname-reservation` and
+`#t=hostname-recovery`; the requester-scoped `30315` reports accepted,
+conflict, rejected, or superseded. A route plan may be applied only while its
+exact service-signed reservation is active. PostgreSQL does not decide
+ownership. See the [event spec](event-spec.md#public-hostname-reservations).

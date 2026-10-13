@@ -53,6 +53,17 @@ export function deploymentRouteAttachIntent(payload, orgId, intentId = mintEntit
     orgId, fields, intentId);
 }
 
+export function hostnameRouteMutationIntent(payload, orgId, intentId = mintEntityId()) {
+  const { org_id, idempotency_key, ...fields } = payload;
+  const hostname = required(fields.hostname, 'Hostname').toLowerCase().replace(/\.$/, '');
+  const op = required(fields.route_mutation, 'Route mutation');
+  if (!['preserve', 'set', 'remove'].includes(op)) throw new Error('Invalid route mutation');
+  if ((op === 'set') !== Boolean(fields.plan)) throw new Error('Set requires a complete plan; preserve and remove must not carry one');
+  delete fields.route_mutation;
+  return intent('hostname', op, `hostname:reservation:${hostname}`, orgId,
+    { ...fields, hostname }, intentId);
+}
+
 export function policyEvaluateIntent(payload, orgId, intentId = mintEntityId()) {
   const artifactId = required(payload?.artifact_id, 'Artifact id');
   const environmentId = required(payload?.environment_id, 'Environment id');

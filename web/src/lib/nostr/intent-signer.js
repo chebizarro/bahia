@@ -37,7 +37,7 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
     'version-create', 'version-update', 'version-delete', 'endpoint-create', 'endpoint-update', 'endpoint-delete',
     'cordon', 'uncordon', 'drain', 'undrain', 'maintenance-enter', 'maintenance-exit',
     'labels-update', 'cleanup', 'register', 'import-observed', 'import',
-    'drift-remediate', 'preview', 'route-attach', 'evaluate',
+    'drift-remediate', 'preview', 'route-attach', 'preserve', 'set', 'remove', 'evaluate',
     'model-import', 'recipe-run', 'inference-deploy', 'inference-approval', 'inference-rollback',
     'approval-response', 'request', 'scan', 'scan-run', 'generate', 'signature-verify',
     'register-build-result', 'policy-set', 'channel-test', 'worker-policy-apply', 'pin', 'rekey'].includes(op)) {
