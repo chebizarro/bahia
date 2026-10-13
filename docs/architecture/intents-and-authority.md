@@ -304,13 +304,18 @@ authenticated by the operator-signed NIP-59 seal. Configuration never seeds this
 canonical policy family; `hiveci.policies` remains a separate fleet build-
 dependency dispatch allowlist.
 
-The `tool/approval-response` handler accepts only an operator-signed `30900`
-envelope whose actor, coordinate, operation, idempotency key, and content match
-the signature. It returns a checked, service-signed rejection status; it does
-not read or mutate a SQL provisioning row or dispatch a build. MCP's locally
-constructed event identity is not an operator signature and cannot authorize
-tool effects. Tool approval stays suspended until a canonical request receipt
-and restart-safe effect commit bind the approved inputs to the operator event.
+The bounded canonical tool path accepts a fleet-operator-signed `30900`
+`tool/request` and a separate operator-signed `tool/approval-response`. The
+decision must name the exact request event ID at `tool-approval:<request-id>`;
+both normal `30315` acceptance statuses require retained target/quorum relay
+proof before any effect. A local outbox-side admission binds the decision-time
+canonical Docker service, environment, deployment-intent and artifact winners,
+denied-package winners, and Signet credential/version pins. Build and deploy
+use separate filesystem-fenced effect/checkpoint receipts. Denial is a signed
+terminal status with no effect. SQL provisioning rows and MCP's constructed
+event identity are never authority. Legacy ContextVM tool requests, unsigned
+MCP tool provisioning, and non-Docker or public-route effects remain paused
+(`bahia-4f10q.2.1`).
 
 Side effects must be idempotent, because a crash between the side effect and
 step 6 replays the intent on restart: creates resolve by id

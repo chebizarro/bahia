@@ -2207,7 +2207,7 @@ func (s *Server) handleCompleteRun(ctx context.Context, args map[string]interfac
 }
 
 func (s *Server) handleToolProvisionRequest(_ context.Context, _ map[string]interface{}) (*ToolResult, error) {
-	return errorResult("tool provisioning request paused: operator-signed canonical request acceptance and restart-safe effect commit are unavailable"), nil
+	return errorResult("tool provisioning request paused (bahia-4f10q.2.1): MCP cannot manufacture an operator-signed tool request; submit a signed tool/request kind-30900 intent through the relay"), nil
 }
 
 func (s *Server) handleToolDenylistAdd(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {

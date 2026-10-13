@@ -792,7 +792,23 @@ func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Ti
 }
 
 func isProofEligibleEvent(ev nostr.Event) bool {
-	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev)
+	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev) || isToolAcceptedStatusEvent(ev)
+}
+
+// Tool effects wait for an exact, publisher-verified relay quorum acceptance
+// of both the request and approval. Ordinary outbox enqueue is not proof.
+func isToolAcceptedStatusEvent(ev nostr.Event) bool {
+	if ev.Kind != 30315 || outboxTag(ev.Tags, "domain") != "intent" ||
+		outboxTag(ev.Tags, "t") != "intent-status" || outboxTag(ev.Tags, "status") != "accepted" ||
+		outboxTag(ev.Tags, "intent_id") == "" || outboxTag(ev.Tags, "p") == "" {
+		return false
+	}
+	coordinate, ok := strings.CutPrefix(outboxTag(ev.Tags, "d"), "intent-status:"+outboxTag(ev.Tags, "p")+":")
+	if !ok || (!strings.HasPrefix(coordinate, "tool-request:") && !strings.HasPrefix(coordinate, "tool-approval:")) {
+		return false
+	}
+	_, err := nostr.IDFromHex(outboxTag(ev.Tags, "e"))
+	return err == nil
 }
 
 func isDeploymentPolicyEvent(ev nostr.Event) bool {
