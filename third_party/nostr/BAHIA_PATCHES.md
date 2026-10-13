@@ -6,6 +6,17 @@ wired in via `replace fiatjaf.com/nostr => ./third_party/nostr` in the root
 `go.mod`. `libsecp256k1/` is excluded by the module's own `.gitignore`; it is
 only compiled under the `libsecp256k1` build tag, which Bahia does not use.
 
+## Library logging defaults (bahia-ooqwr)
+
+`log.go` defaults `InfoLogger` and `DebugLogger` to `io.Discard`, rather than
+stderr. The library can log complete relay events (including confidential
+content) when a relay sends a mismatching EVENT; NIP-17 also logs an event on
+unwrap failure. Configuring the loggers only in one Bahia bootstrap path misses
+binaries that import the library directly. Callers still receive operation
+errors and log them through their own logger. Do not restore stderr defaults
+when re-vendoring. The server, relay and CLI startup-contract tests assert the
+shared default.
+
 ## Build and test wiring
 
 - `Dockerfile` copies `third_party/nostr/go.mod` and `go.sum` before

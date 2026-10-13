@@ -1164,6 +1164,7 @@ type ReconcileConfig struct {
 type RuntimeTargetConfig struct {
 	Type          string `koanf:"type" secret:"false"`
 	DockerHost    string `koanf:"docker_host" secret:"false"`
+	PodmanHost    string `koanf:"podman_host" secret:"false"`
 	EndpointRef   string `koanf:"endpoint_ref" secret:"false"`
 	ComposeDir    string `koanf:"compose_dir" secret:"false"`
 	BahiaOwned    *bool  `koanf:"bahia_owned" secret:"false"`
@@ -1245,6 +1246,7 @@ type RuntimeConfig struct {
 	// Legacy flat fields.
 	Type          string          `koanf:"type" secret:"false"`
 	DockerHost    string          `koanf:"docker_host" secret:"false"`
+	PodmanHost    string          `koanf:"podman_host" secret:"false"`
 	ComposeDir    string          `koanf:"compose_dir" secret:"false"`
 	BahiaOwned    *bool           `koanf:"bahia_owned" secret:"false"`
 	ExecutionMode string          `koanf:"execution_mode" secret:"false"`

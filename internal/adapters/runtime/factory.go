@@ -84,7 +84,10 @@ func NewRuntime(cfg RuntimeConfig, logger *zap.Logger) (Runtime, error) {
 		), nil
 
 	case domain.RuntimeTypePodman:
-		host := cfg.PodmanHost
+		host := strings.TrimSpace(cfg.Endpoint.DockerHost)
+		if host == "" {
+			host = strings.TrimSpace(cfg.PodmanHost)
+		}
 		if host == "" {
 			// Default to rootless Podman socket
 			host = fmt.Sprintf("unix:///run/user/%d/podman/podman.sock", os.Getuid())
@@ -146,6 +149,7 @@ func RuntimeConfigFromWorkerTarget(target *domain.WorkerRuntimeTarget, cfg confi
 
 	runtimeCfg := RuntimeConfig{
 		Type:          string(rt),
+		PodmanHost:    strings.TrimSpace(cfg.PodmanHost),
 		ComposeDir:    strings.TrimSpace(target.ComposeDir),
 		ExecutionMode: strings.TrimSpace(target.ExecutionMode),
 		KubeNamespace: strings.TrimSpace(target.KubeNamespace),

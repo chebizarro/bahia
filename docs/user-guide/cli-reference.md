@@ -127,7 +127,7 @@ bahia environments units create <environment-id> --file unit.json [--default-uni
 bahia environments units update <environment-id> <key> --file unit.json
 ```
 
-`--units-file` replaces the complete explicit unit set (`[]` returns to the implicit default); omitting it on update leaves units unchanged. Unit flags (`--unit-key`, `--unit-runtime-type`, `--unit-endpoint-ref`, `--unit-compose-dir`, `--unit-reconcile-mode`, …) describe a single unit inline; unit JSON follows `schemas/deployment_unit.json`. Environment-level flags cover `--strategy` (`replace`, `blue_green`, `canary`), `--reconcile-mode` and `--default-reconcile-mode` (`observe_only`, `auto_apply`, `approval_required`, `disabled`), `--protected`, `--secret-scope-mode` (`service`, `environment`, `unit`), `--failure-domain-label`, `--runtime-config-file`, and `--loom-worker-selector-file`.
+`--units-file` replaces the complete explicit unit set (`[]` returns to the implicit default); omitting it on update leaves units unchanged. Unit flags (`--unit-key`, `--unit-runtime-type`, `--unit-endpoint-ref`, `--unit-compose-dir`, `--unit-reconcile-mode`, …) describe a single unit inline. Unit `runtime_type` accepts `docker`, `compose`, `kubernetes`, `podman`, `vm-firecracker`, or `vm-qemu`; the domain validator is authoritative. Environment-level flags cover `--strategy` (`replace`, `blue_green`, `canary`), `--reconcile-mode` and `--default-reconcile-mode` (`observe_only`, `auto_apply`, `approval_required`, `disabled`), `--protected`, `--secret-scope-mode` (`service`, `environment`, `unit`), `--failure-domain-label`, `--runtime-config-file`, and `--loom-worker-selector-file`.
 
 ### builds and artifacts
 
@@ -183,7 +183,7 @@ bahia adopt import --org "$ORG" --target prod=prod-docker --all --non-secret-env
 bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id> --secret-ref DB_PASSWORD=cred_<id>:1
 ```
 
-Targets are server-managed endpoint references (`alias=endpointRef`); `--raw-target alias=dockerHost` is accepted only when the daemon sets `adoption.allow_raw_docker_hosts`. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`. `--secret-ref KEY=credential-id:version` (repeatable) binds an inline environment key to a pre-imported Signet credential labelled `<org-id>/<service-id>/<name>`; the signed intent carries only `secret_refs`. Unmapped sensed-secret keys are refused by name. `--non-secret-env KEY` (repeatable) declares a key flagged by name that is not a secret; it cannot also have a reference.
+Targets are server-managed endpoint references (`alias=endpointRef`); signed adoption does not accept raw Docker hosts. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`. `--secret-ref KEY=credential-id:version` (repeatable) binds an inline environment key to a pre-imported Signet credential labelled `<org-id>/<service-id>/<name>`; the signed intent carries only `secret_refs`. Unmapped sensed-secret keys are refused by name. `--non-secret-env KEY` (repeatable) declares a key flagged by name that is not a secret; it cannot also have a reference.
 
 ### dns
 

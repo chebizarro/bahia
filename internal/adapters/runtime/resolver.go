@@ -81,6 +81,7 @@ func (r *ConfigRuntimeResolver) Resolve(service *domain.Service, env *domain.Env
 	rt, err := NewRuntime(RuntimeConfig{
 		Type:          target.Type,
 		DockerHost:    target.DockerHost,
+		PodmanHost:    target.PodmanHost,
 		ComposeDir:    target.ComposeDir,
 		BahiaOwned:    target.BahiaOwned,
 		ExecutionMode: target.ExecutionMode,
@@ -102,6 +103,7 @@ func (r *ConfigRuntimeResolver) resolveTarget(env *domain.Environment) (config.R
 	target := config.RuntimeTargetConfig{
 		Type:          r.cfg.Type,
 		DockerHost:    r.cfg.DockerHost,
+		PodmanHost:    r.cfg.PodmanHost,
 		EndpointRef:   "",
 		ComposeDir:    r.cfg.ComposeDir,
 		BahiaOwned:    r.cfg.BahiaOwned,
@@ -142,6 +144,9 @@ func overlayTarget(base, override config.RuntimeTargetConfig) config.RuntimeTarg
 	}
 	if override.DockerHost != "" {
 		base.DockerHost = override.DockerHost
+	}
+	if override.PodmanHost != "" {
+		base.PodmanHost = override.PodmanHost
 	}
 	if override.EndpointRef != "" {
 		base.EndpointRef = override.EndpointRef
@@ -221,6 +226,8 @@ func overlayRuntimeConfig(base config.RuntimeTargetConfig, values map[string]any
 			typeExplicit = true
 		case "docker_host":
 			base.DockerHost = value
+		case "podman_host":
+			base.PodmanHost = value
 		case "endpoint_ref":
 			base.EndpointRef = value
 		case "compose_dir":
@@ -328,6 +335,7 @@ func runtimeCacheKey(target config.RuntimeTargetConfig) string {
 	return strings.Join([]string{
 		target.Type,
 		target.DockerHost,
+		target.PodmanHost,
 		target.EndpointRef,
 		target.ResolvedEndpoint.CACertFile,
 		target.ResolvedEndpoint.ClientCertFile,

@@ -733,14 +733,13 @@ func adoptCommands() *cobra.Command {
 	cmd := &cobra.Command{Use: "adopt", Short: "Scan and import existing Docker workloads"}
 
 	var scanTargets []string
-	var scanRawTargets []string
 	var scanEnvironments []string
 	var scanOffset, scanLimit int
 	scanCmd := &cobra.Command{
 		Use:   "scan",
 		Short: "Preview adoptable containers from Docker targets",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			targets, err := parseAdoptionTargets(scanTargets, scanRawTargets, scanEnvironments)
+			targets, err := parseAdoptionTargets(scanTargets, scanEnvironments)
 			if err != nil {
 				return err
 			}
@@ -759,14 +758,12 @@ func adoptCommands() *cobra.Command {
 		},
 	}
 	scanCmd.Flags().StringArrayVar(&scanTargets, "target", nil, "Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)")
-	scanCmd.Flags().StringArrayVar(&scanRawTargets, "raw-target", nil, "Compatibility raw Docker target as alias=dockerHost (requires server allow_raw_docker_hosts)")
 	scanCmd.Flags().StringArrayVar(&scanEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
 	scanCmd.Flags().IntVar(&scanOffset, "offset", 0, "Finding offset for a bounded scan page")
 	scanCmd.Flags().IntVar(&scanLimit, "limit", 20, "Maximum findings in the status page (1-100)")
 	scanCmd.Flags().String("idempotency-key", "", "Explicit UUIDv7 intent ID for safe scan replay")
 
 	var importTargets []string
-	var importRawTargets []string
 	var importEnvironments []string
 	var importSelections []string
 	var importAll bool
@@ -777,7 +774,7 @@ func adoptCommands() *cobra.Command {
 		Use:   "import",
 		Short: "Import selected or all discovered containers into Bahia",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			targets, err := parseAdoptionTargets(importTargets, importRawTargets, importEnvironments)
+			targets, err := parseAdoptionTargets(importTargets, importEnvironments)
 			if err != nil {
 				return err
 			}
@@ -802,7 +799,6 @@ func adoptCommands() *cobra.Command {
 		},
 	}
 	importCmd.Flags().StringArrayVar(&importTargets, "target", nil, "Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)")
-	importCmd.Flags().StringArrayVar(&importRawTargets, "raw-target", nil, "Compatibility raw Docker target as alias=dockerHost (requires server allow_raw_docker_hosts)")
 	importCmd.Flags().StringArrayVar(&importEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
 	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
@@ -870,7 +866,7 @@ func flattenAdoptionPreviewRows(previews *adoptionScanStatus) []adoptionPreviewR
 	return rows
 }
 
-func parseAdoptionTargets(targetFlags, rawTargetFlags, environmentFlags []string) ([]client.AdoptionTarget, error) {
+func parseAdoptionTargets(targetFlags, environmentFlags []string) ([]client.AdoptionTarget, error) {
 	environments := map[string]string{}
 	for _, raw := range environmentFlags {
 		alias, envName, err := parseKeyValueFlag(raw, "environment")
@@ -884,10 +880,10 @@ func parseAdoptionTargets(targetFlags, rawTargetFlags, environmentFlags []string
 		}
 		environments[alias] = envName
 	}
-	if len(targetFlags) == 0 && len(rawTargetFlags) == 0 {
-		return nil, fmt.Errorf("at least one --target endpointRef or --raw-target alias=dockerHost is required")
+	if len(targetFlags) == 0 {
+		return nil, fmt.Errorf("at least one --target endpointRef is required")
 	}
-	targets := make([]client.AdoptionTarget, 0, len(targetFlags)+len(rawTargetFlags))
+	targets := make([]client.AdoptionTarget, 0, len(targetFlags))
 	seen := map[string]struct{}{}
 	for _, raw := range targetFlags {
 		aliasRaw := strings.TrimSpace(raw)
@@ -905,21 +901,6 @@ func parseAdoptionTargets(targetFlags, rawTargetFlags, environmentFlags []string
 		}
 		seen[alias] = struct{}{}
 		targets = append(targets, client.AdoptionTarget{Name: alias, EndpointRef: endpointRef, EnvironmentName: environments[alias]})
-	}
-	for _, raw := range rawTargetFlags {
-		alias, host, err := parseKeyValueFlag(raw, "raw-target")
-		if err != nil {
-			return nil, err
-		}
-		alias = normalizeAdoptionFlagName(alias)
-		if alias == "" {
-			return nil, fmt.Errorf("raw target alias is invalid")
-		}
-		if _, ok := seen[alias]; ok {
-			return nil, fmt.Errorf("duplicate target alias %q", alias)
-		}
-		seen[alias] = struct{}{}
-		targets = append(targets, client.AdoptionTarget{Name: alias, DockerHost: host, EnvironmentName: environments[alias]})
 	}
 	for alias := range environments {
 		if _, ok := seen[alias]; !ok {

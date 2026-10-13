@@ -52,7 +52,6 @@
 1	internal/adapters/nostr.EncodeRecoveryWorkflowEvent
 1	internal/adapters/nostr.EncodeReplayCheckpoint
 1	internal/adapters/nostr.EncodeReplicationPolicyEvent
-1	internal/adapters/nostr.EncodeStandbyNodeDefinitionEvent
 1	internal/adapters/nostr.KindCatalog.LiveGroups
 1	internal/adapters/nostr.KindCatalog.SnapshotGroups
 1	internal/adapters/nostr.KindSystemDiscovery

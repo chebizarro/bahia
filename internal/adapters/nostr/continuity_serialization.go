@@ -239,36 +239,6 @@ func DecodeRecoveryWorkflowEvent(event *gonostr.Event) (*domain.ContinuityRecipe
 	return decodeContinuityRecipeEvent(event, KindRecoveryWorkflow, domain.ContinuityRecipeKindRecovery)
 }
 
-// EncodeStandbyNodeDefinitionEvent serializes a standby definition as kind 31402 tags.
-func EncodeStandbyNodeDefinitionEvent(def StandbyNodeDefinition) (gonostr.Event, error) {
-	if err := validateStandbyNodeDefinition(&def); err != nil {
-		return gonostr.Event{}, err
-	}
-	tags := gonostr.Tags{
-		{"d", standbyDefinitionDTag(def)},
-		{"worker", def.WorkerPubKey},
-		{"p", def.WorkerPubKey},
-		{"host", def.Host},
-		{"role", def.Role},
-		{"service", def.ServiceKey},
-	}
-	if def.Tier != "" {
-		tags = append(tags, gonostr.Tag{"tier", string(def.Tier)})
-	}
-	if def.ArtifactRef != "" {
-		tags = append(tags, gonostr.Tag{"artifact_ref", def.ArtifactRef})
-	}
-	for _, support := range sortedStrings(def.Supports) {
-		tags = append(tags, gonostr.Tag{"supports", support})
-	}
-	profiles := append([]domain.ContinuityMode(nil), def.Profiles...)
-	sort.Slice(profiles, func(i, j int) bool { return string(profiles[i]) < string(profiles[j]) })
-	for _, profile := range profiles {
-		tags = append(tags, gonostr.Tag{"profile", string(profile)})
-	}
-	return continuityEventBase(KindStandbyNodeDefinition, tags, ""), nil
-}
-
 // DecodeStandbyNodeDefinitionEvent deserializes a kind 31402 standby definition event.
 func DecodeStandbyNodeDefinitionEvent(event *gonostr.Event) (*StandbyNodeDefinition, error) {
 	if event == nil {
@@ -657,10 +627,6 @@ func validateStandbyNodeDefinition(def *StandbyNodeDefinition) error {
 		}
 	}
 	return nil
-}
-
-func standbyDefinitionDTag(def StandbyNodeDefinition) string {
-	return "standby-node:" + def.WorkerPubKey + ":" + def.ServiceKey
 }
 
 func validateReplicationPolicy(policy *domain.ReplicationPolicy) error {

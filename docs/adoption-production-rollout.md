@@ -19,7 +19,6 @@ adoption:
   enabled: true
   allowed_pubkeys:
     - <64-hex-operator-pubkey>
-  allow_raw_docker_hosts: false
   allow_compose_takeover: false
 runtime:
   endpoints:
@@ -34,9 +33,9 @@ runtime:
 requests. Configuration fails when adoption is enabled without
 `auth.enabled`, a service key, or an `allowed_pubkeys` entry.
 
-Prefer named `runtime.endpoints`. `--raw-target` is accepted only when
-`adoption.allow_raw_docker_hosts: true`; raw Docker connection material must
-not be placed in an intent or relay-visible event.
+Use named `runtime.endpoints`. Signed adoption intents accept only endpoint
+references; raw Docker hosts are not a CLI target and must not be placed in an
+intent or relay-visible event.
 
 ## Scan
 
@@ -84,6 +83,10 @@ mutually exclusive with an empty selection only in the sense that one of
 `--all` or `--select` is required. Repeat `--select` for multiple containers.
 
 ### SF-04: inline environment secrets
+
+Select a server-managed endpoint with `--target alias=endpointRef` before
+reviewing sensitive environment keys; a raw Docker host is not a signer-first
+input.
 
 Before importing a container with inline secrets, attempt the import once
 without references. The refused candidate status names the sensitive keys and
