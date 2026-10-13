@@ -165,9 +165,64 @@ func TestCredentialStoreResolveAllAdmitsTheFallbackWorstCase(t *testing.T) {
 		t.Fatalf("ResolveAll across a version-reporting change: %v", err)
 	}
 	secretstore.ZeroizeAll(values)
-	// First request: deliver (no version), inspect, deliver, inspect; the
-	// second already knows Signet stopped: inspect, deliver, inspect.
-	if got := len(f.vault.seen()) - before; got != 7 {
-		t.Fatalf("Signet saw %d requests, want 7", got)
+	// Both requests can start with the cached one-trip path before either
+	// detects that Signet stopped reporting versions, then each brackets a
+	// fresh delivery with metadata reads.
+	if got := len(f.vault.seen()) - before; got != 8 {
+		t.Fatalf("Signet saw %d requests, want 8", got)
+	}
+}
+
+func TestCredentialStoreResolveAllOverlapsRepliesOnSharedSession(t *testing.T) {
+	f := newVaultFixture(t, 10*time.Second)
+	f.vault.set(func(v *fakeVault) { v.reportVersion = true })
+	var reqs []secretstore.Request
+	for _, name := range []string{"A", "B"} {
+		id := f.vault.put("bahia-vault", f.label(name), 1, "active", "value-"+name)
+		if _, err := f.store.Inspect(f.ctx, id, f.scope); err != nil {
+			t.Fatal(err)
+		}
+		reqs = append(reqs, secretstore.Request{Ref: ref(id, 1), Scope: f.scope})
+	}
+	value, err := f.store.Resolve(f.ctx, reqs[0].Ref, f.scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Zeroize()
+	first, second, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	f.vault.set(func(v *fakeVault) {
+		v.concurrentReplies = true
+		v.afterDeliver = func(id string) {
+			if id == reqs[0].Ref.CredentialID {
+				close(first)
+				<-release
+			} else {
+				close(second)
+			}
+		}
+	})
+	ctx, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		values, err := f.store.ResolveAll(ctx, reqs)
+		secretstore.ZeroizeAll(values)
+		result <- err
+	}()
+	select {
+	case <-first:
+	case <-ctx.Done():
+		close(release)
+		t.Fatal("first delivery was not sent")
+	}
+	select {
+	case <-second:
+	case <-ctx.Done():
+		close(release)
+		t.Fatal("second delivery waited for the first reply")
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatal(err)
 	}
 }

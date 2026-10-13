@@ -92,14 +92,17 @@ type CredentialStore struct {
 	cancel       context.CancelFunc
 	done         chan struct{}
 
-	mu       sync.Mutex
-	pending  map[string]chan signetJSONRPCResponse
-	ready    chan struct{} // closed while the reply subscription is caught up
-	subErr   error         // why the subscription is not caught up
-	everDown bool          // a subscription ended at least once
-	lastAt   time.Time
-	lastErr  error
-	everDone bool
+	mu sync.Mutex
+	// A declared outbound operation permits one publication at a time, but
+	// replies to already-published requests can remain in flight.
+	batchPublishMu sync.Mutex
+	pending        map[string]chan signetJSONRPCResponse
+	ready          chan struct{} // closed while the reply subscription is caught up
+	subErr         error         // why the subscription is not caught up
+	everDown       bool          // a subscription ended at least once
+	lastAt         time.Time
+	lastErr        error
+	everDone       bool
 	// labels holds the label of every credential an Inspect admitted. A
 	// credential id is a digest of (owner, type, label), so an id's label
 	// never changes and a cached label proves its tenant without a round
@@ -114,6 +117,10 @@ type CredentialStore struct {
 // delivery that comes back without a version (Signet stopped reporting
 // versions) and is retried as inspect, deliver, inspect.
 const maxRoundTripsPerResolve = 4
+
+// Signet has no multi-credential delivery method. This bounds the number of
+// independent requests sharing the store's supervised reply subscription.
+const maxConcurrentResolves = 4
 
 // maxCachedLabels bounds the label cache; it is cleared when full.
 const maxCachedLabels = 4096
@@ -320,9 +327,9 @@ func (s *CredentialStore) Resolve(ctx context.Context, ref domain.SecretCredenti
 	return value, nil
 }
 
-// ResolveAll resolves reqs in order as one declared outbound operation, so
-// their gift wraps are paced on the bulk lane instead of being refused by
-// the priority lane's burst. It is all or nothing.
+// ResolveAll resolves reqs through one shared reply subscription and declared
+// outbound operation. Independent Signet deliveries overlap, but admission
+// still paces each gift wrap on the bulk lane. It is all or nothing.
 func (s *CredentialStore) ResolveAll(ctx context.Context, reqs []secretstore.Request) ([]*secretstore.Value, error) {
 	if len(reqs) == 0 {
 		return nil, nil
@@ -334,14 +341,29 @@ func (s *CredentialStore) ResolveAll(ctx context.Context, reqs []secretstore.Req
 	}
 	defer op.Close()
 	ctx = nostrout.WithOperation(ctx, op)
-	values := make([]*secretstore.Value, 0, len(reqs))
-	for i, req := range reqs {
-		value, err := s.Resolve(ctx, req.Ref, req.Scope)
+	values := make([]*secretstore.Value, len(reqs))
+	errs := make([]error, len(reqs))
+	work := make(chan int)
+	var workers sync.WaitGroup
+	for range min(len(reqs), maxConcurrentResolves) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := range work {
+				values[i], errs[i] = s.Resolve(ctx, reqs[i].Ref, reqs[i].Scope)
+			}
+		}()
+	}
+	for i := range reqs {
+		work <- i
+	}
+	close(work)
+	workers.Wait()
+	for i, err := range errs {
 		if err != nil {
 			secretstore.ZeroizeAll(values)
 			return nil, &secretstore.BatchError{Index: i, Err: err}
 		}
-		values = append(values, value)
 	}
 	return values, nil
 }
@@ -434,6 +456,10 @@ func (s *CredentialStore) call(ctx context.Context, method string, params map[st
 	// early when no relay accepted the request.
 	published := make(chan error, 1)
 	go func() {
+		if nostrout.OperationFromContext(ctx) != nil {
+			s.batchPublishMu.Lock()
+			defer s.batchPublishMu.Unlock()
+		}
 		results, err := s.pool.PublishWithResults(ctx, gift)
 		published <- s.publishOutcome(method, results, err)
 	}()
