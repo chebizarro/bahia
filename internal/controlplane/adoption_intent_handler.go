@@ -64,7 +64,7 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		if scan.Offset < 0 || scan.Limit < 0 || scan.Limit > 100 {
 			return fmt.Errorf("scan offset must be non-negative and limit must be 0..100")
 		}
-		targets, err := mapAdoptionEventTargets(scan.Targets)
+		targets, err := mapAdoptionEventTargets(scan.Targets, false)
 		if err != nil {
 			return err
 		}
@@ -79,10 +79,10 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		intent.StatusData["total_findings"] = count
 		return nil
 	}
-	if !request.ImportAll && len(request.Selections) == 0 {
-		return fmt.Errorf("import requires import_all=true or at least one selection")
+	if request.ImportAll || len(request.Selections) == 0 {
+		return fmt.Errorf("signed import requires explicit selections with author-minted service IDs; scan and select each workload")
 	}
-	targets, err := mapAdoptionEventTargets(request.Targets)
+	targets, err := mapAdoptionEventTargets(request.Targets, true)
 	if err != nil {
 		return err
 	}
@@ -102,9 +102,8 @@ func (h *AdoptionIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 	if err := validateAdoptionSecretRefs(request.SecretRefs, request.NonSecretEnvKeys); err != nil {
 		return err
 	}
-	// The intent id keys the resources minted per request, so re-processing
-	// this intent after a crash or a failed publish resumes onto the same
-	// canonical coordinates.
+	// The signed IDs fix new resource coordinates across retries. RequestID
+	// still keys request-scoped observation records.
 	results, err := h.adoption.Import(ctx, service.AdoptionImportRequest{Targets: targets, Selections: selections, ImportAll: request.ImportAll, OrgID: intent.OrgID, RequestID: intent.IntentID, Actor: intent.Actor, NonSecretEnvKeys: request.NonSecretEnvKeys, SecretRefs: request.SecretRefs})
 	if results != nil {
 		intent.Result = map[string]any{"imports": dto.AdoptionImportResultResponsesFromService(results)}

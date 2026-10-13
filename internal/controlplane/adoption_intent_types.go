@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
@@ -107,6 +108,7 @@ type adoptionEventTarget struct {
 	Name            string  `json:"name"`
 	EndpointRef     string  `json:"endpoint_ref"`
 	EnvironmentName string  `json:"environment_name,omitempty"`
+	EnvironmentID   string  `json:"environment_id,omitempty"`
 	DockerHost      *string `json:"docker_host,omitempty"`
 }
 
@@ -114,9 +116,10 @@ type adoptionEventSelection struct {
 	TargetName          string `json:"target_name"`
 	ContainerID         string `json:"container_id"`
 	ServiceNameOverride string `json:"service_name_override,omitempty"`
+	ServiceID           string `json:"service_id,omitempty"`
 }
 
-func mapAdoptionEventTargets(targets []adoptionEventTarget) ([]service.AdoptionTarget, error) {
+func mapAdoptionEventTargets(targets []adoptionEventTarget, requireIDs bool) ([]service.AdoptionTarget, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("at least one target is required")
 	}
@@ -142,7 +145,15 @@ func mapAdoptionEventTargets(targets []adoptionEventTarget) ([]service.AdoptionT
 		if strings.TrimSpace(target.EnvironmentName) != "" && environmentName == "" {
 			return nil, fmt.Errorf("target environment_name is invalid")
 		}
-		mapped = append(mapped, service.AdoptionTarget{Name: name, EndpointRef: endpointRef, EnvironmentName: environmentName})
+		var environmentID uuid.UUID
+		if requireIDs {
+			var err error
+			environmentID, err = parseAdoptionUUIDv7(target.EnvironmentID, "target environment_id")
+			if err != nil {
+				return nil, err
+			}
+		}
+		mapped = append(mapped, service.AdoptionTarget{Name: name, EndpointRef: endpointRef, EnvironmentName: environmentName, EnvironmentID: environmentID})
 	}
 	return mapped, nil
 }
@@ -168,7 +179,11 @@ func mapAdoptionEventSelections(selections []adoptionEventSelection) ([]service.
 			return nil, fmt.Errorf("selection entries must be unique")
 		}
 		seen[key] = struct{}{}
-		mapped = append(mapped, service.AdoptionSelection{TargetName: targetName, ContainerID: containerID, ServiceNameOverride: serviceNameOverride})
+		serviceID, err := parseAdoptionUUIDv7(selection.ServiceID, "selection service_id")
+		if err != nil {
+			return nil, err
+		}
+		mapped = append(mapped, service.AdoptionSelection{TargetName: targetName, ContainerID: containerID, ServiceNameOverride: serviceNameOverride, ServiceID: serviceID})
 	}
 	return mapped, nil
 }
@@ -183,4 +198,12 @@ func normalizeAdoptionEventName(name string) string {
 		name = strings.ReplaceAll(name, "--", "-")
 	}
 	return name
+}
+
+func parseAdoptionUUIDv7(raw, field string) (uuid.UUID, error) {
+	id, err := uuid.Parse(raw)
+	if err != nil || id.Version() != 7 || id.String() != raw || id.Variant() != uuid.RFC4122 {
+		return uuid.Nil, fmt.Errorf("%s must be a canonical UUIDv7", field)
+	}
+	return id, nil
 }

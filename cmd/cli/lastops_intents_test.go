@@ -75,7 +75,7 @@ func TestCLILastOpsThroughD76Handlers(t *testing.T) {
 		t.Fatalf("observed import not handled: %#v", artifacts.imports)
 	}
 	credentialID := "cred_" + strings.Repeat("a", 64)
-	adopt := append(append([]string{}, base...), "adopt", "import", "--target", "production=docker-prod", "--select", "production/container-123=production", "--secret-ref", "DB_PASSWORD="+credentialID+":2")
+	adopt := append(append([]string{}, base...), "adopt", "import", "--target", "production=docker-prod", "--select", "production/container-123=production", "--environment-id", "production="+uuid.Must(uuid.NewV7()).String(), "--service-id", "production/container-123="+uuid.Must(uuid.NewV7()).String(), "--secret-ref", "DB_PASSWORD="+credentialID+":2")
 	if err := executeIntentCommand(t, adopt...); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestCLILastOpsD76FixtureContent(t *testing.T) {
 	commands := [][]string{
 		{"artifacts", "register", "--id", artifact, "--build", build, "--service", svc, "--image-repo", "registry.example/api", "--image-tag", "v1", "--image-digest", digest},
 		{"artifacts", "import-observed", "--service", svc, "--environment", env, "--image-repo", "registry.example/api", "--image-tag", "v1", "--image-digest", digest},
-		{"adopt", "import", "--target", "production=docker-prod", "--select", "production/container-123"},
+		{"adopt", "import", "--target", "production=docker-prod", "--select", "production/container-123", "--environment-id", "production=018f6a60-0000-7000-8000-000000000013", "--service-id", "production/container-123=018f6a60-0000-7000-8000-000000000012"},
 		{"dns", "drift-remediate", "--zone", "example.com"},
 		{"deployments", "preview", "--service", svc, "--environment", env, "--artifact", artifact, "--managed-runtime-config-file", runtimeFile, "--compact"},
 		{"deployments", "route-attach", "--service", svc, "--environment", env, "--deployment-unit", uuid.NewString(), "--hostname", "api.example.com", "--upstream-port", "8080", "--health-path", "/healthz", "--expected-updated-at", "2026-10-03T12:00:00Z"},
@@ -179,6 +179,9 @@ func TestCLILastOpsD76FixtureContent(t *testing.T) {
 			t.Fatal(err)
 		}
 		for key, value := range row.Content {
+			if row.Domain == "adoption" && (key == "targets" || key == "selections") {
+				continue
+			}
 			if row.Op == "route-attach" && key == "public_route" {
 				route, ok := actual[key].(map[string]any)
 				if !ok || route["hostname"] != value.(map[string]any)["hostname"] {
@@ -189,6 +192,18 @@ func TestCLILastOpsD76FixtureContent(t *testing.T) {
 			if !reflect.DeepEqual(actual[key], value) {
 				t.Errorf("%s/%s content[%s]=%#v, want %#v", row.Domain, row.Op, key, actual[key], value)
 			}
+		}
+		if row.Domain == "adoption" {
+			want := map[string]any{}
+			for key, value := range row.Content {
+				want[key] = value
+			}
+			want["targets"] = []any{map[string]any{"endpoint_ref": "docker-prod", "name": "production", "environment_id": "018f6a60-0000-7000-8000-000000000013"}}
+			want["selections"] = []any{map[string]any{"container_id": "container-123", "target_name": "production", "service_id": "018f6a60-0000-7000-8000-000000000012"}}
+			if !reflect.DeepEqual(actual, want) {
+				t.Errorf("adoption content=%#v, want %#v", actual, want)
+			}
+			continue
 		}
 		if row.Op != "route-attach" && !reflect.DeepEqual(actual, row.Content) {
 			t.Errorf("%s/%s content=%#v, want exact fixture %#v", row.Domain, row.Op, actual, row.Content)

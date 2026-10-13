@@ -58,7 +58,30 @@ func TestLegacyExportProductionShapedDraftsAndSchemas(t *testing.T) {
 			require.Equal(t, "adoption:"+org.String(), parsed.Coordinate)
 			require.Len(t, parsed.Content["selections"], 47)
 			require.Len(t, parsed.Content["targets"], 47)
+			var mintedServiceID, mintedEnvironmentID string
+			for _, item := range parsed.Content["selections"].([]any) {
+				id := item.(map[string]any)["service_id"].(string)
+				require.Equal(t, 7, int(uuid.MustParse(id).Version()))
+				require.NotEqual(t, serviceID.String(), id)
+				if mintedServiceID == "" {
+					mintedServiceID = id
+				} else {
+					require.Equal(t, mintedServiceID, id)
+				}
+			}
+			for _, item := range parsed.Content["targets"].([]any) {
+				id := item.(map[string]any)["environment_id"].(string)
+				require.Equal(t, 7, int(uuid.MustParse(id).Version()))
+				require.NotEqual(t, envID.String(), id)
+				if mintedEnvironmentID == "" {
+					mintedEnvironmentID = id
+				} else {
+					require.Equal(t, mintedEnvironmentID, id)
+				}
+			}
 			require.NoError(t, controlplane.NewAdoptionIntentHandler(adoptionSink, nil).HandleIntent(context.Background(), parsed))
+			require.Equal(t, uuid.MustParse(mintedServiceID), adoptionSink.last.Selections[0].ServiceID)
+			require.Equal(t, uuid.MustParse(mintedEnvironmentID), adoptionSink.last.Targets[0].EnvironmentID)
 			require.Len(t, adoptionSink.last.Selections, 47)
 			continue
 		}

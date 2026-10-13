@@ -24,12 +24,14 @@ change. Apply sends the complete desired JSON state; delete sends a tombstone.
 Use `--expected-updated-at` to reject a stale edit and read the canonical
 revision before retrying a conflict. The daemon stores encrypted canonical
 state on relays through its outbox before optionally mirroring PostgreSQL.
-No SQL or config seed creates pipeline policies. `hiveci.policies` in daemon
-configuration is a separate build-dependency dispatch allowlist with only
-`repo_coordinate`, `workflow_path`, `service_name`, `enabled`, and
-`build_dependencies`. Config `environment_name`, `branch_pattern`, and
-`metadata` are rejected; canonical policy content belongs in signed
-`hiveci-policy` intents.
+The optional PostgreSQL index archives SQL-only and tombstoned policy rows
+without deleting historical accepted-release FK targets; a rebuild projects
+only current canonical policy heads. No SQL or config seed creates canonical
+pipeline policies. `hiveci.policies` in daemon configuration is a separate
+build-dependency dispatch allowlist with only `repo_coordinate`,
+`workflow_path`, `service_name`, `enabled`, and `build_dependencies`; config
+`environment_name`, `branch_pattern`, and `metadata` are rejected. Canonical
+policy content belongs in signed `hiveci-policy` intents.
 
 ## Browse builds
 

@@ -167,11 +167,19 @@ outcome is a bounded `30315` intent status. PostgreSQL is only an index.
 | `notification` | `create`, `update`, `delete`, `channel-test` |
 | `artifact` | `register`, `import-observed`, `register-build-result`, `signature-verify` |
 | `adoption` | `scan`, `import` |
+
 | `build` | `request` |
 | `tool` | `approval-response` |
 | `security` | `scan-run` |
 | `sbom` | `generate`, `import` |
 | `relay` | `policy-set` |
+
+For `adoption/import`, each signed target includes an author-minted UUIDv7
+`environment_id` and each explicit selection includes an author-minted UUIDv7
+`service_id`. The daemon uses these IDs for new service and environment
+coordinates; `import_all` is rejected because it cannot assign fixed IDs to
+unknown discoveries. Existing UUIDv5 adoption coordinates remain readable and
+are not rekeyed.
 
 Exact coordinates, content and permissions for each operation are in the
 Go-generated fixtures (`web/tests/fixtures/deployment-intents.json`,

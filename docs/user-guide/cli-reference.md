@@ -176,14 +176,23 @@ bahia state drifted        # records whose drift_status is exactly "drifted"
 ### adopt
 
 ```bash
-bahia adopt scan   --target prod=prod-docker [--environment prod=production] [--offset 0 --limit 20]
-bahia adopt import --org "$ORG" --target prod=prod-docker --all
-bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id>=payment-api
-bahia adopt import --org "$ORG" --target prod=prod-docker --all --non-secret-env PASSWORD_MIN_LENGTH
-bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id> --secret-ref DB_PASSWORD=cred_<id>:1
+bahia adopt scan --target prod=prod-docker [--environment prod=production] [--offset 0 --limit 20]
+bahia adopt import --org "$ORG" --target prod=prod-docker \
+  --select prod/<container-id>=payment-api \
+  --environment-id prod=<environment-uuidv7> \
+  --service-id prod/<container-id>=<service-uuidv7> \
+  --idempotency-key <attempt-uuidv7> \
+  [--non-secret-env PASSWORD_MIN_LENGTH] [--secret-ref DB_PASSWORD=cred_<id>:1]
 ```
 
-Targets are server-managed endpoint references (`alias=endpointRef`); signed adoption does not accept raw Docker hosts. `scan` returns a redacted findings page (`total_findings`, `next_offset`, `truncated`) in the accepted status; `import` returns an intent ID and candidate count and the imported services appear as canonical records. Both require the signer in `adoption.allowed_pubkeys`. `--secret-ref KEY=credential-id:version` (repeatable) binds an inline environment key to a pre-imported Signet credential labelled `<org-id>/<service-id>/<name>`; the signed intent carries only `secret_refs`. Unmapped sensed-secret keys are refused by name. `--non-secret-env KEY` (repeatable) declares a key flagged by name that is not a secret; it cannot also have a reference.
+Targets are server-managed endpoint references (`alias=endpointRef`); raw Docker
+hosts are forbidden. A signed import requires explicit selections and one
+UUIDv7 `--environment-id` per target plus one UUIDv7 `--service-id` per
+selection. `--all` is rejected. Keep all IDs fixed on retries. `scan` returns
+a redacted findings page; `import` returns an intent ID and candidate count.
+Both require the signer in `adoption.allowed_pubkeys`. `--secret-ref` binds an
+inline environment key to an active Signet credential labelled
+`<org-id>/<service-id>/<name>`; the intent carries only references.
 
 ### dns
 

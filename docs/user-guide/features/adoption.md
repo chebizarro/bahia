@@ -14,15 +14,41 @@ From the CLI: `bahia adopt scan --target prod=prod-docker [--offset 0 --limit 20
 
 ## Importing
 
-An `adoption` `import` intent (`bahia adopt import --org "$ORG" --target prod=prod-docker --all`, or `--select alias/containerID[=serviceName]`) creates the service, environment, deployment unit, build, and artifact records for each adoptable container and publishes an **adoption binding** that ties the container's runtime fingerprints to those records. The accepted status returns the intent ID and candidate count; the imported services then appear in **Services** as canonical records with `ownership_mode: adopted`.
+An `adoption` `import` intent selects each workload and carries fixed
+operator-minted UUIDv7 IDs for its service and target environment. The signed
+handler uses these IDs on create; `--all` is not supported because unknown
+workloads cannot have author-fixed IDs. The import creates the service,
+environment, deployment unit, build, and artifact records and publishes an
+**adoption binding** tying runtime fingerprints to those records. The accepted
+status returns the intent ID and candidate count; canonical services then
+appear in **Services** with `ownership_mode: adopted`. If a matching
+UUIDv5-identified adoption was already published, Bahia reads and retains its
+existing coordinates instead of rekeying it.
 
-An interrupted import resumes from its binding records after a daemon restart; retrying with the same `--idempotency-key` is safe.
+Keep `--service-id`, `--environment-id`, and `--idempotency-key` fixed for every
+retry, including after a timeout or interrupted publish. An interrupted import
+resumes from its canonical binding. Use the scan findings to select each
+container explicitly.
 
-Adoption never copies a secret value. A container whose environment carries secret values inline needs a `--secret-ref KEY=credential-id:version` for each secret key. A first import without references refuses the candidate but returns its deterministic `service_id` and the key names, without publishing service state. Import each value into [Signet](../../runbooks/signet-secret-store.md) with label `<org-id>/<service-id>/<name>`; the credential must be active at the pinned version. The intent carries `secret_refs` (key to `{store:"signet",credential_id,version}`), never values. Bahia publishes a reference-only service secret and removes the inline key from the adopted service environment. An unmapped secret key is refused by key name only. A key is a secret by whole name tokens (`*_PASSWORD`, `*_PASSWD`, `*_SECRET`, `*_TOKEN`, `*_CREDENTIALS`, `*_API_KEY`, `*_PRIVATE_KEY`, `*_ACCESS_KEY`, `*_SIGNING_KEY`, ...) or, for a connection string (`*_URL`, `*_URI`, `*_DSN`, `CONNECTION_STRING`), when its value carries a password. A key flagged by name that is not a secret can instead be declared with `--non-secret-env KEY` (intent field `non_secret_env_keys`); its value stays in the adopted service. A key cannot appear in both lists.
+Adoption never copies a secret value. For each inline secret, provide
+`--secret-ref KEY=credential-id:version`. A first import without references
+refuses the candidate but returns its signed `service_id` and the key names,
+without publishing service state. Import each value into
+[Signet](../../runbooks/signet-secret-store.md) with label
+`<org-id>/<service-id>/<name>`; the credential must be active at the pinned
+version. The intent carries only credential references, never values. Bahia
+publishes a reference-only service secret and removes the inline key from the
+adopted service environment. `--non-secret-env KEY` declares a name that is
+not secret; it cannot also have a reference.
 
 ```bash
-bahia adopt import --org "$ORG" --target prod=prod-docker --all --non-secret-env PASSWORD_MIN_LENGTH
-bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<container-id> --secret-ref DB_PASSWORD=cred_<id>:1
+bahia adopt scan --org "$ORG" --target prod=prod-docker
+bahia adopt import --org "$ORG" --target prod=prod-docker \
+  --select prod/<container-id>=payment-api \
+  --environment-id prod=<environment-uuidv7> \
+  --service-id prod/<container-id>=<service-uuidv7> \
+  --idempotency-key <attempt-uuidv7> \
+  --secret-ref DB_PASSWORD=cred_<id>:1
 ```
 
 ## Configuration

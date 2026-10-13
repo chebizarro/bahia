@@ -12,6 +12,7 @@ type AdoptionTarget struct {
 	EndpointRef     string `json:"endpoint_ref,omitempty"`
 	DockerHost      string `json:"docker_host,omitempty"`
 	EnvironmentName string `json:"environment_name,omitempty"`
+	EnvironmentID   string `json:"environment_id,omitempty"`
 }
 
 // AdoptionScanRequest requests an adoption preview scan.
@@ -27,6 +28,7 @@ type AdoptionSelection struct {
 	TargetName          string `json:"target_name"`
 	ContainerID         string `json:"container_id"`
 	ServiceNameOverride string `json:"service_name_override,omitempty"`
+	ServiceID           string `json:"service_id,omitempty"`
 }
 
 // AdoptionImportRequest requests adoption import for selected or all containers.

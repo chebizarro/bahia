@@ -766,6 +766,8 @@ func adoptCommands() *cobra.Command {
 	var importTargets []string
 	var importEnvironments []string
 	var importSelections []string
+	var importServiceIDs []string
+	var importEnvironmentIDs []string
 	var importAll bool
 	var importOrgID string
 	var importNonSecretEnv []string
@@ -782,8 +784,11 @@ func adoptCommands() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if !importAll && len(selections) == 0 {
-				return fmt.Errorf("specify --all or at least one --select alias/containerID")
+			if importAll || len(selections) == 0 {
+				return fmt.Errorf("signed import requires --select for every workload; --all cannot carry fixed author IDs")
+			}
+			if err := assignAdoptionImportIDs(targets, selections, importEnvironmentIDs, importServiceIDs); err != nil {
+				return err
 			}
 			secretRefs, err := parseAdoptionSecretRefs(importSecretRefs)
 			if err != nil {
@@ -801,7 +806,9 @@ func adoptCommands() *cobra.Command {
 	importCmd.Flags().StringArrayVar(&importTargets, "target", nil, "Server-managed endpoint target as endpointRef or alias=endpointRef (repeatable)")
 	importCmd.Flags().StringArrayVar(&importEnvironments, "environment", nil, "Environment name as alias=environmentName (repeatable)")
 	importCmd.Flags().StringArrayVar(&importSelections, "select", nil, "Container selection as alias/containerID[=serviceName] (repeatable)")
-	importCmd.Flags().BoolVar(&importAll, "all", false, "Import all adoptable containers from the scanned targets")
+	importCmd.Flags().StringArrayVar(&importServiceIDs, "service-id", nil, "Author-minted UUIDv7 as alias/containerID=uuid (repeatable; keep fixed on retries)")
+	importCmd.Flags().StringArrayVar(&importEnvironmentIDs, "environment-id", nil, "Author-minted UUIDv7 as alias=uuid (repeatable; keep fixed on retries)")
+	importCmd.Flags().BoolVar(&importAll, "all", false, "Unsupported for signed import; scan and select each workload with fixed IDs")
 	importCmd.Flags().StringArrayVar(&importNonSecretEnv, "non-secret-env", nil, "Environment key that is not a secret despite its name (repeatable); adoption keeps it instead of refusing the container")
 	importCmd.Flags().StringArrayVar(&importSecretRefs, "secret-ref", nil, "Imported Signet credential as KEY=credential-id:version (repeatable); adopted secrets contain references only")
 	importCmd.Flags().StringVar(&importOrgID, "org", "", "Organization UUID for imported services and environments")
@@ -1527,4 +1534,55 @@ func readNostrPrivateKeyInput(cmd *cobra.Command, path string) (string, error) {
 		return "", fmt.Errorf("nostr private key input is empty")
 	}
 	return key, nil
+}
+
+func assignAdoptionImportIDs(targets []client.AdoptionTarget, selections []client.AdoptionSelection, environmentFlags, serviceFlags []string) error {
+	parseAssignments := func(flags []string, field string) (map[string]string, error) {
+		out := make(map[string]string, len(flags))
+		for _, raw := range flags {
+			key, value, ok := strings.Cut(raw, "=")
+			key = strings.TrimSpace(key)
+			if !ok || key == "" {
+				return nil, fmt.Errorf("%s requires key=uuidv7", field)
+			}
+			id, err := uuid.Parse(value)
+			if err != nil || id.Version() != 7 || id.String() != value || id.Variant() != uuid.RFC4122 {
+				return nil, fmt.Errorf("%s %q requires a canonical UUIDv7", field, key)
+			}
+			if _, duplicate := out[key]; duplicate {
+				return nil, fmt.Errorf("duplicate %s %q", field, key)
+			}
+			out[key] = value
+		}
+		return out, nil
+	}
+	environments, err := parseAssignments(environmentFlags, "--environment-id")
+	if err != nil {
+		return err
+	}
+	services, err := parseAssignments(serviceFlags, "--service-id")
+	if err != nil {
+		return err
+	}
+	for i := range targets {
+		id, ok := environments[targets[i].Name]
+		if !ok {
+			return fmt.Errorf("--environment-id %s=uuidv7 is required", targets[i].Name)
+		}
+		targets[i].EnvironmentID = id
+		delete(environments, targets[i].Name)
+	}
+	for i := range selections {
+		key := selections[i].TargetName + "/" + selections[i].ContainerID
+		id, ok := services[key]
+		if !ok {
+			return fmt.Errorf("--service-id %s=uuidv7 is required", key)
+		}
+		selections[i].ServiceID = id
+		delete(services, key)
+	}
+	if len(environments) > 0 || len(services) > 0 {
+		return fmt.Errorf("adoption id assignment does not match a target or selection")
+	}
+	return nil
 }

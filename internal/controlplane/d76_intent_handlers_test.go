@@ -81,8 +81,8 @@ func TestD76AdoptionImportIntentAcceptedReplayUnauthorized(t *testing.T) {
 	p, statuses := d76Processor(t, "adoption", testPubkey, NewAdoptionIntentHandler(adoption, []string{testPubkey}))
 	intent := d70Intent("adoption", "import", "adoption:"+testOrgID().String(), testPubkey, map[string]any{
 		"org_id":     testOrgID().String(),
-		"targets":    []any{map[string]any{"name": "prod", "endpoint_ref": "docker-prod"}},
-		"import_all": true,
+		"targets":    []any{map[string]any{"name": "prod", "endpoint_ref": "docker-prod", "environment_id": uuid.Must(uuid.NewV7()).String()}},
+		"selections": []any{map[string]any{"target_name": "prod", "container_id": "container-1", "service_id": uuid.Must(uuid.NewV7()).String()}},
 	})
 	require.NoError(t, p.ProcessInProcess(context.Background(), intent))
 	require.True(t, adoption.importCalled)

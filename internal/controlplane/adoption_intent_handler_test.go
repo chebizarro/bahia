@@ -43,8 +43,8 @@ func TestAdoptionImportIntentIncompletePublishIsRejectedWithProgressAndResumes(t
 	p, statuses := d76Processor(t, "adoption", testPubkey, NewAdoptionIntentHandler(adoption, []string{testPubkey}))
 	intent := d70Intent("adoption", "import", "adoption:"+testOrgID().String(), testPubkey, map[string]any{
 		"org_id":     testOrgID().String(),
-		"targets":    []any{map[string]any{"name": "prod", "endpoint_ref": "docker-prod"}},
-		"import_all": true,
+		"targets":    []any{map[string]any{"name": "prod", "endpoint_ref": "docker-prod", "environment_id": uuid.Must(uuid.NewV7()).String()}},
+		"selections": []any{map[string]any{"target_name": "prod", "container_id": "container-1", "service_id": uuid.Must(uuid.NewV7()).String()}},
 	})
 
 	err := p.ProcessInProcess(context.Background(), intent)
@@ -71,6 +71,8 @@ func TestAdoptionImportIntentIncompletePublishIsRejectedWithProgressAndResumes(t
 	require.NoError(t, p.ProcessInProcess(context.Background(), intent))
 	require.Len(t, adoption.requests, 2)
 	require.Equal(t, adoption.requests[0].RequestID, adoption.requests[1].RequestID)
+	require.Equal(t, adoption.requests[0].Targets[0].EnvironmentID, adoption.requests[1].Targets[0].EnvironmentID)
+	require.Equal(t, adoption.requests[0].Selections[0].ServiceID, adoption.requests[1].Selections[0].ServiceID)
 	require.True(t, p.IsProcessed(intent.IntentID))
 	require.Equal(t, "accepted", tagValueNostr(statuses.events[1].Tags, "status"))
 	require.NoError(t, json.Unmarshal([]byte(statuses.events[1].Content), &status))
@@ -79,4 +81,37 @@ func TestAdoptionImportIntentIncompletePublishIsRejectedWithProgressAndResumes(t
 	require.EqualValues(t, 0, data["incomplete_count"])
 	require.NoError(t, p.ProcessInProcess(context.Background(), intent))
 	require.Len(t, adoption.requests, 2, "a processed intent is not imported again")
+}
+
+func TestAdoptionImportIntentRejectsMissingOrDerivedEntityIDs(t *testing.T) {
+	adoption := &resumableAdoptionService{}
+	handler := NewAdoptionIntentHandler(adoption, []string{testPubkey})
+	base := func() *Intent {
+		return d70Intent("adoption", "import", "adoption:"+testOrgID().String(), testPubkey, map[string]any{
+			"org_id":     testOrgID().String(),
+			"targets":    []any{map[string]any{"name": "prod", "endpoint_ref": "docker-prod", "environment_id": uuid.Must(uuid.NewV7()).String()}},
+			"selections": []any{map[string]any{"target_name": "prod", "container_id": "container-1", "service_id": uuid.Must(uuid.NewV7()).String()}},
+		})
+	}
+	for _, tc := range []struct{ name, field, value string }{
+		{"missing service", "service_id", ""},
+		{"derived service", "service_id", uuid.NewSHA1(uuid.NameSpaceOID, []byte("old-service")).String()},
+		{"missing environment", "environment_id", ""},
+		{"derived environment", "environment_id", uuid.NewSHA1(uuid.NameSpaceOID, []byte("old-env")).String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			intent := base()
+			if tc.field == "service_id" {
+				intent.Content["selections"].([]any)[0].(map[string]any)[tc.field] = tc.value
+			} else {
+				intent.Content["targets"].([]any)[0].(map[string]any)[tc.field] = tc.value
+			}
+			require.ErrorContains(t, handler.HandleIntent(context.Background(), intent), "UUIDv7")
+			require.Empty(t, adoption.requests)
+		})
+	}
+	intent := base()
+	intent.Content["import_all"] = true
+	require.ErrorContains(t, handler.HandleIntent(context.Background(), intent), "explicit selections")
+	require.Empty(t, adoption.requests)
 }

@@ -410,3 +410,32 @@ func TestOrphanedResultIsProcessedWhenItsRunArrives(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.HiveCIProcessingStatePendingResult, stored.ProcessingState)
 }
+
+type snapshotPolicyIndex struct {
+	*failingIndex
+	snapshots [][]domain.HiveCIPipelinePolicy
+}
+
+func (i *snapshotPolicyIndex) ReconcilePipelinePolicies(_ context.Context, policies []domain.HiveCIPipelinePolicy) error {
+	i.snapshots = append(i.snapshots, append([]domain.HiveCIPipelinePolicy(nil), policies...))
+	return nil
+}
+
+func TestHiveCIPolicyRebuildProjectsCanonicalHeadsIncludingTombstones(t *testing.T) {
+	ctx := context.Background()
+	index := &snapshotPolicyIndex{failingIndex: &failingIndex{}}
+	d := startCanonicalDaemon(t, t.TempDir(), index, nil)
+	id := uuid.Must(uuid.NewV7())
+	policy := domain.HiveCIPipelinePolicy{ID: id, RepoCoordinate: "30617:author:api",
+		WorkflowPath: ".gitea/workflows/release.yml", ServiceID: uuid.New(),
+		EnvironmentID: uuid.New(), Enabled: true, Metadata: map[string]any{}}
+	require.NoError(t, d.repo.EnsurePipelinePolicy(ctx, policy))
+	require.NoError(t, d.repo.RebuildIndex(ctx))
+	require.Len(t, index.snapshots, 1)
+	require.Len(t, index.snapshots[0], 1)
+	require.Equal(t, id, index.snapshots[0][0].ID)
+	require.NoError(t, d.repo.DeletePipelinePolicy(ctx, id))
+	require.NoError(t, d.repo.RebuildIndex(ctx))
+	require.Len(t, index.snapshots, 2)
+	require.Empty(t, index.snapshots[1], "tombstoned policy must be retired by the projection")
+}
