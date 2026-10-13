@@ -592,9 +592,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// projector it publishes through exists. Privileged routes
 	// are opt-in; the service stays nil unless its route family is enabled.
 	var adoptionSvc *service.AdoptionService
-	var runtimeApplyLock *service.RuntimeApplyLock
-	if dbAvailable {
-		runtimeApplyLock = service.NewRuntimeApplyLock(pool, logger)
+	// The runtime effect fence is local and remains available without PostgreSQL.
+	runtimeApplyLock, err := service.NewRuntimeApplyLock(cfg.Nostr.LocalStore.ResolvedOutboxPath())
+	if err != nil {
+		return nil, fmt.Errorf("configuring runtime apply fence: %w", err)
 	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
@@ -867,31 +868,26 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 					Details: map[string]string{"desired_source": "relay/local cp-state", "observation": "suspended", "auto_apply": "suspended", "sql_authority": "disabled"}}
 			}
 			return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
-				Message: "canonical runtime observation is enabled; auto_apply remediation is suspended until the deploy lifecycle reads canonical inputs instead of PostgreSQL",
+				Message: "canonical runtime observation is enabled; auto_apply is suspended pending signed decision binding, complete snapshots, and effect replay",
 				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
 		})
-		logger.Warn("runtime auto_apply remediation suspended until its deploy lifecycle no longer reads PostgreSQL desired state")
+		logger.Warn("runtime auto_apply remediation suspended pending signed decision binding, complete snapshots, and effect replay")
 	}
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if supervisionApplyLock != nil {
-		// the process-local fallback of the recovery apply lock
-		// excludes only this daemon's applies, so it is a degraded condition
-		// operators must see (docs/runbooks/managed-instance-supervision.md).
 		healthProvider.RegisterCheck("supervision_apply_lock", func() HealthCheck {
 			status := supervisionApplyLock.Status()
 			check := HealthCheck{Name: "supervision_apply_lock", Status: HealthStatusPass,
-				Message: "supervised recoveries are serialized with deploys through the shared PostgreSQL advisory lock",
-				Details: map[string]string{"shared_lock": fmt.Sprintf("%t", status.Shared), "fallback": fmt.Sprintf("%t", status.Fallback)}}
-			switch {
-			case status.Fallback:
+				Message: "supervised recoveries share the filesystem runtime effect fence with deploys",
+				Details: map[string]string{"shared_lock": fmt.Sprintf("%t", status.Shared), "fence_unavailable": fmt.Sprintf("%t", status.Unavailable)}}
+			if status.Unavailable || !status.Shared {
 				check.Status = HealthStatusWarn
-				check.Message = "shared runtime apply lock unreachable; recoveries proceed under the process-local lock only, which does not exclude deploys driven by other daemons in the same environment"
-				check.Details["fallback_since"] = status.FallbackSince.UTC().Format(time.RFC3339)
-				check.Details["last_error"] = status.LastError
-			case !status.Shared:
-				check.Status = HealthStatusWarn
-				check.Message = "no shared runtime apply lock (PostgreSQL unavailable at startup); recoveries are serialized only within this daemon and do not exclude deploys driven by other daemons in the same environment"
+				check.Message = "runtime effect fence unavailable; supervised recovery is refused"
+				if status.Unavailable {
+					check.Details["unavailable_since"] = status.UnavailableSince.UTC().Format(time.RFC3339)
+					check.Details["last_error"] = status.LastError
+				}
 			}
 			return check
 		})

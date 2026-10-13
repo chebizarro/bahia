@@ -69,34 +69,15 @@ Do not enable recovery with missing or zero budgets. Configuration validation re
 
 ## Recovery apply lock and multi-daemon operation
 
-A supervised restart takes the environment's runtime apply lock before acting,
-so it never restarts an instance in the middle of a deploy. Two layers are
-involved:
-
-- a **process-local** lock per environment, always taken, which serializes
-  recoveries with every apply driven by *this* daemon;
-- the **shared PostgreSQL advisory lock** that deploys hold, taken when the
-  daemon has a database, which additionally serializes recoveries with applies
-  driven by *any* daemon of the fleet.
-
-When PostgreSQL is unreachable the shared lock cannot be taken and recovery
-proceeds under the process-local lock only. The daemon logs
-`shared runtime apply lock unavailable; recovery proceeds under the
-process-local lock ...` and the `supervision_apply_lock` health check turns
-`warn` with `fallback=true`, `fallback_since` and `last_error`; it also warns
-with `shared_lock=false` on a daemon that started without a database. The check
-returns to `pass` on the first shared-lock attempt that gets an answer.
-
-**Implication:** while the check is `warn`, a deploy driven by another daemon
-that can still reach PostgreSQL is not excluded, so a recovery may restart an
-instance that daemon is deploying. With a single daemon per environment there
-is nothing to exclude and the fallback is safe; a deploy from the same daemon
-needs the same unreachable lock and cannot be running. With several daemons
-supervising or deploying into one environment, respond to a sustained `warn`
-by either pausing deploys into that environment until the check passes, or
-setting a maintenance override on the instances under recovery
-(`observe_only` is the blunt alternative). Do not "fix" the warning by
-removing the shared lock from the deploy path.
+A supervised restart takes the same filesystem-backed environment effect fence
+as direct deploy, restart and stop. Its lock files live beside the durable
+Nostr outbox. An acquisition error refuses recovery and sets
+`supervision_apply_lock` to `warn`; it never falls back to a process-only
+mutation. Contention is a normal no-effect result. The outbox's bbolt file
+lock prevents two daemon processes from opening the same outbox on one host.
+Deployments with distinct outbox paths or on distinct hosts require an
+operator-enforced singleton for each runtime environment; the local lock does
+not provide distributed exclusion.
 
 ## Operator surfaces
 

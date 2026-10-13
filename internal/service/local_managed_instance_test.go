@@ -561,7 +561,7 @@ func (l *scriptedLock) TryLock(context.Context, uuid.UUID) (func(), bool, error)
 	return func() { l.unlocked++ }, true, nil
 }
 
-func TestSupervisionApplyLockSerializesPerEnvironmentAndSurvivesSharedLockOutage(t *testing.T) {
+func TestSupervisionApplyLockSerializesPerEnvironmentAndFailsClosedOnFenceOutage(t *testing.T) {
 	ctx := context.Background()
 	environment := uuid.New()
 
@@ -596,23 +596,20 @@ func TestSupervisionApplyLockSerializesPerEnvironmentAndSurvivesSharedLockOutage
 	unlock()
 	require.Equal(t, 1, shared.unlocked)
 
-	require.False(t, withShared.Status().Fallback)
+	require.False(t, withShared.Status().Unavailable)
 
-	// The database behind the shared lock is unreachable: recovery proceeds,
-	// and the fallback is observable.
-	shared.err = errors.New("connection refused")
+	// A failed shared fence must refuse recovery; a process-only fallback
+	// would let another daemon mutate the same runtime target.
+	shared.err = errors.New("fence unavailable")
 	unlock, acquired, err = withShared.TryLock(ctx, environment)
-	require.NoError(t, err)
-	require.True(t, acquired, "an unreachable shared lock must not block recovery")
+	require.ErrorContains(t, err, "fence unavailable")
+	require.False(t, acquired)
+	require.Nil(t, unlock)
 	status := withShared.Status()
 	require.True(t, status.Shared)
-	require.True(t, status.Fallback, "the fallback is reported while the shared lock is unreachable")
-	require.False(t, status.FallbackSince.IsZero())
-	require.Equal(t, "connection refused", status.LastError)
-	_, acquired, err = withShared.TryLock(ctx, environment)
-	require.NoError(t, err)
-	require.False(t, acquired, "the process-local lock still serializes")
-	unlock()
+	require.True(t, status.Unavailable)
+	require.False(t, status.UnavailableSince.IsZero())
+	require.Equal(t, "fence unavailable", status.LastError)
 
 	// The shared lock answers again: the fallback ends.
 	shared.err = nil
@@ -620,9 +617,9 @@ func TestSupervisionApplyLockSerializesPerEnvironmentAndSurvivesSharedLockOutage
 	require.NoError(t, err)
 	require.True(t, acquired)
 	unlock()
-	require.False(t, withShared.Status().Fallback)
+	require.False(t, withShared.Status().Unavailable)
 	require.False(t, local.Status().Shared, "a lock without a shared lock is never in fallback")
-	require.False(t, local.Status().Fallback)
+	require.False(t, local.Status().Unavailable)
 }
 
 // signalObserver reports each observation on a channel.

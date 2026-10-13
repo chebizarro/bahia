@@ -1,36 +1,33 @@
 package service
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
-// testPool creates a pgxpool.Pool from DATABASE_URL or skips the test.
-func testPool(t *testing.T) *pgxpool.Pool {
+func testRuntimeApplyLock(t *testing.T) *RuntimeApplyLock {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set; skipping integration test")
-	}
-	pool, err := pgxpool.New(context.Background(), dsn)
+	lock, err := NewRuntimeApplyLock(t.TempDir() + "/outbox.bolt")
 	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-	return pool
+	return lock
 }
 
 // TestRuntimeApplyLock_SameEnvironmentSerializes proves that two concurrent
 // deploys targeting the same environment are serialized deterministically
 // without sleep-based waiting — uses channels for synchronization.
 func TestRuntimeApplyLock_SameEnvironmentSerializes(t *testing.T) {
-	pool := testPool(t)
-	lock := NewRuntimeApplyLock(pool, nil)
+	lock := testRuntimeApplyLock(t)
 
 	envID := uuid.New()
 	ctx := context.Background()
@@ -96,28 +93,28 @@ func TestRuntimeApplyLock_SameEnvironmentSerializes(t *testing.T) {
 // TestRuntimeApplyLock_DifferentEnvironmentsParallel proves that different
 // environments can deploy concurrently without blocking each other.
 func TestRuntimeApplyLock_DifferentEnvironmentsParallel(t *testing.T) {
-	pool := testPool(t)
-	lock := NewRuntimeApplyLock(pool, nil)
+	lock := testRuntimeApplyLock(t)
 
 	envA := uuid.New()
 	envB := uuid.New()
 	ctx := context.Background()
 
 	bothAcquired := make(chan struct{}, 2)
+	release := make(chan struct{})
 
 	acquire := func(envID uuid.UUID) {
 		unlock, err := lock.Lock(ctx, envID)
 		require.NoError(t, err)
 		bothAcquired <- struct{}{}
-		// Hold lock briefly so both goroutines overlap.
-		<-time.After(100 * time.Millisecond)
+		<-release
 		unlock()
 	}
 
 	go acquire(envA)
 	go acquire(envB)
 
-	// Both should acquire within a short window since they target different environments.
+	// Both must acquire while neither has released its lock.
+	defer close(release)
 	timeout := time.After(2 * time.Second)
 	for i := 0; i < 2; i++ {
 		select {
@@ -131,8 +128,7 @@ func TestRuntimeApplyLock_DifferentEnvironmentsParallel(t *testing.T) {
 // TestRuntimeApplyLock_UnlockOnPanic verifies that deferred unlock releases
 // the lock even when the critical section panics.
 func TestRuntimeApplyLock_UnlockOnPanic(t *testing.T) {
-	pool := testPool(t)
-	lock := NewRuntimeApplyLock(pool, nil)
+	lock := testRuntimeApplyLock(t)
 
 	envID := uuid.New()
 	ctx := context.Background()
@@ -167,8 +163,7 @@ func TestRuntimeApplyLock_UnlockOnPanic(t *testing.T) {
 
 // TestRuntimeApplyLock_DoubleUnlockSafe verifies calling unlock twice is safe.
 func TestRuntimeApplyLock_DoubleUnlockSafe(t *testing.T) {
-	pool := testPool(t)
-	lock := NewRuntimeApplyLock(pool, nil)
+	lock := testRuntimeApplyLock(t)
 
 	envID := uuid.New()
 	ctx := context.Background()
@@ -181,14 +176,85 @@ func TestRuntimeApplyLock_DoubleUnlockSafe(t *testing.T) {
 	unlock()
 }
 
-// TestAdvisoryLockKey_Deterministic verifies key derivation is stable.
-func TestAdvisoryLockKey_Deterministic(t *testing.T) {
-	id := uuid.MustParse("12345678-1234-1234-1234-123456789abc")
-	k1 := advisoryLockKey(id)
-	k2 := advisoryLockKey(id)
-	require.Equal(t, k1, k2, "same UUID must produce same key")
+// A second lock handle on the same outbox path must contend, even though it
+// has no shared Go mutex. This exercises the filesystem effect fence.
+func TestRuntimeApplyLock_IndependentHandlesContend(t *testing.T) {
+	path := t.TempDir() + "/outbox.bolt"
+	first, err := NewRuntimeApplyLock(path)
+	require.NoError(t, err)
+	second, err := NewRuntimeApplyLock(path)
+	require.NoError(t, err)
+	env := uuid.New()
+	unlock, err := first.Lock(t.Context(), env)
+	require.NoError(t, err)
+	_, acquired, err := second.TryLock(t.Context(), env)
+	require.NoError(t, err)
+	require.False(t, acquired)
+	unlock()
+	unlockSecond, acquired, err := second.TryLock(t.Context(), env)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	unlockSecond()
+}
 
-	other := uuid.MustParse("abcdefab-abcd-abcd-abcd-abcdefabcdef")
-	k3 := advisoryLockKey(other)
-	require.NotEqual(t, k1, k3, "different UUIDs should produce different keys")
+func TestRuntimeApplyLock_CancelledWait(t *testing.T) {
+	lock := testRuntimeApplyLock(t)
+	env := uuid.New()
+	unlock, err := lock.Lock(t.Context(), env)
+	require.NoError(t, err)
+	defer unlock()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = lock.Lock(ctx, env)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// TestRuntimeApplyLock_SecondProcess proves exclusion is provided by the OS,
+// not merely by an in-process mutex. The child exits only after parent input.
+func TestRuntimeApplyLock_SecondProcess(t *testing.T) {
+	path := t.TempDir() + "/outbox.bolt"
+	env := uuid.New()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRuntimeApplyLockProcessHelper$")
+	cmd.Env = append(os.Environ(), "BAHIA_TEST_APPLY_LOCK_PATH="+path, "BAHIA_TEST_APPLY_LOCK_ENV="+env.String())
+	stdin, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	stdout, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	line, err := bufio.NewReader(stdout).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "locked\n", line)
+
+	parent, err := NewRuntimeApplyLock(path)
+	require.NoError(t, err)
+	_, acquired, err := parent.TryLock(t.Context(), env)
+	require.NoError(t, err)
+	require.False(t, acquired)
+	require.NoError(t, stdin.Close())
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("lock helper: %v: %s", err, stderr.String())
+	}
+	unlock, acquired, err := parent.TryLock(t.Context(), env)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	unlock()
+}
+
+func TestRuntimeApplyLockProcessHelper(t *testing.T) {
+	path := os.Getenv("BAHIA_TEST_APPLY_LOCK_PATH")
+	if path == "" {
+		return
+	}
+	env, err := uuid.Parse(os.Getenv("BAHIA_TEST_APPLY_LOCK_ENV"))
+	require.NoError(t, err)
+	lock, err := NewRuntimeApplyLock(path)
+	require.NoError(t, err)
+	unlock, err := lock.Lock(t.Context(), env)
+	require.NoError(t, err)
+	fmt.Print("locked\n")
+	_, _ = io.Copy(io.Discard, os.Stdin)
+	unlock()
 }

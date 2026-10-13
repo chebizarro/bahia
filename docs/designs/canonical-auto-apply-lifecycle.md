@@ -26,6 +26,22 @@ The operation record is a crash-recovery journal, not a second desired-state aut
 
 Replace the PostgreSQL advisory `RuntimeApplyLock` for this path with a non-PostgreSQL environment/unit effect fence that serializes **both automatic and manual** deploy, rollback, restart/stop, and other runtime mutations touching the same unit. Wire manual lifecycle entry points to the same fence before enabling auto-apply; a private auto-only mutex is insufficient. Acquire the environment-scoped try-lock before loading the canonical snapshot, resolving secrets, planning, or staging any effect. Under the lock, capture winning event ids, operator-intent proof, membership generation/set digest and readiness; validate spec hashes; assemble the entire unit plan; resolve pinned secret versions; and immediately re-read the winning ids, intent revocation state, full membership set, and secret versions before `ApplyDesiredState`. Hold the lock through effect, observation, and local receipt admission. Recheck winner ids after effect and before reporting convergence. A single-process lock does not fence another daemon or an external operator; prove singleton ownership for an environment and that every manual mutation shares the same lock, or use a durable distributed lease with monotonic fencing token checked by the runtime adapter before each effect. A PostgreSQL advisory lock or SQL-dependent lease is not acceptable: absent-SQL boot must preserve the same exclusion guarantee. Without that proof, keep `auto_apply` disabled. Contention is not a deployment failure and must not escalate reconcile backoff as though an apply occurred.
 
+## Filesystem effect fence decision
+
+Direct runtime deploy, rollback, restart, stop and supervised recovery use one
+non-PostgreSQL `RuntimeApplyLock`, backed by advisory filesystem locks per
+environment beside the durable outbox. The manual lifecycle takes the lock
+before its deploy helper selects runtime inputs and holds it through observation
+and publication. Prebuilt desired snapshots still require revalidation under
+the lock before auto-apply can use them. Supervised recovery refuses a failed
+lock instead of proceeding under a process-local
+fallback. The outbox's exclusive bbolt file lock prevents a second daemon
+using that same path from starting on the same host. This does **not** prove
+exclusion across independent outbox paths or hosts; auto-apply remains
+suspended until singleton ownership of each environment is guaranteed or a
+runtime-checked distributed fence is introduced. The service signer controls
+who can sign, not which process is executing an external runtime effect.
+
 ## Implementation slices and ownership
 
 1. **Canonical authorization, snapshot and pure plan** — `internal/reconcile/canonical_runtime_source.go` and tests; a new read-only snapshot/plan module in `internal/service` (or `internal/reconcile` if it avoids an import cycle). Validate operator-intent link/signature/authorization/revocation, complete signed inputs, hash, full membership closure/generation, tombstones and EOSE. No SQL fallback and no effect.

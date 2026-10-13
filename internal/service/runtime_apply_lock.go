@@ -2,133 +2,90 @@ package service
 
 import (
 	"context"
-	"encoding/binary"
+	"errors"
 	"fmt"
-	"hash/fnv"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
-// RuntimeApplyLock provides environment-scoped advisory locking for serializing
-// deploy operations. It uses PostgreSQL session-level advisory locks keyed by
-// a deterministic hash of the environment ID.
-type RuntimeApplyLock struct {
-	pool   *pgxpool.Pool
-	logger *zap.Logger
-}
+// RuntimeApplyLock serializes runtime mutations for an environment on the
+// daemon's local filesystem. It is independent of the PostgreSQL index.
+type RuntimeApplyLock struct{ directory string }
 
-// NewRuntimeApplyLock creates a RuntimeApplyLock backed by the given connection pool.
-func NewRuntimeApplyLock(pool *pgxpool.Pool, logger *zap.Logger) *RuntimeApplyLock {
-	if logger == nil {
-		logger = zap.NewNop()
+// NewRuntimeApplyLock uses a directory next to the durable outbox so every
+// application instance sharing that outbox also shares the effect fence.
+func NewRuntimeApplyLock(outboxPath string) (*RuntimeApplyLock, error) {
+	if outboxPath == "" {
+		return nil, fmt.Errorf("runtime apply fence requires a durable outbox path")
 	}
-	return &RuntimeApplyLock{pool: pool, logger: logger}
+	abs, err := filepath.Abs(outboxPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve runtime apply fence path: %w", err)
+	}
+	directory := abs + ".runtime-locks"
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, fmt.Errorf("create runtime apply fence directory: %w", err)
+	}
+	return &RuntimeApplyLock{directory: directory}, nil
 }
 
-// Lock acquires a PostgreSQL session-level advisory lock keyed by the environment ID.
-// It blocks until the lock is available. The returned unlock function MUST be called
-// (typically via defer) to release the lock. The lock is held on a dedicated connection
-// so it does not interfere with short-lived transactions used for persistence.
-func (l *RuntimeApplyLock) Lock(ctx context.Context, environmentID uuid.UUID) (unlock func(), err error) {
+func (l *RuntimeApplyLock) Lock(ctx context.Context, environmentID uuid.UUID) (func(), error) {
 	return l.acquire(ctx, environmentID, true)
 }
 
-// TryLock attempts to acquire the same environment-scoped advisory lock without
-// blocking. It returns acquired=false when another operation already holds the
-// environment lock.
-func (l *RuntimeApplyLock) TryLock(ctx context.Context, environmentID uuid.UUID) (unlock func(), acquired bool, err error) {
-	unlock, err = l.acquire(ctx, environmentID, false)
-	if err != nil {
-		return nil, false, err
-	}
-	if unlock == nil {
-		return nil, false, nil
-	}
-	return unlock, true, nil
+func (l *RuntimeApplyLock) TryLock(ctx context.Context, environmentID uuid.UUID) (func(), bool, error) {
+	unlock, err := l.acquire(ctx, environmentID, false)
+	return unlock, unlock != nil, err
 }
 
-func (l *RuntimeApplyLock) acquire(ctx context.Context, environmentID uuid.UUID, wait bool) (unlock func(), err error) {
-	key := advisoryLockKey(environmentID)
-
-	// Acquire a dedicated connection from the pool to hold the advisory lock.
-	// Advisory locks are session-scoped, so we need the same connection for
-	// both lock and unlock.
-	conn, err := l.pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("acquiring connection for environment lock: %w", err)
+func (l *RuntimeApplyLock) acquire(ctx context.Context, environmentID uuid.UUID, wait bool) (func(), error) {
+	if l == nil || l.directory == "" || environmentID == uuid.Nil {
+		return nil, fmt.Errorf("runtime apply fence and environment are required")
 	}
-
-	l.logger.Debug("acquiring environment apply lock",
-		zap.String("environment_id", environmentID.String()),
-		zap.Int64("advisory_key", key),
-		zap.Bool("wait", wait),
-	)
-
-	if wait {
-		_, err = conn.Exec(ctx, "SELECT pg_advisory_lock($1)", key)
-		if err != nil {
-			conn.Release()
-			return nil, fmt.Errorf("acquiring advisory lock for environment %s: %w", environmentID, err)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(l.directory, environmentID.String()+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open runtime apply fence: %w", err)
+	}
+	for {
+		err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		if err == nil {
+			if ctx.Err() != nil {
+				_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+				_ = file.Close()
+				return nil, ctx.Err()
+			}
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					_ = unix.Flock(int(file.Fd()), unix.LOCK_UN)
+					_ = file.Close()
+				})
+			}, nil
 		}
-	} else {
-		var acquired bool
-		err = conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired)
-		if err != nil {
-			conn.Release()
-			return nil, fmt.Errorf("trying advisory lock for environment %s: %w", environmentID, err)
+		if !errors.Is(err, unix.EWOULDBLOCK) && !errors.Is(err, unix.EAGAIN) {
+			_ = file.Close()
+			return nil, fmt.Errorf("acquire runtime apply fence: %w", err)
 		}
-		if !acquired {
-			conn.Release()
-			l.logger.Debug("environment apply lock already held",
-				zap.String("environment_id", environmentID.String()),
-				zap.Int64("advisory_key", key),
-			)
+		if !wait {
+			_ = file.Close()
 			return nil, nil
 		}
-	}
-
-	l.logger.Debug("acquired environment apply lock",
-		zap.String("environment_id", environmentID.String()),
-		zap.Int64("advisory_key", key),
-	)
-
-	unlocked := false
-	unlock = func() {
-		if unlocked {
-			return
+		// Lock contention is local coordination, never relay delivery.
+		timer := time.NewTimer(25 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-timer.C:
 		}
-		unlocked = true
-
-		// Use a background context for unlock so it succeeds even if the
-		// caller's context was cancelled.
-		unlockCtx := context.Background()
-		_, unlockErr := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", key)
-		if unlockErr != nil {
-			l.logger.Error("failed to release environment apply lock",
-				zap.String("environment_id", environmentID.String()),
-				zap.Int64("advisory_key", key),
-				zap.Error(unlockErr),
-			)
-		} else {
-			l.logger.Debug("released environment apply lock",
-				zap.String("environment_id", environmentID.String()),
-				zap.Int64("advisory_key", key),
-			)
-		}
-		conn.Release()
 	}
-
-	return unlock, nil
-}
-
-// advisoryLockKey derives a deterministic int64 key from an environment UUID.
-// Uses FNV-1a hash to map the 16-byte UUID into the int64 space used by
-// PostgreSQL advisory locks.
-func advisoryLockKey(environmentID uuid.UUID) int64 {
-	h := fnv.New64a()
-	h.Write(environmentID[:])
-	// Convert uint64 to int64 — PostgreSQL advisory locks use bigint (int64).
-	return int64(binary.BigEndian.Uint64(h.Sum(nil)[:8]))
 }
