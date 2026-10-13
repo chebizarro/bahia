@@ -247,6 +247,9 @@ func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
 	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
 		return err
 	}
+	if err := s.publishCurrentState(ctx); err != nil {
+		return err
+	}
 	for {
 		s.EvaluateDue(ctx)
 		timer := time.NewTimer(s.NextWakeDelay(s.now()))
@@ -257,6 +260,26 @@ func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
+}
+
+// publishCurrentState re-announces the local repository's addressable state
+// before probing. A failed first probe cannot hide an outage already open when
+// the daemon restarted, and fleet-health subscribers can backfill this record.
+func (s *RouteCanarySupervisor) publishCurrentState(ctx context.Context) error {
+	if s.canonical == nil {
+		return nil
+	}
+	states, err := s.repo.ListState(ctx)
+	if err != nil {
+		return fmt.Errorf("list current route canary state: %w", err)
+	}
+	now := s.now()
+	for _, state := range states {
+		if err := s.canonical.Project(ctx, routeCanaryObservedEvent(state, s.instanceStatus(ctx, state.RouteCanaryKey), now)); err != nil {
+			return fmt.Errorf("publish current route canary state %s: %w", state.Coordinate(), err)
+		}
+	}
+	return nil
 }
 
 // EvaluateOnce probes every managed route exactly once, whether or not it is

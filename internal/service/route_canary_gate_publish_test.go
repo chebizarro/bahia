@@ -50,11 +50,12 @@ func (b *recordingRouteBus) ofType(typ events.EventType) []events.Event {
 // a recording bus: exactly the path a production transition takes to Nostr and
 // to bahia_fleet_health_nostr_entities.
 type routeProjectionHarness struct {
-	t        *testing.T
-	bus      *recordingRouteBus
-	relay    *routeProjectorRecorder
-	provider *telemetry.Provider
-	observed int
+	t         *testing.T
+	bus       *recordingRouteBus
+	relay     *routeProjectorRecorder
+	provider  *telemetry.Provider
+	projector *RouteCanaryProjector
+	observed  int
 }
 
 func newRouteProjectionHarness(t *testing.T) *routeProjectionHarness {
@@ -66,10 +67,34 @@ func newRouteProjectionHarness(t *testing.T) *routeProjectionHarness {
 		relay:    &routeProjectorRecorder{secret: &secret},
 		provider: telemetry.Setup(telemetry.Config{}, zap.NewNop()),
 	}
-	_, err := NewRouteCanaryProjector(h.bus, h.relay, zap.NewNop())
+	projector, err := NewRouteCanaryProjector(h.bus, h.relay, zap.NewNop())
 	require.NoError(t, err)
+	h.projector = projector
 	h.provider.ObserveSubscriptionStart()
 	return h
+}
+
+func TestRouteCanaryRestartRepublishesOpenOutageBeforeFailedProbe(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	h := newRouteProjectionHarness(t)
+	repo := newMemoryRouteCanaryRepo()
+	key := domain.RouteCanaryKeyForPlan(testRoutePlan())
+	require.NoError(t, repo.UpsertState(ctx, openRouteState(key, now.Add(-time.Hour))))
+	prober := &stubRouteProber{err: errors.New("probe unavailable")}
+	supervisor := newTestSupervisor(t, prober, repo, staticHealthSource{status: domain.InstanceHealthStatusHealthy, ok: true}, h.bus)
+	supervisor.SetCanonicalProjector(h.projector)
+	supervisor.now = fixedClock(now)
+
+	require.NoError(t, supervisor.publishCurrentState(ctx))
+	require.Len(t, h.observe(), 2, "current status and addressable state are republished without a transition")
+	h.provider.ObserveEOSE()
+	require.Contains(t, h.metrics(), `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 1`)
+	require.Contains(t, h.metrics(), `bahia_fleet_health_projector_caught_up 1`)
+	supervisor.EvaluateOnce(ctx)
+	require.Len(t, h.relay.events, 2, "failed first probe cannot erase or duplicate the open outage")
+	require.NoError(t, supervisor.publishCurrentState(ctx))
+	require.Len(t, h.relay.events, 2, "identical startup projection is fingerprint-deduplicated")
 }
 
 // observe feeds relay-accepted events not yet seen to fleet-health telemetry,
