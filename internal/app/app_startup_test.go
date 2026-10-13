@@ -71,6 +71,28 @@ func TestNewStartsEmergencyModeWithoutDatabase(t *testing.T) {
 	require.True(t, autoApplyWarning, "operators must see the auto_apply safety hold")
 }
 
+func TestNewWiresCanonicalDockerAutoApplyWithoutDatabase(t *testing.T) {
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+	cfg := startupTestConfig("emergency")
+	cfg.DirectRuntime.Enabled = true
+	app, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, app.Logger)
+	defer closeRelayPools(app.relayPools...)
+	require.Nil(t, app.DB)
+	require.True(t, appHasRunner(app, "canonical-auto-apply-recovery"))
+	var found bool
+	for _, check := range app.Health.Readiness().Checks {
+		if check.Name == "runtime_reconciliation" {
+			found = true
+			require.Equal(t, "docker_subset", check.Details["auto_apply"])
+			require.Equal(t, "disabled", check.Details["sql_authority"])
+		}
+	}
+	require.True(t, found)
+}
+
 func TestNewWiresPublishingWithoutDatabaseSection(t *testing.T) {
 	cfg := startupTestConfig("emergency")
 	cfg.DB = config.DBConfig{}

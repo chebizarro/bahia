@@ -30,6 +30,10 @@ type DesiredSecretRef struct {
 	Name string `json:"name"`
 	// SecretID is the ID of the ServiceSecret this ref points to.
 	SecretID uuid.UUID `json:"secret_id"`
+	// CredentialRef pins the store credential and active version selected for
+	// this decision. It contains no value. Legacy specs omit it and are not
+	// eligible for canonical auto-apply.
+	CredentialRef *SecretCredentialRef `json:"credential_ref,omitempty"`
 	// RedactedValue is a safe placeholder shown in logs and projections.
 	RedactedValue string `json:"redacted_value"`
 }
@@ -859,6 +863,7 @@ type hashInput struct {
 	WorkDir           string                  `json:"work_dir"`
 	Env               map[string]string       `json:"env"`
 	SecretRefKeys     []string                `json:"secret_ref_keys"`
+	SecretBindings    []desiredSecretBinding  `json:"secret_bindings,omitempty"`
 	Ports             []string                `json:"ports"`
 	Volumes           []string                `json:"volumes"`
 	Labels            map[string]string       `json:"labels"`
@@ -869,6 +874,14 @@ type hashInput struct {
 	RestartPolicy     string                  `json:"restart_policy"`
 	PullPolicy        string                  `json:"pull_policy"`
 	PublicRoute       *DesiredPublicRoutePlan `json:"public_route,omitempty"`
+}
+
+type desiredSecretBinding struct {
+	EnvVar       string    `json:"env_var"`
+	SecretID     uuid.UUID `json:"secret_id"`
+	Store        string    `json:"store"`
+	CredentialID string    `json:"credential_id"`
+	Version      int       `json:"version"`
 }
 
 // ComputeDesiredHash computes the deterministic hash of a DesiredServiceSpec.
@@ -886,6 +899,20 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 		secretKeys = append(secretKeys, ref.EnvVar)
 	}
 	sort.Strings(secretKeys)
+	bindings := make([]desiredSecretBinding, 0, len(s.SecretRefs))
+	for _, ref := range s.SecretRefs {
+		if ref.CredentialRef != nil {
+			bindings = append(bindings, desiredSecretBinding{EnvVar: ref.EnvVar, SecretID: ref.SecretID,
+				Store: ref.CredentialRef.Store, CredentialID: ref.CredentialRef.CredentialID,
+				Version: ref.CredentialRef.Version})
+		}
+	}
+	sort.Slice(bindings, func(i, j int) bool {
+		if bindings[i].EnvVar != bindings[j].EnvVar {
+			return bindings[i].EnvVar < bindings[j].EnvVar
+		}
+		return bindings[i].SecretID.String() < bindings[j].SecretID.String()
+	})
 
 	// Normalize nil slices to empty for stable JSON.
 	cmd := s.Command
@@ -932,6 +959,7 @@ func (s *DesiredServiceSpec) ComputeDesiredHash() string {
 		WorkDir:           s.WorkDir,
 		Env:               env,
 		SecretRefKeys:     secretKeys,
+		SecretBindings:    bindings,
 		Ports:             ports,
 		Volumes:           volumes,
 		Labels:            labels,

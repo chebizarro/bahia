@@ -592,9 +592,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// projector it publishes through exists. Privileged routes
 	// are opt-in; the service stays nil unless its route family is enabled.
 	var adoptionSvc *service.AdoptionService
-	var runtimeApplyLock *service.RuntimeApplyLock
-	if dbAvailable {
-		runtimeApplyLock = service.NewRuntimeApplyLock(pool, logger)
+	// The runtime effect fence is local and remains available without PostgreSQL.
+	runtimeApplyLock, err := service.NewRuntimeApplyLock(cfg.Nostr.LocalStore.ResolvedOutboxPath())
+	if err != nil {
+		return nil, fmt.Errorf("configuring runtime apply fence: %w", err)
 	}
 	var runtimeLifecycleSvc *service.RuntimeLifecycleService
 	if cfg.DirectRuntime.Enabled {
@@ -637,6 +638,19 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	} else {
 		logger.Warn("runtime and service DNS projection have no canonical service signer", zap.Error(sourceErr))
 	}
+	var autoApplySource *reconcile.CanonicalAutoApplySource
+	var autoApplyExecutor *reconcile.CanonicalAutoApplyExecutor
+	if cfg.Reconcile.Enabled && cfg.DirectRuntime.Enabled && canonicalRuntime != nil && serviceKeyer != nil && nostrPub != nil {
+		autoApplySource = &reconcile.CanonicalAutoApplySource{Runtime: canonicalRuntime, Secrets: secretResolver}
+		autoApplyExecutor = &reconcile.CanonicalAutoApplyExecutor{
+			Source: autoApplySource, Effect: reconcile.DockerAutoApplyEffect{Resolver: runtimeResolver},
+			Lock: runtimeApplyLock, Outbox: localOutbox, Signer: serviceKeyer,
+			Enqueue: func(ctx context.Context, ev nostr.Event) error {
+				return nostrPub.Enqueue(ctx, ev, "auto-apply-status", nil)
+			},
+		}
+	}
+	coordinatorOptions = append(coordinatorOptions, workflow.WithCanonicalAutoApplyExecutor(autoApplyExecutor))
 	// Route-canary and managed-instance supervision read their desired set and
 	// their durable progress from the daemon's canonical records in the local
 	// event store. They need the service key, never PostgreSQL.
@@ -731,13 +745,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if cfg.Reconcile.Enabled {
 		if runtimeStateRead != nil {
 			canonicalArtifacts, canonicalIntents, canonicalRuns := reconcile.CanonicalRuntimeHistory(canonicalRuntime)
-			// Do not wire RuntimeLifecycleService for auto_apply here: that
-			// service still loads deployment inputs from the SQL index.
 			rec = reconcile.NewReconciler(
 				runtimeServiceRead, runtimeEnvironmentRead, canonicalArtifacts, runtimeUnitRead, runtimeObservationRead, runtimeStateRead,
 				runtimeResolver, publisher, cfg.Reconcile.Interval, logger,
 				reconcile.WithDeploymentHistory(canonicalIntents, canonicalRuns),
-				reconcile.WithAutoRemediationDeployer(nil),
+				reconcile.WithAutoRemediationDeployer(autoApplyExecutor),
 			)
 		}
 	}
@@ -866,32 +878,34 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 					Message: "runtime observation is suspended: no canonical service signer is available; PostgreSQL will not be used as a fallback",
 					Details: map[string]string{"desired_source": "relay/local cp-state", "observation": "suspended", "auto_apply": "suspended", "sql_authority": "disabled"}}
 			}
+			if autoApplyExecutor == nil {
+				return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
+					Message: "canonical runtime observation is enabled; auto_apply is suspended (bahia-4f10q.2: direct runtime, signer, and outbox required)",
+					Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
+			}
 			return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
-				Message: "canonical runtime observation is enabled; auto_apply remediation is suspended until the deploy lifecycle reads canonical inputs instead of PostgreSQL",
-				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
+				Message: "canonical route-free Docker auto_apply is enabled; Compose, release-binding, route, tool and LLM effects remain fail closed (bahia-4f10q.2)",
+				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "docker_subset", "sql_authority": "disabled"}}
 		})
-		logger.Warn("runtime auto_apply remediation suspended until its deploy lifecycle no longer reads PostgreSQL desired state")
+		if autoApplyExecutor == nil {
+			logger.Warn("runtime auto_apply remediation suspended (bahia-4f10q.2): executor prerequisites are unavailable")
+		}
 	}
 	registerSignetHealthCheck(healthProvider, loomSignetManager)
 	registerUndeliveredHealthCheck(healthProvider, localEventStore)
 	if supervisionApplyLock != nil {
-		// the process-local fallback of the recovery apply lock
-		// excludes only this daemon's applies, so it is a degraded condition
-		// operators must see (docs/runbooks/managed-instance-supervision.md).
 		healthProvider.RegisterCheck("supervision_apply_lock", func() HealthCheck {
 			status := supervisionApplyLock.Status()
 			check := HealthCheck{Name: "supervision_apply_lock", Status: HealthStatusPass,
-				Message: "supervised recoveries are serialized with deploys through the shared PostgreSQL advisory lock",
-				Details: map[string]string{"shared_lock": fmt.Sprintf("%t", status.Shared), "fallback": fmt.Sprintf("%t", status.Fallback)}}
-			switch {
-			case status.Fallback:
+				Message: "supervised recoveries share the filesystem runtime effect fence with deploys",
+				Details: map[string]string{"shared_lock": fmt.Sprintf("%t", status.Shared), "fence_unavailable": fmt.Sprintf("%t", status.Unavailable)}}
+			if status.Unavailable || !status.Shared {
 				check.Status = HealthStatusWarn
-				check.Message = "shared runtime apply lock unreachable; recoveries proceed under the process-local lock only, which does not exclude deploys driven by other daemons in the same environment"
-				check.Details["fallback_since"] = status.FallbackSince.UTC().Format(time.RFC3339)
-				check.Details["last_error"] = status.LastError
-			case !status.Shared:
-				check.Status = HealthStatusWarn
-				check.Message = "no shared runtime apply lock (PostgreSQL unavailable at startup); recoveries are serialized only within this daemon and do not exclude deploys driven by other daemons in the same environment"
+				check.Message = "runtime effect fence unavailable; supervised recovery is refused"
+				if status.Unavailable {
+					check.Details["unavailable_since"] = status.UnavailableSince.UTC().Format(time.RFC3339)
+					check.Details["last_error"] = status.LastError
+				}
 			}
 			return check
 		})
@@ -977,6 +991,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	})
 	if rec != nil {
 		rec.SetCanonicalReadiness(bootstrapper.ReadySignal())
+	}
+	if autoApplyExecutor != nil {
+		autoApplyExecutor.Ready = bootstrapper.ReadySignal()
 	}
 	// Supervisors and stale-run health act on the local event store only after
 	// its first relay catch-up.
@@ -1969,6 +1986,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if rec != nil {
 		bgManager.RegisterWithOptions(&reconcilerRunner{rec: rec})
 	}
+	if autoApplyExecutor != nil {
+		bgManager.RegisterWithOptions(autoApplyExecutor, RunnerRequired(false))
+	}
 
 	// Nostr event processor: maps inbound events to domain commands.
 	nostrProcessor := nostrAdapter.NewProcessorWithPublisher(registry, workerRepo, publisher, logger, nostrAdapter.WithPressureThresholds(pressureThresholds))
@@ -2385,6 +2405,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// records in the local event store, not PostgreSQL.
 	secretView := nostrAdapter.NewCanonicalSecretView(nostrProjector, confidentialEncryptor)
 	secretResolver.UseRecords(secretView)
+	if autoApplySource != nil {
+		autoApplySource.Records = secretView
+	}
 	secretCanonical := nostrAdapter.NewSecretCanonicalPublisher(nostrProjector, confidentialEncryptor, secretView, logger)
 	if adoptionSvc != nil {
 		refs := service.AdoptionSecretReferences{Store: secretValues, View: secretView, Publisher: secretCanonical}
@@ -2712,6 +2735,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		DeploymentUnits:   deploymentUnitRepo,
 		RBAC:              tenantRBAC,
 		ReleasePromotions: releasePromotionAuthorizer,
+		SecretRecords:     secretView,
+		SecretStore:       secretValues,
 		Logger:            logger,
 	}
 	if enabledDomains["deployment"] || enabledDomains["runtime"] {

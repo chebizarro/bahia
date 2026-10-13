@@ -116,7 +116,7 @@ func WithRuntimeLifecycleSecrets(repo repository.SecretRepository, values Secret
 	}
 }
 
-// WithRuntimeApplyLock injects an environment-scoped advisory lock for serializing deploys.
+// WithRuntimeApplyLock injects the environment-scoped effect fence for runtime mutations.
 func WithRuntimeApplyLock(lock EnvironmentApplyLocker) RuntimeLifecycleOption {
 	return func(s *RuntimeLifecycleService) {
 		s.applyLock = lock
@@ -423,6 +423,17 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 		}
 	}
 
+	// Hold the shared effect fence while selecting inputs, applying, observing,
+	// and admitting the result. A database is not part of this boundary.
+	notify(DeployStepLockingEnvironment, "Acquiring environment apply fence")
+	if s.applyLock != nil {
+		unlock, lockErr := s.acquireApplyLock(ctx, envID, waitForLock)
+		if lockErr != nil {
+			return nil, fmt.Errorf("acquiring environment apply lock: %w", lockErr)
+		}
+		defer unlock()
+	}
+
 	// Step: building_desired_state — resolve service, env, runtime, artifact, and build deploy options.
 	notify(DeployStepBuildingDesiredState, "Resolving service, environment, and artifact")
 
@@ -540,18 +551,6 @@ func (s *RuntimeLifecycleService) deployDesiredState(
 			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", ownershipErr)
 			return nil, fmt.Errorf("compose ownership validation failed: %w", ownershipErr)
 		}
-	}
-
-	// Step: locking_environment — acquire environment-scoped advisory lock.
-	notify(DeployStepLockingEnvironment, "Acquiring environment apply lock")
-
-	if s.applyLock != nil {
-		unlock, lockErr := s.acquireApplyLock(ctx, envID, waitForLock)
-		if lockErr != nil {
-			s.logDeployAction(ctx, injected, svc, env, serviceID, envID, &artifact.ID, start, "failed", lockErr)
-			return nil, fmt.Errorf("acquiring environment apply lock: %w", lockErr)
-		}
-		defer unlock()
 	}
 
 	// Step: rendering — prepare the runtime target configuration.
@@ -724,6 +723,13 @@ func deploymentObservationConverged(obs *domain.RuntimeObservation, desiredHash 
 // Restart restarts a service directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Restart(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	start := time.Now()
+	if s.applyLock != nil {
+		unlock, err := s.applyLock.Lock(ctx, envID)
+		if err != nil {
+			return nil, fmt.Errorf("acquiring environment apply lock: %w", err)
+		}
+		defer unlock()
+	}
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
 		s.logRuntimeAction(ctx, "restart", nil, nil, serviceID, envID, nil, start, "failed", err)
@@ -757,6 +763,13 @@ func (s *RuntimeLifecycleService) Restart(ctx context.Context, serviceID, envID 
 // Stop stops a service directly through the resolved runtime and records a fresh observation.
 func (s *RuntimeLifecycleService) Stop(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error) {
 	start := time.Now()
+	if s.applyLock != nil {
+		unlock, err := s.applyLock.Lock(ctx, envID)
+		if err != nil {
+			return nil, fmt.Errorf("acquiring environment apply lock: %w", err)
+		}
+		defer unlock()
+	}
 	svc, env, rt, err := s.resolve(ctx, serviceID, envID)
 	if err != nil {
 		s.logRuntimeAction(ctx, "stop", nil, nil, serviceID, envID, nil, start, "failed", err)

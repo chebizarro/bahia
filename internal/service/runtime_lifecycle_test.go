@@ -798,8 +798,8 @@ func TestRuntimeLifecycleDeployWithStatusReportsStepProgression(t *testing.T) {
 	}
 
 	expectedSteps := []DeployStep{
-		DeployStepBuildingDesiredState,
 		DeployStepLockingEnvironment,
+		DeployStepBuildingDesiredState,
 		DeployStepRendering,
 		DeployStepApplying,
 		DeployStepObserving,

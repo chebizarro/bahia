@@ -432,8 +432,8 @@ func TestConvergence_DeployAndDeployWithStatusUseSameHelper(t *testing.T) {
 
 	// DeployWithStatus should have emitted all expected steps.
 	expectedSteps := []DeployStep{
-		DeployStepBuildingDesiredState,
 		DeployStepLockingEnvironment,
+		DeployStepBuildingDesiredState,
 		DeployStepRendering,
 		DeployStepApplying,
 		DeployStepObserving,
@@ -635,8 +635,8 @@ func TestIntegration_StatusEventsShowCorrectSteps(t *testing.T) {
 	}
 
 	expectedSteps := []DeployStep{
-		DeployStepBuildingDesiredState,
 		DeployStepLockingEnvironment,
+		DeployStepBuildingDesiredState,
 		DeployStepRendering,
 		DeployStepApplying,
 		DeployStepObserving,
@@ -797,7 +797,7 @@ func TestIntegration_LockAcquisitionFailureReturnsError(t *testing.T) {
 	registry, svcRepo, envRepo, _, artifactRepo, _, _ := newTestRegistry()
 	stateRepo := registry.state.(*mockStateRepo)
 	rt := &lifecycleMockRuntime{}
-	failLock := &failingApplyLock{err: fmt.Errorf("database connection lost")}
+	failLock := &failingApplyLock{err: fmt.Errorf("effect fence unavailable")}
 	lifecycle := NewRuntimeLifecycleService(
 		registry, svcRepo, envRepo, artifactRepo, stateRepo,
 		&mockRuntimeResolver{rt: rt}, &events.NoopPublisher{}, zap.NewNop(),
@@ -815,41 +815,7 @@ func TestIntegration_LockAcquisitionFailureReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Section 4: Advisory Lock Key Tests (unit, no DB required)
-// ---------------------------------------------------------------------------
-
-// TestAdvisoryLockKey_DistinctEnvironments proves different environment UUIDs
-// produce different advisory lock keys.
-func TestAdvisoryLockKey_DistinctEnvironments(t *testing.T) {
-	ids := []uuid.UUID{
-		uuid.MustParse("00000000-0000-0000-0000-000000000001"),
-		uuid.MustParse("00000000-0000-0000-0000-000000000002"),
-		uuid.MustParse("ffffffff-ffff-ffff-ffff-ffffffffffff"),
-		uuid.New(),
-		uuid.New(),
-	}
-
-	keys := map[int64]uuid.UUID{}
-	for _, id := range ids {
-		key := advisoryLockKey(id)
-		if prev, exists := keys[key]; exists {
-			t.Fatalf("key collision: %s and %s both map to %d", prev, id, key)
-		}
-		keys[key] = id
-	}
-}
-
-// TestAdvisoryLockKey_Stable proves the same environment always produces the
-// same advisory key across multiple calls.
-func TestAdvisoryLockKey_Stable(t *testing.T) {
-	id := uuid.MustParse("abcdef12-3456-7890-abcd-ef1234567890")
-	key1 := advisoryLockKey(id)
-	key2 := advisoryLockKey(id)
-	key3 := advisoryLockKey(id)
-	if key1 != key2 || key2 != key3 {
-		t.Fatalf("advisory key is not stable: %d, %d, %d", key1, key2, key3)
-	}
-}
+// Filesystem lock coordinate behavior is covered by runtime_apply_lock_test.go.
 
 // ---------------------------------------------------------------------------
 // Test Mock Types

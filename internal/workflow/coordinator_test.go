@@ -2140,6 +2140,35 @@ func coordExecuteRouteOnly(registry *service.RegistryService, units repository.D
 	return coord.ExecuteDeployment(context.Background(), intentID)
 }
 
+func TestCanonicalAutoApplyGuardBlocksLegacyRouteRecovery(t *testing.T) {
+	ctx := context.Background()
+	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
+	svc, env, art := createCoordinatorTestServiceEnvArtifact(t, svcRepo, envRepo, artRepo)
+	unit := &domain.DeploymentUnit{ID: uuid.New(), EnvironmentID: env.ID, Key: "managed-docker",
+		RuntimeType: domain.RuntimeTypeDocker, EndpointRef: "managed",
+		ReconcileMode: domain.ReconcileModeAutoApply, OwnershipMode: domain.OwnershipModeBahiaManaged}
+	units := &stubDeploymentUnitRepo{units: map[uuid.UUID]*domain.DeploymentUnit{unit.ID: unit}}
+	routes := &stubPublicRouteLifecycle{}
+	registry := newTestRegistry(svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo)
+	coord := NewCoordinator(registry, nil, &events.NoopPublisher{}, zap.NewNop(),
+		WithDeploymentUnitRouting(units, &stubDeploymentRuntimeLifecycle{}), WithPublicRoutes(routes),
+		WithCanonicalAutoApplyExecutor(nil))
+	desired := &domain.DesiredServiceSpec{SchemaVersion: domain.DesiredStateSchemaVersion,
+		ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: &unit.ID,
+		DeploymentUnitKey: unit.Key, UnitRuntimeType: unit.RuntimeType, ArtifactID: art.ID,
+		PublicRoute: &domain.DesiredPublicRoutePlan{Hostname: "api.example.com"}}
+	desired.ComputeDesiredHash()
+	intent := &domain.DeploymentIntent{ID: uuid.New(), ServiceID: svc.ID, EnvironmentID: env.ID,
+		DeploymentUnitID: &unit.ID, ArtifactID: art.ID, DesiredState: desired, DesiredHash: desired.DesiredHash}
+	run := &domain.DeploymentRun{ID: uuid.New(), DeploymentIntentID: intent.ID}
+	if err := coord.applyRouteOnlyRun(ctx, run, intent); err == nil || !strings.Contains(err.Error(), "bahia-4f10q.2") {
+		t.Fatalf("route-only recovery should fail closed, got %v", err)
+	}
+	if routes.calls != 0 {
+		t.Fatalf("legacy route provider invoked %d times", routes.calls)
+	}
+}
+
 func TestExecuteDeployment_PublicRouteFailureRestoresPreviousApplication(t *testing.T) {
 	ctx := context.Background()
 	svcRepo, envRepo, artRepo, intentRepo, runRepo, stateRepo := newTestCoordinatorDeps()
