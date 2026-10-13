@@ -307,9 +307,9 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	}
 
 	// Step 1: Deduplicate by intent_id.
-	// Virtualization and LLM lifecycle are suspended and never mark an intent
-	// processed. Backup run replay is decided by the immutable outbox admission
-	// keys, not this separate processed cache.
+	// Virtualization and canonical LLM lifecycle replay are decided by their
+	// immutable outbox admissions, not this separate processed cache. Backup
+	// run replay has the same rule.
 	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
@@ -629,6 +629,8 @@ func requiresStrictIntentReplay(intent *Intent) bool {
 		return intent.Op == "request"
 	case "tool":
 		return intent.Op == "approval-response" || intent.Op == "request"
+	case "llm":
+		return isLLMLifecycleIntent(intent)
 	case "adoption":
 		return intent.Op == "scan"
 	case "ml":

@@ -115,6 +115,8 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 		{"publish", 24, toolBuildReceiptFamily},
 		{"effect", 23, toolDeployReceiptFamily},
 		{"publish", 24, toolDeployReceiptFamily},
+		{"effect", 23, llmRouteReceiptFamily},
+		{"publish", 24, llmRouteReceiptFamily},
 	} {
 		t.Run(tc.family+"-"+tc.mode, func(t *testing.T) {
 			dir := t.TempDir()
@@ -128,6 +130,9 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 				Spec: domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, DesiredHash: "sha256:desired"}}
 			if tc.family == toolBuildReceiptFamily || tc.family == toolDeployReceiptFamily {
 				snapshot.Tool = &ToolEffectInput{RequestEventID: "signed-tool-request", Step: tc.family}
+			}
+			if tc.family == llmRouteReceiptFamily {
+				snapshot.LLM = &LLMEffectInput{RequestEventID: "signed-llm-request", GatewayRef: "gateway"}
 			}
 			raw, err := json.Marshal(snapshot)
 			require.NoError(t, err)

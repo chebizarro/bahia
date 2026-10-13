@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -1170,7 +1171,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
-	if cfg.LLM.Enabled {
+	if cfg.LLM.Enabled && dbAvailable {
 		llmRouteRepo := repository.NewPgLLMRouteRepository(pool)
 		llmReleaseRepo := repository.NewPgLLMReleaseRepository(pool)
 		llmIntentRepo := repository.NewPgLLMDeploymentIntentRepository(pool)
@@ -1178,7 +1179,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		llmObsRepo := repository.NewPgLLMRouteObservationRepository(pool)
 		llmStateRepo := repository.NewPgLLMRouteStateRepository(pool)
 		llmRegistry = service.NewLLMRegistryService(llmRouteRepo, llmReleaseRepo, envRepo, llmIntentRepo, llmRunRepo, llmObsRepo, llmStateRepo, publisher, logger)
-		registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "llm_provisioning_recovery", "LLM provisioning and gateway route repair require canonical signed-intent and desired-state replay")
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
@@ -1683,16 +1683,18 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 	}
 	// Register the intent handler when the llm domain is enabled.
-	if enabledDomains["llm"] && llmRegistry != nil {
-		intentProcessor.RegisterHandler("llm", controlplane.NewLLMRouteIntentHandler(
+	var llmIntentHandler *controlplane.LLMRouteIntentHandler
+	if enabledDomains["llm"] && cfg.LLM.Enabled {
+		llmIntentHandler = controlplane.NewLLMRouteIntentHandler(
 			controlplane.LLMRouteIntentHandlerConfig{
-				DeploymentUnavailableReason: "LLM deployment execution is paused until canonical signed-intent recovery is available",
+				DeploymentUnavailableReason: "bahia-4f10q.2.2: LLM deployment execution is paused until canonical signed-intent recovery is available",
 				Routes:                      llmRegistry,
 				Publish:                     llmRoutePublisher,
 				Status:                      intentStatus,
 				Logger:                      logger,
 			},
-		))
+		)
+		intentProcessor.RegisterHandler("llm", llmIntentHandler)
 		logger.Info("LLM route intent handler registered")
 	}
 	// register package intent handler, publishing through the
@@ -2498,6 +2500,49 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 		bgManager.RegisterWithOptions(canonicalTool, RunnerRequired(false))
 	}
+	// Only the observable, idempotent external-API gateway effect is enabled.
+	// Unversioned gateway admin tokens cannot be atomically bound to a decision.
+	var canonicalLLM *reconcile.LLMCanonicalController
+	if cfg.LLM.Enabled && enabledDomains["llm"] && canonicalRuntime != nil &&
+		confidentialEncryptor != nil && serviceKeyer != nil && nostrPub != nil && llmIntentHandler != nil {
+		gatewayRef := strings.TrimSpace(cfg.LLM.DefaultGatewayRef)
+		gatewayAdminRevision := ""
+		var gateway llmadapter.GatewayRouteManager
+		if endpoint, ok := cfg.LLM.Gateways[gatewayRef]; ok && gatewayRef != "" &&
+			strings.TrimSpace(endpoint.AuthToken) == "" && strings.TrimSpace(endpoint.AuthTokenFile) == "" {
+			gateway = llmadapter.NewHTTPGatewayRouteManager(llmadapter.GatewayHTTPConfig{
+				Endpoints: map[string]llmadapter.GatewayHTTPEndpointConfig{gatewayRef: {
+					Type: endpoint.Type, BaseURL: endpoint.BaseURL, Timeout: endpoint.Timeout,
+				}},
+			}, nil)
+			gatewayAdminRevision = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", endpoint.Type, endpoint.BaseURL, endpoint.Timeout))))
+		} else {
+			gatewayRef = ""
+		}
+		canonicalLLM = &reconcile.LLMCanonicalController{
+			Runtime: canonicalRuntime, Outbox: localOutbox, DeliveryTarget: nostrPub.Target(),
+			Signer: serviceKeyer, Encryptor: confidentialEncryptor,
+			PublishRelease: func(ctx context.Context, event nostr.Event) error {
+				return nostrPub.PublishBeforeCommit(ctx, event, "llm-release", nil)
+			},
+			Enqueue: func(ctx context.Context, event nostr.Event) error {
+				return nostrPub.Enqueue(ctx, event, "llm-effect-status", nil)
+			},
+			AllowedAuthor: func(author string) bool {
+				for _, operator := range trustSet.FleetOps() {
+					if operator == author {
+						return true
+					}
+				}
+				return false
+			},
+			Records: secretView, Secrets: secretResolver, Gateway: gateway, GatewayRef: gatewayRef,
+			GatewayAdminRevision: gatewayAdminRevision,
+			Lock:                 runtimeApplyLock, Ready: bootstrapper.ReadySignal(), Logger: logger,
+		}
+		llmIntentHandler.SetCanonicalLifecycle(canonicalLLM)
+		bgManager.RegisterWithOptions(canonicalLLM, RunnerRequired(false))
+	}
 	toolSecurity := service.NewToolSecurityService(toolProvisionRepo, nil, logger, service.ToolSecurityConfig{})
 	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, RegistryAuth: runtimeRegistryAuth, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
 	if rtErr != nil {
@@ -2516,6 +2561,20 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			return HealthCheck{Name: "tool_provisioning_recovery", Status: HealthStatusWarn,
 				Message: "signed tool request/approval and local Docker build/deploy recovery enabled; unsigned MCP and non-Docker tool effects remain paused (bahia-4f10q.2.1)"}
 		})
+	}
+	if cfg.LLM.Enabled {
+		if canonicalLLM == nil {
+			registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "llm_provisioning_recovery", "bahia-4f10q.2.2: canonical LLM release/deployment recovery prerequisites are unavailable")
+		} else {
+			message := "encrypted canonical LLM release receipts enabled; external route effect paused until an observable credential-pinned gateway is configured (bahia-4f10q.2.2)"
+			if canonicalLLM.Gateway != nil {
+				message = "encrypted canonical LLM release receipts and external-API route effects enabled; runtime-managed provisioning and unversioned gateway-admin credentials remain paused (bahia-4f10q.2.2)"
+			}
+			healthProvider.RegisterCheck("llm_provisioning_recovery", func() HealthCheck {
+				return HealthCheck{Name: "llm_provisioning_recovery", Status: HealthStatusWarn,
+					Message: message}
+			})
+		}
 	}
 
 	// MCP (Model Context Protocol) server for AI agent integration.

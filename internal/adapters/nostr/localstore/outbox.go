@@ -792,7 +792,27 @@ func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Ti
 }
 
 func isProofEligibleEvent(ev nostr.Event) bool {
-	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev) || isToolAcceptedStatusEvent(ev)
+	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev) ||
+		isToolAcceptedStatusEvent(ev) || isLLMAcceptedStatusEvent(ev) || isLLMReleaseEvent(ev)
+}
+
+func isLLMAcceptedStatusEvent(ev nostr.Event) bool {
+	if ev.Kind != 30315 || outboxTag(ev.Tags, "workflow") != "llm" ||
+		outboxTag(ev.Tags, "domain") != "intent" || outboxTag(ev.Tags, "t") != "intent-status" ||
+		outboxTag(ev.Tags, "status") != "accepted" || outboxTag(ev.Tags, "p") == "" ||
+		outboxTag(ev.Tags, "intent_id") == "" {
+		return false
+	}
+	_, err := nostr.IDFromHex(outboxTag(ev.Tags, "e"))
+	return err == nil
+}
+
+func isLLMReleaseEvent(ev nostr.Event) bool {
+	return ev.Kind == nostr.Kind(kinds.CASControlState) && outboxTag(ev.Tags, "domain") == "llm" &&
+		outboxTag(ev.Tags, "t") == kinds.CPStateTopicLLMRelease &&
+		outboxTag(ev.Tags, "legacy_kind") == fmt.Sprint(kinds.LLMReleaseRegistry) &&
+		strings.HasPrefix(outboxTag(ev.Tags, "d"), "llm:release:") &&
+		outboxTag(ev.Tags, "deleted") == "false"
 }
 
 // Tool effects wait for an exact, publisher-verified relay quorum acceptance

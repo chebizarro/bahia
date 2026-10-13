@@ -125,7 +125,14 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 }
 
 func (p *IntentStatusPublisher) buildStatusEvent(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation) (nostr.Event, error) {
-	return p.buildStatusEventWithExpiry(ctx, intent, status, result, reason, evaluation, p.statusExpiry)
+	expiry := p.statusExpiry
+	if status == "accepted" && isLLMLifecycleIntent(intent) {
+		// Recovery rechecks the exact accepted event after restart. A NIP-40
+		// expiry would erase its local/relay authority while its effect receipt
+		// could still be nonterminal. The d coordinate remains replaceable.
+		expiry = 0
+	}
+	return p.buildStatusEventWithExpiry(ctx, intent, status, result, reason, evaluation, expiry)
 }
 
 func (p *IntentStatusPublisher) buildStatusEventWithExpiry(ctx context.Context, intent *Intent, status, result, reason string, evaluation *domain.PolicyEvaluation, expiry time.Duration) (nostr.Event, error) {
@@ -184,6 +191,9 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 			{"intent_id", intent.IntentID},
 		},
 		Content: string(contentJSON),
+	}
+	if intent.Domain == "llm" {
+		ev.Tags = append(ev.Tags, nostr.Tag{"workflow", "llm"})
 	}
 	if expiry > 0 {
 		ev.Tags = append(ev.Tags, nostr.Tag{"expiration", fmt.Sprintf("%d", time.Now().Add(expiry).Unix())})

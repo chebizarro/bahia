@@ -43,6 +43,7 @@ type ApplySnapshot struct {
 	Spec               domain.DesiredServiceSpec `json:"spec"`
 	SecretPins         []ApplySecretPin          `json:"secret_pins,omitempty"`
 	Tool               *ToolEffectInput          `json:"tool,omitempty"`
+	LLM                *LLMEffectInput           `json:"llm,omitempty"`
 }
 
 type ApplySecretPin struct {
@@ -249,6 +250,9 @@ func (e *CanonicalAutoApplyExecutor) AutoRemediateDesiredState(ctx context.Conte
 	if err != nil {
 		if receipt.Phase == "effect_started" {
 			return nil, e.refuse(ctx, receipt, ErrAutoApplyRecoveryRequired)
+		}
+		if errors.Is(err, ErrFreshDecisionRequired) {
+			return nil, e.refuse(ctx, receipt, err)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrAutoApplyRecoveryRequired, err)
 	}
