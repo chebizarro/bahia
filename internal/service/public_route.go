@@ -194,6 +194,20 @@ func (p *PublicRoutePlanner) requireClaim(ctx context.Context, plan *domain.Desi
 	return p.claimChecker(ctx, plan)
 }
 
+// CommitClaim keeps the provider check and canonical claim publication atomic
+// with respect to route apply, compensation, and withdrawal in this writer.
+func (p *PublicRoutePlanner) CommitClaim(ctx context.Context, plan *domain.DesiredPublicRoutePlan, orgID uuid.UUID, environmentProtected bool, publish func(context.Context) error) error {
+	if publish == nil {
+		return fmt.Errorf("canonical claim publisher is required")
+	}
+	p.effectMu.Lock()
+	defer p.effectMu.Unlock()
+	if err := p.CheckClaim(ctx, plan, orgID, environmentProtected); err != nil {
+		return fmt.Errorf("provider collision check: %w", err)
+	}
+	return publish(ctx)
+}
+
 // CheckClaim validates zone ownership and the configured origin before reading
 // provider state. A signed intent cannot reserve another organization's zone.
 func (p *PublicRoutePlanner) CheckClaim(ctx context.Context, plan *domain.DesiredPublicRoutePlan, orgID uuid.UUID, environmentProtected bool) error {
@@ -224,7 +238,7 @@ func (p *PublicRoutePlanner) Check(ctx context.Context, plan *domain.DesiredPubl
 }
 
 // Withdraw removes provider state only while the canonical claim still holds.
-func (p *PublicRoutePlanner) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error {
+func (p *PublicRoutePlanner) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error, finalize func(context.Context) error) error {
 	p.effectMu.Lock()
 	defer p.effectMu.Unlock()
 	if err := p.requireClaim(ctx, plan); err != nil {
@@ -238,7 +252,13 @@ func (p *PublicRoutePlanner) Withdraw(ctx context.Context, plan *domain.DesiredP
 	if !ok {
 		return fmt.Errorf("public route backend %q cannot withdraw", plan.BackendRef)
 	}
-	return withdrawing.Withdraw(ctx, plan, phase)
+	if err := withdrawing.Withdraw(ctx, plan, phase); err != nil {
+		return err
+	}
+	if finalize != nil {
+		return finalize(ctx)
+	}
+	return nil
 }
 
 func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {

@@ -49,10 +49,10 @@ type hostnameTestRoutes struct {
 	failPhase string
 }
 
-func (*hostnameTestRoutes) CheckClaim(context.Context, *domain.DesiredPublicRoutePlan, uuid.UUID, bool) error {
-	return nil
+func (*hostnameTestRoutes) CommitClaim(ctx context.Context, _ *domain.DesiredPublicRoutePlan, _ uuid.UUID, _ bool, publish func(context.Context) error) error {
+	return publish(ctx)
 }
-func (r *hostnameTestRoutes) Withdraw(ctx context.Context, _ *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error {
+func (r *hostnameTestRoutes) Withdraw(ctx context.Context, _ *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error, finalize func(context.Context) error) error {
 	for _, step := range []string{"dns_withdrawn", "tunnel_withdrawn"} {
 		r.mu.Lock()
 		r.phases = append(r.phases, step)
@@ -68,7 +68,7 @@ func (r *hostnameTestRoutes) Withdraw(ctx context.Context, _ *domain.DesiredPubl
 			return errors.New("interrupted after " + step)
 		}
 	}
-	return nil
+	return finalize(ctx)
 }
 
 type hostnameHarness struct {

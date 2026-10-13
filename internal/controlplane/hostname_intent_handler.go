@@ -28,8 +28,8 @@ type HostnameRecordPublisher interface {
 }
 
 type HostnameRouteManager interface {
-	CheckClaim(context.Context, *domain.DesiredPublicRoutePlan, uuid.UUID, bool) error
-	Withdraw(context.Context, *domain.DesiredPublicRoutePlan, func(context.Context, string) error) error
+	CommitClaim(context.Context, *domain.DesiredPublicRoutePlan, uuid.UUID, bool, func(context.Context) error) error
+	Withdraw(context.Context, *domain.DesiredPublicRoutePlan, func(context.Context, string) error, func(context.Context) error) error
 }
 
 type HostnameIntentHandler struct {
@@ -151,10 +151,9 @@ func (h *HostnameIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		if err := record.Validate(); err != nil {
 			return err
 		}
-		if err := h.routes.CheckClaim(ctx, record.Plan, intent.OrgID, environmentProtected); err != nil {
-			return fmt.Errorf("provider collision check: %w", err)
-		}
-		return h.publishRecord(ctx, kinds.CPStateFamilyHostnameReservation, hostname, false, record)
+		return h.routes.CommitClaim(ctx, record.Plan, intent.OrgID, environmentProtected, func(commitCtx context.Context) error {
+			return h.publishRecord(commitCtx, kinds.CPStateFamilyHostnameReservation, hostname, false, record)
+		})
 	case string(domain.RouteRemove):
 		if payload.Plan != nil {
 			return fmt.Errorf("remove uses the canonical route plan, not an intent-supplied plan")
@@ -165,11 +164,6 @@ func (h *HostnameIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		if err := h.publishRecovery(ctx, intent, current, "prepared"); err != nil {
 			return err
 		}
-		if err := h.routes.Withdraw(ctx, current.Plan, func(effectCtx context.Context, phase string) error {
-			return h.publishRecovery(effectCtx, intent, current, phase)
-		}); err != nil {
-			return err
-		}
 		tombstone := *current
 		tombstone.Plan = nil
 		tombstone.Deleted = true
@@ -177,10 +171,11 @@ func (h *HostnameIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		tombstone.IntentEventID = intent.Event.ID.Hex()
 		tombstone.RequestedBy = intent.Actor
 		tombstone.UpdatedAt = domain.NextRevisionTime(current.UpdatedAt)
-		if err := h.publishRecord(ctx, kinds.CPStateFamilyHostnameReservation, hostname, true, tombstone); err != nil {
-			return err
-		}
-		return nil
+		return h.routes.Withdraw(ctx, current.Plan, func(effectCtx context.Context, phase string) error {
+			return h.publishRecovery(effectCtx, intent, current, phase)
+		}, func(effectCtx context.Context) error {
+			return h.publishRecord(effectCtx, kinds.CPStateFamilyHostnameReservation, hostname, true, tombstone)
+		})
 	case string(domain.RoutePreserve):
 		if current == nil || current.Deleted || current.OrgID != intent.OrgID || current.ServiceID != payload.ServiceID || current.EnvironmentID != payload.EnvironmentID || current.DeploymentUnitID != payload.DeploymentUnitID || payload.Plan != nil {
 			return &intentStateConflictError{message: "hostname cannot be preserved without its current owner"}
