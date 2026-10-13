@@ -94,18 +94,6 @@ func (r *replaceableRelay) countKind(kind int) int {
 	return n
 }
 
-func (r *replaceableRelay) countOn(c relayCoordinate) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n := 0
-	for _, ev := range r.all {
-		if coordinateOf(ev) == c {
-			n++
-		}
-	}
-	return n
-}
-
 // assertRelayTombstoned proves the relay now serves a tombstone on live's
 // exact coordinate, carrying the same projection envelope as the live record.
 func assertRelayTombstoned(t *testing.T, relay *replaceableRelay, live gonostr.Event) gonostr.Event {
@@ -146,15 +134,6 @@ func onlyLive(t *testing.T, relay *replaceableRelay, legacyKind int) gonostr.Eve
 		t.Fatalf("live record for legacy kind %d is kind %d deleted=%q", legacyKind, live[0].Kind, tagValue(live[0].Tags, "deleted"))
 	}
 	return live[0]
-}
-
-func assertNoLegacyDNSKinds(t *testing.T, relay *replaceableRelay) {
-	t.Helper()
-	for _, kind := range dnsStateLegacyKinds {
-		if n := relay.countKind(kind); n != 0 {
-			t.Fatalf("published %d event(s) on legacy wire kind %d; DNS state lives on %d", n, kind, KindCASControlState)
-		}
-	}
 }
 
 // TestServiceStateTombstoneSharesLiveCoordinate pins the shared-coordinate contract: the bus-driven

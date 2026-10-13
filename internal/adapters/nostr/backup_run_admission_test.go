@@ -19,10 +19,18 @@ func TestBackupRunAdmissionRequiresCrossProcessFence(t *testing.T) {
 	dir := t.TempDir()
 	events, err := localstore.Open(filepath.Join(dir, "events.db"))
 	require.NoError(t, err)
-	defer events.Close()
+	t.Cleanup(func() {
+		if err := events.Close(); err != nil {
+			t.Errorf("close events: %v", err)
+		}
+	})
 	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	serviceKey := nostr.Generate()
 	projector := withTestServiceKey(&Projector{enabled: true, logger: zap.NewNop()}, serviceKey.Hex())
 	publisher := &Publisher{localOutbox: outbox, ownEvents: events, target: repository.NostrPublishTargetControlPlane,

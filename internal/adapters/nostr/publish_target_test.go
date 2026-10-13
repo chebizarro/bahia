@@ -22,17 +22,6 @@ func sharedOutbox(repo *repositorytest.InMemoryNostrEventRepository) *signalingO
 	return outbox
 }
 
-// discoveryPass nudges a runner and waits until it has started and then
-// finished a discovery pass: the second listing can only begin once the first
-// pass (including any delivery rounds it started) has returned.
-func discoveryPass(t *testing.T, publisher *Publisher, outbox *signalingOutbox) {
-	t.Helper()
-	for range 2 {
-		publisher.nudge()
-		receive(t, outbox.listed, "runner discovery pass")
-	}
-}
-
 // A control-plane row (docs, SBOM or config-fabric) with one control-plane relay
 // down is retried by the control-plane runner to that relay only, until it
 // accepts, and is never adopted by the interop runner or sent to interop

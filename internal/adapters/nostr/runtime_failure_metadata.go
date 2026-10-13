@@ -141,8 +141,7 @@ func publicHostName(host string) bool {
 		return false
 	}
 	for _, ch := range host {
-		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-			(ch >= '0' && ch <= '9') || ch == '.' || ch == '-' || ch == '_') {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_", ch) {
 			return false
 		}
 	}

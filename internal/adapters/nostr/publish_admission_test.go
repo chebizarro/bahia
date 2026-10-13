@@ -195,14 +195,12 @@ func TestPublisherRedeliveryPassHaltsOnProcessWideGate(t *testing.T) {
 	repo := newSignalingOutbox()
 	publisher, frames := newAdmissionTestPublisher(t, admission, repo, relayA)
 
-	events := make([]gonostr.Event, 0, 3)
 	for i := range 3 {
 		ev := testSignedEvent(fmt.Sprintf("halt-%d", i))
 		require.NoError(t, ev.Sign(gonostr.Generate()))
 		require.NoError(t, publisher.Enqueue(ctx, *ev, "halt.test", nil))
 		d, _ := publisher.trackDelivery(*ev, 0)
 		publisher.scheduleDelivery(d, publisher.now().Add(-time.Second))
-		events = append(events, *ev)
 	}
 
 	publisher.redeliverDue(ctx)

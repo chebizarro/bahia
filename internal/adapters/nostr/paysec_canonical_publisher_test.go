@@ -614,10 +614,6 @@ func TestCPStateDomainsIncludesPaymentAndSecurity(t *testing.T) {
 	}
 }
 
-func tagValueFromEvent(ev gonostr.Event, key string) string {
-	return tagValue(ev.Tags, key)
-}
-
 // --- Security Finding Detail tests ---
 
 func TestSecurityFindingDetailPublisher_SingleRecord(t *testing.T) {

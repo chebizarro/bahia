@@ -625,7 +625,7 @@ func (s *Subscriber) fetchPaged(ctx context.Context, relayURL string, key cursor
 		next := oldest
 		if until != 0 && next >= until {
 			if slices.Contains(base.Kinds, nostr.Kind(KindLoomJobStatusUpdate)) {
-				return fmt.Errorf("Loom kind-30100 replay on %s cannot prove completeness: more than %d events share created_at %d", relayURL, limit, next)
+				return fmt.Errorf("loom kind-30100 replay on %s cannot prove completeness: more than %d events share created_at %d", relayURL, limit, next)
 			}
 			// NIP-01 cannot page within one second: more than a page of
 			// events share this created_at. Step past it, loudly.
@@ -686,7 +686,9 @@ func (s *Subscriber) drainStored(ctx context.Context, relayURL string, key curso
 	for {
 		select {
 		case <-ctx.Done():
-			s.closedBeforeEnd(sub, key, ledger)
+			if err := s.closedBeforeEnd(sub, key, ledger); err != nil {
+				s.logger.Debug("relay closed during cancelled catch-up", zap.Error(err))
+			}
 			return len(seen), oldest, ctx.Err()
 		case ev, ok := <-sub.Events:
 			if !ok {
@@ -781,7 +783,9 @@ func (s *Subscriber) forwardLive(ctx context.Context, relayURL string, key curso
 	for {
 		select {
 		case <-ctx.Done():
-			s.closedBeforeEnd(sub, key, ledger)
+			if err := s.closedBeforeEnd(sub, key, ledger); err != nil {
+				s.logger.Debug("relay closed during cancelled live subscription", zap.Error(err))
+			}
 			return ctx.Err()
 		case ev, ok := <-sub.Events:
 			if !ok {

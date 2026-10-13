@@ -173,7 +173,11 @@ func TestProcessSyncRestartFetchesOnlyMissingEventsAndKeepsTombstone(t *testing.
 
 	store, err := localstore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	held := map[gonostr.ID]bool{}
 	for ev := range store.QueryEvents(filter) {
 		held[ev.ID] = true

@@ -441,58 +441,6 @@ func assertCatalogHasKinds(t *testing.T, catalog *KindCatalog, want []int) {
 	}
 }
 
-func assertKindsInclude(t *testing.T, got []int, want []int) {
-	t.Helper()
-	gotSet := intsToSet(got)
-	for _, kind := range want {
-		if _, ok := gotSet[kind]; !ok {
-			t.Fatalf("missing kind %d from %v", kind, got)
-		}
-	}
-}
-
-func assertKindsExclude(t *testing.T, got []int, want []int) {
-	t.Helper()
-	gotSet := intsToSet(got)
-	for _, kind := range want {
-		if _, ok := gotSet[kind]; ok {
-			t.Fatalf("unexpected kind %d in %v", kind, got)
-		}
-	}
-}
-
-func intsToSet(values []int) map[int]struct{} {
-	set := make(map[int]struct{}, len(values))
-	for _, value := range values {
-		set[value] = struct{}{}
-	}
-	return set
-}
-
-func groupNames(groups []ReplayGroup) []string {
-	names := make([]string, 0, len(groups))
-	for _, group := range groups {
-		names = append(names, group.Name)
-	}
-	return names
-}
-
-func assertStringSetEqual(t *testing.T, got []string, want []string) {
-	t.Helper()
-	gotSet := make(map[string]struct{}, len(got))
-	for _, value := range got {
-		gotSet[value] = struct{}{}
-	}
-	if len(gotSet) != len(want) {
-		t.Fatalf("got groups %v, want %v", got, want)
-	}
-	for _, value := range want {
-		if _, ok := gotSet[value]; !ok {
-			t.Fatalf("got groups %v, want %v", got, want)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Backward-compatible decoding tests
 // ---------------------------------------------------------------------------

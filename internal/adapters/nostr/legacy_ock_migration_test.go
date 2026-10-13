@@ -139,10 +139,6 @@ func makeRecord(id, pubkey, content, dTag, topic string) repository.NostrEventRe
 	}
 }
 
-func legacyO1Content(orgID, pubkey, role string) string {
-	return fmt.Sprintf(`{"schema":"bahia.org-state.aead.v1","algorithm":"xchacha20-poly1305","key_ref":"org-state","nonce":"AAAA","ciphertext":"BBBB","associated_data":{"d":"test"}}`)
-}
-
 func newFormatContent(orgID string) string {
 	return fmt.Sprintf(`{"schema":%q,"algorithm":"xchacha20-poly1305","key_org":%q,"key_ref":"ock:%s","key_version":"v1","nonce":"nonce","ciphertext":"already-migrated","associated_data":{"schema":%q}}`,
 		confidentialAEADV1Schema, orgID, orgID, confidentialAEADV1Schema)

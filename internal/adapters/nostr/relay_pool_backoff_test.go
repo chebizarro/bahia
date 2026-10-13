@@ -152,13 +152,14 @@ func TestRelayPoolSlowReconnectDoesNotStallOtherRelaysOrTopology(t *testing.T) {
 	}()
 	receive(t, dialStarted, "relay B dial in flight")
 
-	topologyFree := make(chan struct{})
+	topologyFree := make(chan int, 1)
 	go func() {
 		pool.mu.Lock()
+		count := len(pool.relays)
 		pool.mu.Unlock()
-		close(topologyFree)
+		topologyFree <- count
 	}()
-	receive(t, topologyFree, "topology write lock while a publish is in flight")
+	require.Positive(t, receive(t, topologyFree, "topology write lock while a publish is in flight"))
 
 	stateFree := make(chan bool)
 	go func() { stateFree <- managedRelayConnected(pool.relays[relayB]) }()

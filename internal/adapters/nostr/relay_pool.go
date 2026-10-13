@@ -1160,13 +1160,6 @@ func (m *MergedSubscription) EventSource(eventID string) string {
 	return relayURL
 }
 
-func (m *MergedSubscription) recordEventSource(eventID, relayURL string) {
-	if m == nil || m.eventSources == nil || eventID == "" {
-		return
-	}
-	m.eventSources.LoadOrStore(eventID, relayURL)
-}
-
 // RelayStoredStatus is one relay's answer to a subscription's initial REQs.
 type RelayStoredStatus string
 
@@ -3109,7 +3102,10 @@ func fetchRelayLimits(ctx context.Context, relayURL string) (relayLimits, *nip11
 	if err != nil {
 		return relayLimits{}, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// NIP-11 is a read-only probe; a close failure cannot change its result.
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode != http.StatusOK {
 		return relayLimits{}, nil, fmt.Errorf("NIP-11 request answered %s", resp.Status)
 	}

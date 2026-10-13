@@ -22,7 +22,11 @@ func storedSyncIDs(t *testing.T, path string, filter gonostr.Filter) []gonostr.I
 	t.Helper()
 	store, err := localstore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	return appliedIDs(slices.Collect(store.QueryEvents(filter)))
 }
 
