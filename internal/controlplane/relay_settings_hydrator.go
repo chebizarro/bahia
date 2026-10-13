@@ -20,7 +20,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const defaultRelaySettingsPostEOSEDrain = 300 * time.Millisecond
+const (
+	defaultRelaySettingsPostEOSEDrain = 300 * time.Millisecond
+	maxSeenRelaySettingsEventIDs      = 1024
+)
 
 var (
 	errRelaySettingsResubscribeNow    = errors.New("relay settings subscription should resubscribe immediately")
@@ -74,16 +77,20 @@ type RelaySettingsHydrator struct {
 	onCaughtUp    func(context.Context)
 	validate      func(RelayPolicyState) error
 
-	mu               sync.Mutex
-	seenEventIDs     map[string]struct{}
-	latestCreated    int64
-	latestEventID    string
-	latestSnapshot   RelayPolicyState
-	latestProjection repository.RelayPolicyProjection
-	hasSnapshot      bool
-	relayEOSE        map[string]struct{}
-	projectionLoaded atomic.Bool
-	caughtUp         atomic.Bool
+	mu                 sync.Mutex
+	seenEventIDs       map[string]struct{}
+	seenEventOrder     []string
+	seenEventNext      int
+	latestCreated      int64
+	latestEventID      string
+	latestSnapshot     RelayPolicyState
+	latestProjection   repository.RelayPolicyProjection
+	hasSnapshot        bool
+	relayEOSE          map[string]struct{}
+	subscriptionRelays map[string]struct{}
+	projectionLoaded   atomic.Bool
+	caughtUp           atomic.Bool
+	liveFromRelay      atomic.Bool
 }
 
 func NewRelaySettingsHydrator(cfg RelaySettingsHydratorConfig) *RelaySettingsHydrator {
@@ -136,6 +143,12 @@ func (h *RelaySettingsHydrator) IsCaughtUp() bool {
 		return false
 	}
 	return h.caughtUp.Load()
+}
+
+// IsLive reports whether the current subscription received the accepted head
+// from a configured relay. A restored projection never establishes liveness.
+func (h *RelaySettingsHydrator) IsLive() bool {
+	return h != nil && h.liveFromRelay.Load()
 }
 
 func (h *RelaySettingsHydrator) Run(ctx context.Context) error {
@@ -223,8 +236,10 @@ func (h *RelaySettingsHydrator) LoadProjection(ctx context.Context) error {
 
 func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 	h.caughtUp.Store(false)
+	h.liveFromRelay.Store(false)
 	h.mu.Lock()
 	h.relayEOSE = make(map[string]struct{})
+	h.subscriptionRelays = nil
 	h.mu.Unlock()
 
 	merged, err := relaySettingsSubscribeAllWithEOSE(h.pool, ctx, []gonostr.Filter{h.filter()})
@@ -232,6 +247,8 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 		return err
 	}
 	defer merged.Close()
+	defer h.liveFromRelay.Store(false)
+	h.setSubscriptionRelays(merged.RelayURLs())
 
 	h.logger.Info("subscribed to canonical relay settings state",
 		zap.Strings("relays", safeRelayURLsForLog(merged.RelayURLs())),
@@ -330,8 +347,18 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 			if ev == nil {
 				continue
 			}
+			h.setSubscriptionRelays(merged.RelayURLs())
 			h.handleEventFromRelay(ctx, ev, merged.EventSource(ev.ID.Hex()))
 		}
+	}
+}
+
+func (h *RelaySettingsHydrator) setSubscriptionRelays(relays []string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.subscriptionRelays = make(map[string]struct{}, len(relays))
+	for _, relay := range relays {
+		h.subscriptionRelays[safeRelayURL(relay)] = struct{}{}
 	}
 }
 
@@ -389,6 +416,9 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 			return false
 		}
 		if current == nil || current.EventID != eventID || current.RelayConfirmedAt != nil {
+			if current != nil && current.EventID == eventID {
+				h.markLiveHead(eventID, sourceRelay)
+			}
 			return false
 		}
 	}
@@ -402,6 +432,11 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 	}
 
 	acceptedAt := h.now().UTC()
+	signedEvent, err := json.Marshal(ev)
+	if err != nil {
+		h.logger.Warn("encoding signed relay settings state event", zap.String("event_id", eventID), zap.Error(err))
+		return false
+	}
 	projection := repository.RelayPolicyProjection{
 		AuthorPubkey:     strings.ToLower(ev.PubKey.Hex()),
 		EventID:          eventID,
@@ -409,6 +444,7 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 		EventAcceptedAt:  acceptedAt,
 		Schema:           RelaySettingsSchema,
 		CanonicalPayload: canonicalPayload,
+		SignedEvent:      signedEvent,
 		PayloadHash:      payloadHash,
 		SourceRelay:      safeRelayURL(sourceRelay),
 		LastSyncAt:       acceptedAt,
@@ -422,13 +458,24 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 		return false
 	}
 	h.mu.Lock()
-	h.seenEventIDs[eventID] = struct{}{}
+	if _, exists := h.seenEventIDs[eventID]; !exists {
+		if len(h.seenEventOrder) == maxSeenRelaySettingsEventIDs {
+			delete(h.seenEventIDs, h.seenEventOrder[h.seenEventNext])
+			h.seenEventOrder[h.seenEventNext] = eventID
+			h.seenEventNext = (h.seenEventNext + 1) % maxSeenRelaySettingsEventIDs
+		} else {
+			h.seenEventOrder = append(h.seenEventOrder, eventID)
+		}
+		h.seenEventIDs[eventID] = struct{}{}
+	}
 	h.mu.Unlock()
 	if !promoted {
+		h.markLiveHead(eventID, sourceRelay)
 		return false
 	}
 
 	h.storeSnapshot(*state, projection)
+	h.markLiveHead(eventID, sourceRelay)
 	if h.onSnapshot != nil {
 		if err := h.onSnapshot(ctx, cloneRelayPolicyState(*state)); err != nil {
 			h.logger.Warn("relay settings snapshot callback failed", zap.String("event_id", eventID), zap.Error(err))
@@ -443,6 +490,20 @@ func (h *RelaySettingsHydrator) handleEventFromRelay(ctx context.Context, ev *go
 		zap.Int("service_relays", len(state.ServiceRelays)),
 	)
 	return true
+}
+
+func (h *RelaySettingsHydrator) markLiveHead(eventID, sourceRelay string) {
+	if sourceRelay == "" {
+		return
+	}
+	sourceRelay = safeRelayURL(sourceRelay)
+	h.mu.Lock()
+	_, configured := h.subscriptionRelays[sourceRelay]
+	isHead := h.hasSnapshot && h.latestEventID == eventID
+	h.mu.Unlock()
+	if configured && isHead {
+		h.liveFromRelay.Store(true)
+	}
 }
 
 // wouldReplaceHead reports whether ev orders after the head in memory
@@ -484,6 +545,7 @@ func (h *RelaySettingsHydrator) Projection() (repository.RelayPolicyProjection, 
 	}
 	projection := h.latestProjection
 	projection.CanonicalPayload = append([]byte(nil), projection.CanonicalPayload...)
+	projection.SignedEvent = append([]byte(nil), projection.SignedEvent...)
 	return projection, true
 }
 
@@ -493,6 +555,7 @@ func (h *RelaySettingsHydrator) storeSnapshot(state RelayPolicyState, projection
 	h.latestSnapshot = cloneRelayPolicyState(state)
 	h.latestProjection = projection
 	h.latestProjection.CanonicalPayload = append([]byte(nil), projection.CanonicalPayload...)
+	h.latestProjection.SignedEvent = append([]byte(nil), projection.SignedEvent...)
 	h.latestCreated = projection.EventCreatedAt.Unix()
 	h.latestEventID = projection.EventID
 	h.hasSnapshot = true

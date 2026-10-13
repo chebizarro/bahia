@@ -14,6 +14,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -81,7 +82,63 @@ func cloneTestProjection(in *repository.RelayPolicyProjection) *repository.Relay
 	}
 	out := *in
 	out.CanonicalPayload = append([]byte(nil), in.CanonicalPayload...)
+	out.SignedEvent = append([]byte(nil), in.SignedEvent...)
 	return &out
+}
+
+func TestRelaySettingsHydratorSeenIDsAreBoundedAndReplaysRemainDeduped(t *testing.T) {
+	author := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	h := newTestRelaySettingsHydrator(t, author, &memoryRelayPolicyProjectionStore{})
+	var oldest, newest *nostr.Event
+	for i := range maxSeenRelaySettingsEventIDs + 1 {
+		ev := signedRelaySettingsStateEvent(t, time.Unix(int64(1_000+i), 0).UTC(), RelayPolicyState{Schema: RelaySettingsSchema})
+		if i == 0 {
+			oldest = ev
+		}
+		newest = ev
+		if !h.handleEventFromRelay(t.Context(), ev, "wss://relay.example") {
+			t.Fatalf("event %d did not promote", i)
+		}
+	}
+	if got := len(h.seenEventIDs); got != maxSeenRelaySettingsEventIDs {
+		t.Fatalf("seen ID cache size = %d, want %d", got, maxSeenRelaySettingsEventIDs)
+	}
+	if _, exists := h.seenEventIDs[oldest.ID.Hex()]; exists {
+		t.Fatal("oldest ID was not evicted")
+	}
+	if h.handleEventFromRelay(t.Context(), oldest, "wss://relay.example") {
+		t.Fatal("evicted old event replaced latest head")
+	}
+	if h.handleEventFromRelay(t.Context(), newest, "wss://relay.example") {
+		t.Fatal("duplicate latest event promoted again")
+	}
+	if got := len(h.seenEventIDs); got != maxSeenRelaySettingsEventIDs {
+		t.Fatalf("seen ID cache grew after replays: %d", got)
+	}
+}
+
+func TestRelaySettingsHydratorLiveRequiresCurrentConfiguredRelayEvent(t *testing.T) {
+	author := testNostrPubKeyHexFromPrivateKey(t, testServiceKey)
+	state := RelayPolicyState{Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://relay.example"}}
+	store := &memoryRelayPolicyProjectionStore{projection: testProjection(t, author, "cached-head", time.Unix(1_000, 0), state)}
+	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
+		Pool:          nostradapter.NewRelayPool([]string{"wss://relay.example"}, zap.NewNop()),
+		ServicePubkey: author, ProjectionStore: store,
+	})
+	require.NoError(t, h.LoadProjection(t.Context()))
+	require.False(t, h.IsLive(), "a projection read is not relay confirmation")
+	h.setSubscriptionRelays([]string{"wss://relay.example"})
+	event := signedRelaySettingsStateEvent(t, time.Unix(1_001, 0), state)
+	require.True(t, h.handleEventFromRelay(t.Context(), event, "wss://unconfigured.example"))
+	require.False(t, h.IsLive(), "an unconfigured source is not loaded-live")
+	require.False(t, h.handleEventFromRelay(t.Context(), event, "wss://relay.example"))
+	require.True(t, h.IsLive(), "a duplicate current head received from a configured relay is live")
+	h.liveFromRelay.Store(false)
+	h.setSubscriptionRelays([]string{"wss://replacement.example"})
+	require.False(t, h.handleEventFromRelay(t.Context(), event, "wss://relay.example"))
+	require.False(t, h.IsLive(), "a removed relay cannot establish current-subscription liveness")
+	require.False(t, h.handleEventFromRelay(t.Context(), event, "wss://replacement.example"))
+	require.True(t, h.IsLive(), "a relay added to the current subscription can confirm the head")
 }
 
 func TestRelaySettingsHydratorFilterIsScopedToCanonicalState(t *testing.T) {

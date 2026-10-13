@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
@@ -41,6 +43,11 @@ func TestRelayPolicyProjectionReplacementPredicate(t *testing.T) {
 		{name: "equal time higher event id rejected", current: current, candidate: func() RelayPolicyProjection { p := candidate; p.EventID = strings.Repeat("d", 64); return p }()},
 		{name: "same cached event becomes relay confirmed", current: func() RelayPolicyProjection { p := current; p.RelayConfirmedAt = nil; return p }(), candidate: candidate, want: true},
 		{name: "same confirmed event rejected", current: current, candidate: candidate},
+		{name: "same confirmed event backfills signed bytes", current: current, candidate: func() RelayPolicyProjection {
+			p := candidate
+			p.SignedEvent = []byte(`{"id":"retained"}`)
+			return p
+		}(), want: true},
 		{name: "same event with different payload rejected", current: func() RelayPolicyProjection { p := current; p.RelayConfirmedAt = nil; return p }(), candidate: func() RelayPolicyProjection {
 			p := candidate
 			p.CanonicalPayload = []byte(`{"schema":"different"}`)
@@ -72,7 +79,8 @@ func TestRelayPolicyProjectionQueriesExecuteOrderingInvariant(t *testing.T) {
 			payload_hash TEXT NOT NULL,
 			source_relay TEXT NOT NULL,
 			last_sync_at TIMESTAMP NOT NULL,
-			relay_confirmed_at TIMESTAMP NULL
+			relay_confirmed_at TIMESTAMP NULL,
+			signed_event BLOB NULL
 		)
 	`)
 	require.NoError(t, err)
@@ -89,7 +97,7 @@ func TestRelayPolicyProjectionQueriesExecuteOrderingInvariant(t *testing.T) {
 		var eventID string
 		return db.QueryRowContext(context.Background(), query,
 			p.AuthorPubkey, p.EventID, p.EventCreatedAt.UTC(), p.EventAcceptedAt.UTC(),
-			p.Schema, []byte(p.CanonicalPayload), p.PayloadHash, p.SourceRelay, p.LastSyncAt.UTC(),
+			p.Schema, []byte(p.CanonicalPayload), p.PayloadHash, p.SourceRelay, p.LastSyncAt.UTC(), []byte(p.SignedEvent),
 		).Scan(&eventID)
 	}
 
@@ -117,6 +125,12 @@ func TestRelayPolicyProjectionQueriesExecuteOrderingInvariant(t *testing.T) {
 	confirmedAt = sql.NullTime{}
 	require.NoError(t, db.QueryRow("SELECT relay_confirmed_at FROM relay_policy_projections WHERE author_pubkey = $1", confirmedAuthor).Scan(&confirmedAt))
 	require.True(t, confirmedAt.Valid)
+	withSignedEvent := confirmed
+	withSignedEvent.SignedEvent = []byte(`{"id":"retained"}`)
+	require.NoError(t, execute(promoteRelayPolicyProjectionSQL, withSignedEvent))
+	var retained []byte
+	require.NoError(t, db.QueryRow("SELECT signed_event FROM relay_policy_projections WHERE author_pubkey = $1", confirmedAuthor).Scan(&retained))
+	require.Equal(t, []byte(withSignedEvent.SignedEvent), retained)
 }
 
 func TestPgRelayPolicyProjectionPromoteUsesAtomicReplaceableOrdering(t *testing.T) {
@@ -138,7 +152,7 @@ func TestPgRelayPolicyProjectionPromoteUsesAtomicReplaceableOrdering(t *testing.
 		WithArgs(
 			projection.AuthorPubkey, projection.EventID, projection.EventCreatedAt,
 			projection.EventAcceptedAt, projection.Schema, []byte(projection.CanonicalPayload),
-			projection.PayloadHash, projection.SourceRelay, projection.LastSyncAt,
+			projection.PayloadHash, projection.SourceRelay, projection.LastSyncAt, []byte(projection.SignedEvent),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{"event_id"}).AddRow(projection.EventID))
 	promoted, err := repo.Promote(context.Background(), projection)
@@ -149,7 +163,7 @@ func TestPgRelayPolicyProjectionPromoteUsesAtomicReplaceableOrdering(t *testing.
 		WithArgs(
 			projection.AuthorPubkey, projection.EventID, projection.EventCreatedAt,
 			projection.EventAcceptedAt, projection.Schema, []byte(projection.CanonicalPayload),
-			projection.PayloadHash, projection.SourceRelay, projection.LastSyncAt,
+			projection.PayloadHash, projection.SourceRelay, projection.LastSyncAt, []byte(projection.SignedEvent),
 		).
 		WillReturnRows(pgxmock.NewRows([]string{"event_id"}))
 	promoted, err = repo.Promote(context.Background(), projection)
@@ -166,14 +180,19 @@ func TestPgRelayPolicyProjectionRestoreCachedPreservesProvenanceAndClearsConfirm
 	now := time.Date(2026, 8, 3, 6, 0, 0, 0, time.UTC)
 	payload := []byte(`{"schema":"bahia.relay-settings.v1"}`)
 	sum := sha256.Sum256(payload)
+	event := nostr.Event{Kind: 30900, CreatedAt: nostr.Timestamp(now.Add(-time.Minute).Unix()), Tags: nostr.Tags{{"d", "relay-settings:operator"}, {"domain", "relay-settings"}, {"schema", relayPolicySchema}}, Content: string(payload)}
+	require.NoError(t, event.Sign(nostr.Generate()))
+	signedEvent, err := json.Marshal(event)
+	require.NoError(t, err)
 	backup := RelayPolicyProjectionBackup{
 		BackupSchema:     RelayPolicyProjectionBackupSchema,
-		AuthorPubkey:     strings.Repeat("a", 64),
-		EventID:          strings.Repeat("b", 64),
+		AuthorPubkey:     event.PubKey.Hex(),
+		EventID:          event.ID.Hex(),
 		EventCreatedAt:   now.Add(-time.Minute),
 		EventAcceptedAt:  now,
 		PolicySchema:     "bahia.relay-settings.v1",
 		CanonicalPayload: payload,
+		SignedEvent:      signedEvent,
 		PayloadHash:      hex.EncodeToString(sum[:]),
 		SourceRelay:      "wss://relay.example",
 		LastSyncAt:       now,
@@ -182,7 +201,7 @@ func TestPgRelayPolicyProjectionRestoreCachedPreservesProvenanceAndClearsConfirm
 	mock.ExpectQuery("INSERT INTO relay_policy_projections").
 		WithArgs(backup.AuthorPubkey, backup.EventID, backup.EventCreatedAt, backup.EventAcceptedAt,
 			backup.PolicySchema, []byte(backup.CanonicalPayload), backup.PayloadHash,
-			backup.SourceRelay, backup.LastSyncAt).
+			backup.SourceRelay, backup.LastSyncAt, []byte(backup.SignedEvent)).
 		WillReturnRows(pgxmock.NewRows([]string{"event_id"}).AddRow(backup.EventID))
 
 	restored, err := repo.RestoreCached(context.Background(), backup)
@@ -206,8 +225,8 @@ func TestPgRelayPolicyProjectionGetAndMarkSynced(t *testing.T) {
 		WithArgs(author).
 		WillReturnRows(pgxmock.NewRows([]string{
 			"author_pubkey", "event_id", "event_created_at", "event_accepted_at", "schema",
-			"canonical_payload", "payload_hash", "source_relay", "last_sync_at", "relay_confirmed_at",
-		}).AddRow(author, eventID, now.Add(-time.Minute), now, "bahia.relay-settings.v1", payload, hash, "wss://relay.example", now, now))
+			"canonical_payload", "payload_hash", "source_relay", "last_sync_at", "relay_confirmed_at", "signed_event",
+		}).AddRow(author, eventID, now.Add(-time.Minute), now, "bahia.relay-settings.v1", payload, hash, "wss://relay.example", now, now, nil))
 
 	projection, err := repo.Get(context.Background(), author)
 	require.NoError(t, err)

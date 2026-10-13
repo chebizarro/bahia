@@ -129,6 +129,9 @@ func (s *LocalRelayPolicyProjectionStore) Promote(_ context.Context, candidate r
 	promoted := cloneProjection(&candidate)
 	if current != nil && current.EventID == candidate.EventID {
 		promoted = cloneProjection(current)
+		if len(promoted.SignedEvent) == 0 {
+			promoted.SignedEvent = append([]byte(nil), candidate.SignedEvent...)
+		}
 		promoted.SourceRelay = candidate.SourceRelay
 		promoted.LastSyncAt = candidate.LastSyncAt
 	}
@@ -163,5 +166,6 @@ func cloneProjection(in *repository.RelayPolicyProjection) *repository.RelayPoli
 	}
 	out := *in
 	out.CanonicalPayload = append([]byte(nil), in.CanonicalPayload...)
+	out.SignedEvent = append([]byte(nil), in.SignedEvent...)
 	return &out
 }

@@ -17,9 +17,13 @@ type RelayPolicyProjection struct {
 	EventAcceptedAt  time.Time
 	Schema           string
 	CanonicalPayload json.RawMessage
-	PayloadHash      string
-	SourceRelay      string
-	LastSyncAt       time.Time
+	// SignedEvent is the exact NIP-01 event received from a relay. A projection
+	// loaded before signed-event retention has no exportable backup until the
+	// event is received again.
+	SignedEvent json.RawMessage
+	PayloadHash string
+	SourceRelay string
+	LastSyncAt  time.Time
 	// RelayConfirmedAt is nil after restore. Only promotion of a valid
 	// same-or-newer canonical relay event may mark the projection live again.
 	RelayConfirmedAt *time.Time
@@ -50,5 +54,5 @@ func RelayPolicyProjectionShouldReplace(current, candidate RelayPolicyProjection
 		current.Schema == candidate.Schema &&
 		bytes.Equal(current.CanonicalPayload, candidate.CanonicalPayload) &&
 		current.PayloadHash == candidate.PayloadHash &&
-		current.RelayConfirmedAt == nil
+		(current.RelayConfirmedAt == nil || (len(current.SignedEvent) == 0 && len(candidate.SignedEvent) != 0))
 }
