@@ -58,6 +58,8 @@ var (
 	backupRunPendingBucket       = []byte("bahiaBackupRunPendingV1")
 	backupRunPendingCoordsBucket = []byte("bahiaBackupRunPendingCoordinatesV1")
 	backupRunPendingEventsBucket = []byte("bahiaBackupRunPendingEventsV1")
+	backupRunDueBucket           = []byte("bahiaBackupRunDueV1")
+	backupRunRefusalsBucket      = []byte("bahiaBackupRunUnstagedRefusalsV1")
 )
 
 // DeliveryPolicy is the publisher's write-relay policy at the instant the
@@ -256,10 +258,13 @@ func openOutboxDB(path string) (*bbolt.DB, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket, backupRunStatusClockBucket, backupRunPendingBucket, backupRunPendingCoordsBucket, backupRunPendingEventsBucket} {
+		for _, name := range [][]byte{outboxEntriesBucket, outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket, outboxCoordinatesBucket, outboxDeliveryProofsBucket, backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket, backupRunStatusClockBucket, backupRunPendingBucket, backupRunPendingCoordsBucket, backupRunPendingEventsBucket, backupRunDueBucket, backupRunRefusalsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
+		}
+		if err := indexBackupRunPending(tx); err != nil {
+			return err
 		}
 		statusClock := tx.Bucket(backupRunStatusClockBucket)
 		if statusClock.Get(backupRunStatusClockReady) == nil {

@@ -106,7 +106,14 @@ func TestBackupRunRefusalScanSkipsMalformedEarlierRecord(t *testing.T) {
 		if err := bucket.Put([]byte("intent-a"), []byte("{malformed")); err != nil {
 			return err
 		}
-		return bucket.Put([]byte("intent-z"), []byte(`{"intent_id":"intent-z","state":"refused"}`))
+		if err := bucket.Put([]byte("intent-z"), []byte(`{"intent_id":"intent-z","state":"refused"}`)); err != nil {
+			return err
+		}
+		index := tx.Bucket(backupRunRefusalsBucket)
+		if err := index.Put([]byte("intent-a"), nil); err != nil {
+			return err
+		}
+		return index.Put([]byte("intent-z"), nil)
 	}))
 	records, next, err := outbox.ListBackupRunRefusalsNeedingStatus("", 100)
 	require.ErrorContains(t, err, "intent-a")

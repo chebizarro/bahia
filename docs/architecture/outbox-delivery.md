@@ -70,6 +70,17 @@ the durable proof. Partial OK, `CLOSED`, and `blocked:`/`invalid:`/
 `auth-required:` refusal cannot mark it delivered. Failed rows stay pinned
 for same-ID retry, and settled rows may be pruned only after the proof is
 recorded. The ledger remains the replay authority; PostgreSQL is not involved.
+Active retry/expiry deadlines and unstaged refusals have separate keyset
+indexes, so relay history visits only eligible pending work
+and status repair visits only live refusals. Once a refusal status is
+staged, or an accepted run's terminal status has exact publisher-quorum proof,
+the local admission row discards the operator request body and tags. It retains
+the exact request ID, actor and
+signature, immutable intent and coordinate bindings, terminal reason and
+timestamps, and the signed status reference. Refusal delivery still requires
+the exact publisher-quorum proof. Existing outboxes rebuild the live indexes
+and compact settled rows once when opened; subsequent compaction happens in
+the existing atomic status write, without a retention timer or relay inbox.
 
 ## Write relays and quorum
 

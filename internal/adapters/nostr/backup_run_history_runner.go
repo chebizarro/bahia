@@ -82,10 +82,13 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 	var firstErr error
 	var after string
 	for {
-		records, next, err := r.outbox.ListBackupRunPending(after, 100)
+		records, next, nextWake, err := r.outbox.ListBackupRunPendingDue(after, r.now().UTC(), 100)
 		if err != nil {
 			r.setError(err)
 			return time.Time{}, err
+		}
+		if !nextWake.IsZero() {
+			earliest = earlierBackupRunHistoryWake(earliest, nextWake)
 		}
 		for _, record := range records {
 			if err := ctx.Err(); err != nil {

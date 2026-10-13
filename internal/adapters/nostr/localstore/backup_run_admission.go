@@ -625,6 +625,9 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 			if err := pendingBucket.Put([]byte(current.IntentID), pendingRaw); err != nil {
 				return err
 			}
+			if err := tx.Bucket(backupRunDueBucket).Delete(backupRunDueKey(pending)); err != nil {
+				return err
+			}
 		}
 		statusID = current.StatusEventID
 		inserted = true
