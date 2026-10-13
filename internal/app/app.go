@@ -98,6 +98,8 @@ type App struct {
 	secretStore               *signetAdapter.CredentialStore
 	systemKeys                *secretstore.Keyring
 	serviceSigner             *serviceSigner
+	configFabricSignerSession *serviceSigner
+	closeConfigFabricSigner   func()
 	closeServiceKeyer         func()
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
@@ -2686,10 +2688,27 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	var assistantOrchestrator *service.AssistantOrchestrator
 	var assistantIdentity service.AssistantIdentity
+	var runningConfigFabricSigner *serviceSigner
+	if o.replacing != nil {
+		runningConfigFabricSigner = o.replacing.configFabricSignerSession
+	}
+	configFabricSession, closeConfigFabricSigner, err := newConfigFabricKeyer(cfg.ConfigFabric, outboundAdmission, logger, runningConfigFabricSigner)
+	if err != nil {
+		return nil, fmt.Errorf("configuring config-fabric signer: %w", err)
+	}
+	configFabricSignerOwned := false
+	defer func() {
+		if !configFabricSignerOwned {
+			closeConfigFabricSigner()
+		}
+	}()
+	registerConfigFabricSignerHealth(healthProvider, configFabricSession)
 	var configFabricSigner service.ConfigFabricSigner
+	if configFabricSession != nil {
+		configFabricSigner = configFabricKeyer{configFabricSession.Keyer()}
+	}
 	if cfg.Assistant.Enabled {
-		identity, assistantSignetManager, assistantBootstrapRunner, operatorSigner := bootstrapOperatorAssistant(cfg, servicePubkey, controlPlaneRelays, logger)
-		configFabricSigner = operatorSigner
+		identity, assistantSignetManager, assistantBootstrapRunner, _ := bootstrapOperatorAssistant(cfg, servicePubkey, controlPlaneRelays, logger)
 		if assistantSignetManager != nil {
 			bgManager.RegisterWithOptions(assistantSignetManager, RunnerRequired(false))
 			registerSignetHealthCheck(healthProvider, assistantSignetManager)
@@ -3092,7 +3111,20 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				logger.Warn("signer-first direct-runtime control plane ignores non-pubkey operator allowlist entries", zap.Strings("allowed_subjects", cfg.DirectRuntime.AllowedSubjects), zap.Strings("allowed_emails", cfg.DirectRuntime.AllowedEmails))
 			}
 		}
+		delegationAgents := controlPlaneAuthorizedPubkeys(cfg, servicePubkey, assistantIdentity)
+		delegationLists := controlplane.NewDelegationLists(controlPlanePool, localEventStore, cfg.Nostr.AuthorizedPubkeys, delegationAgents, logger)
+		if err := delegationLists.Load(); err != nil {
+			return nil, fmt.Errorf("load signed delegation lists: %w", err)
+		}
+		bgManager.RegisterWithOptions(delegationLists, RunnerRequired(false))
+		healthProvider.RegisterCheck("delegation_lists", func() HealthCheck {
+			if !delegationLists.CaughtUp() {
+				return HealthCheck{Name: "delegation_lists", Status: HealthStatusWarn, Message: "signed delegation lists have not caught up; delegation claims are unavailable"}
+			}
+			return HealthCheck{Name: "delegation_lists", Status: HealthStatusPass, Message: "signed delegation lists caught up"}
+		})
 		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
+			controlplane.WithDelegationLists(delegationLists),
 			controlplane.WithBackupRegistry(backupRegistry),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, serviceKeyer, logger, nostrEventRepo)),
@@ -3244,6 +3276,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
 		serviceSigner:             signerSession,
+		configFabricSignerSession: configFabricSession,
+		closeConfigFabricSigner:   closeConfigFabricSigner,
 		closeServiceKeyer:         closeServiceKeyer,
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
@@ -3254,6 +3288,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	soulFactoryRuntimeReleased = true
 	localNostrReleased = true
 	serviceKeyerOwned = true
+	configFabricSignerOwned = true
 	secretStoreOwned = true
 	return application, nil
 }
@@ -4085,6 +4120,9 @@ func (a *App) RunContext(ctx context.Context) error {
 	}
 	// The service signer is released after every component that signs with
 	// it; the session closes unless a replacement application still holds it.
+	if a.closeConfigFabricSigner != nil {
+		a.closeConfigFabricSigner()
+	}
 	if a.closeServiceKeyer != nil {
 		a.closeServiceKeyer()
 	}

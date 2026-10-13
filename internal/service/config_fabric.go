@@ -196,7 +196,7 @@ func (s *ConfigFabricService) publishLocked(ctx context.Context, request ConfigP
 		return nil, fmt.Errorf("config-fabric relay publisher is not configured")
 	}
 	if s.signer == nil {
-		return nil, fmt.Errorf("config-fabric operator Signet signer is not configured")
+		return nil, fmt.Errorf("config-fabric operator signer is not configured")
 	}
 	event, err := composeConfigEvent(request, s.now())
 	if err != nil {
@@ -214,7 +214,7 @@ func (s *ConfigFabricService) publishLocked(ctx context.Context, request ConfigP
 		return nil, err
 	}
 	if err := s.signer.Sign(ctx, event); err != nil {
-		return nil, fmt.Errorf("sign config-fabric event with operator Signet identity: %w", err)
+		return nil, fmt.Errorf("sign config-fabric event with operator identity: %w", err)
 	}
 	if event.PubKey.Hex() != pubkey || !event.VerifySignature() {
 		return nil, fmt.Errorf("config-fabric operator signer returned an invalid event signature")
@@ -246,7 +246,7 @@ func (s *ConfigFabricService) Rollback(ctx context.Context, eventID string) (*Co
 		return nil, fmt.Errorf("config-fabric storage is not configured")
 	}
 	if s.signer == nil {
-		return nil, fmt.Errorf("config-fabric operator Signet signer is not configured")
+		return nil, fmt.Errorf("config-fabric operator signer is not configured")
 	}
 	eventID = strings.ToLower(strings.TrimSpace(eventID))
 	if !isHex(eventID, 32) {

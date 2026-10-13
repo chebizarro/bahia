@@ -81,7 +81,7 @@ func (r *Reactor) authorizeBackupPausedRequest(ctx context.Context, event *nostr
 	if err == nil {
 		err = r.validateBackupIssuer(ctx, event, authority, delegated)
 	}
-	if err != nil || !r.isAuthorized(authority.RequesterPubkey) {
+	if err != nil || (!delegated && !r.isAuthorized(authority.RequesterPubkey)) {
 		r.zapLog.Warn("dropping unauthorized backup request without signing a refusal", zap.String("request_event_id", event.ID.Hex()), zap.Error(err))
 		return false
 	}
@@ -105,7 +105,7 @@ func (r *Reactor) authorizeBackupCommandIdentity(ctx context.Context, event *nos
 		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "invalid_delegation", err.Error())
 		return false
 	}
-	if !r.isAuthorized(authority.RequesterPubkey) {
+	if !delegated && !r.isAuthorized(authority.RequesterPubkey) {
 		r.publishBackupCommandFailure(ctx, event, resultKind, "rejected", "unauthorized", "requester not in authorized list")
 		return false
 	}
@@ -127,6 +127,9 @@ func (r *Reactor) validateBackupIssuer(ctx context.Context, event *nostr.Event, 
 		}
 		if !event.CheckID() || !event.VerifySignature() {
 			return fmt.Errorf("backup delegation signature is invalid")
+		}
+		if !r.delegations.Allows(authority.ServicePubkey, authority.RequesterPubkey) {
+			return fmt.Errorf("backup requester is not granted by a caught-up signed delegation list")
 		}
 	} else if authority.RequesterPubkey == issuer {
 		// The transport signer is an issuer, never the backup principal, even

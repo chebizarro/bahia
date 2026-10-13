@@ -132,6 +132,27 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 	return signer, nil
 }
 
+// CheckHealth probes the standard remote signer API without signing an event.
+// For NIP-46, GetPublicKey is cached after Open, so health must issue a fresh
+// get_public_key request to detect a disconnected or refusing bunker.
+func CheckHealth(ctx context.Context, signer nostr.Keyer) error {
+	if signer == nil {
+		return ErrNotConfigured
+	}
+	if bunker, ok := signer.(*nip46Keyer); ok {
+		result, err := bunker.call(ctx, "get_public_key", nil)
+		if err != nil {
+			return err
+		}
+		if result != bunker.expected.Hex() {
+			return fmt.Errorf("NIP-46 signer health pubkey differs from pinned identity")
+		}
+		return nil
+	}
+	_, err := signer.GetPublicKey(ctx)
+	return err
+}
+
 func verifyIdentity(ctx context.Context, signer nostr.Keyer, expected nostr.PubKey, timeout time.Duration) error {
 	verifyCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

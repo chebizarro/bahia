@@ -210,6 +210,26 @@ a handler opts into that gate by implementing `FleetScopedHandler`. Operator
 allowlists are also published as encrypted records so browsers can trust
 operator-authored documents — see [confidential state](confidential-state.md#operator-allowlists).
 
+### Signed delegation grants
+
+A signer that claims a separate human requester for ML rollback or a
+service-signed backup command needs a current operator-signed NIP-51 kind
+`30000` list at `d=agent:<signer-pubkey>:delegation`. Each `p` tag grants one
+human pubkey; an empty replacement list revokes that author's grants. The
+daemon REQs with `authors=nostr.authorized_pubkeys`, kind `30000`, and exact
+`#d` coordinates for its known agent signers. It validates NIP-01 ID,
+signature, author and tags, persists the latest event per `(kind, author, d)`
+and per-relay since cursors, and keeps the REQ open after EOSE. Claims are
+denied until all configured relays complete catch-up; cached state alone is
+not authority. Grants from different trusted list authors are independent.
+
+`nostr.authorized_pubkeys` remains the bootstrap trust root for list authors
+and direct operator commands, not a fallback delegation grant. Adding a
+human `p` tag needs no daemon config change. Before using an existing
+delegated workflow, publish its complete signed list and confirm the
+`delegation_lists` health check is passing; without a list, the claim is
+refused. See the [delegation runbook](../runbooks/delegation-lists.md).
+
 ### 2.2 Untrusted authors
 
 The intent subscription is **author-scoped** (`authors` = the trust set's

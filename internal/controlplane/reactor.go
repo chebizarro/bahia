@@ -152,6 +152,7 @@ type Reactor struct {
 	dedup       *nostrpool.EventDeduplicator
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
+	delegations *DelegationLists
 
 	kindCatalog     *nostrpool.KindCatalog
 	lastSeenByGroup map[string]nostr.Timestamp
@@ -362,6 +363,12 @@ func WithAssistantOrchestrator(orchestrator *service.AssistantOrchestrator) Reac
 // WithDNSOperator enables DNS control-plane request handling.
 func WithDNSOperator(op DNSControlPlaneOperator) ReactorOption {
 	return func(r *Reactor) { r.dnsOperator = op }
+}
+
+// WithDelegationLists supplies the current signed grant projection. Absence
+// never falls back to static authorization for a delegation claim.
+func WithDelegationLists(lists *DelegationLists) ReactorOption {
+	return func(r *Reactor) { r.delegations = lists }
 }
 
 // NewReactor creates a new Bahia control plane reactor.

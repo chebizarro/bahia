@@ -138,3 +138,14 @@ Unit tests in `internal/servicesigner` drive the NIP-46 keyer through a fake
 RPC, including adversarial `sign_event` results. The live proof against a real
 bunker (Signet) is `scripts/signet_live_interop.py`; see
 [`docs/runbooks/signet-interop.md`](../runbooks/signet-interop.md).
+
+## Config-fabric operator signer
+
+Daemon config publish and rollback use a distinct `config_fabric` operator
+identity through the same `servicesigner.Open` seam. Its configured pubkey is
+pinned, and only `nip46` and `nip55l` custody are allowed; the daemon has no
+raw-key or assistant-derived fallback. A reload candidate retains an unchanged
+session and releases its hold on failure, just as the service signer does.
+`config_fabric_signer` health probes the standard NIP-46 `get_public_key`
+request (or the NIP-55L keyer), reporting an absent or refusing signer as
+unavailable without gating unrelated daemon readiness.
