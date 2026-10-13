@@ -16,6 +16,7 @@ import Table from '$lib/components/Table.svelte';
   import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
+  import { artifactVersionLabel, userFacingSBOMError, userFacingVerifyError } from './presentation.js';
   import IntentGate from '$lib/components/IntentGate.svelte';
   import { generateArtifactSBOM, importArtifactSBOM, resolveInlineSBOMLimitBytes, MAX_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
   import { blossomLocation, uploadSBOMToBlossom } from '$lib/nostr/blossom-upload.js';
@@ -76,7 +77,7 @@ import Table from '$lib/components/Table.svelte';
   let liveArtifactOperations = $derived(operationsForEntity(operations, 'artifact', artifactId));
   let service = $derived(artifact?.service_id ? services.find((candidate) => candidate.id === artifact.service_id) || null : null);
   let displayName = $derived(artifact?.name || artifact?.image_repo || artifact?.image_tag || 'Artifact Details');
-  let displayVersion = $derived(artifactVersionLabel(artifact));
+  let displayVersion = $derived(artifactVersionLabel(artifact, displayName));
   let canGenerateSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && artifactImageLocator(artifact)));
   let canImportSBOM = $derived(Boolean(artifactSBOMDigest(artifact) && sbomImportFile));
   let sbomActionLabel = $derived(sbomData || sbomAttestation || sbomPackages.length > 0 ? 'Regenerate SBOM' : 'Generate SBOM');
@@ -145,6 +146,12 @@ import Table from '$lib/components/Table.svelte';
     loading = true;
     error = null;
 
+    // Render from the current projection immediately. Opening IndexedDB must not
+    // hold the page on a loading state if it stalls or relay history is pending.
+    const cachedArtifact = artifacts.find((candidate) => candidate.id === id) || null;
+    if (cachedArtifact) applyLoadedArtifact(cachedArtifact);
+    else loading = false;
+
     try {
       await boot();
       await tick();
@@ -156,7 +163,7 @@ import Table from '$lib/components/Table.svelte';
       if (loadedArtifact) applyLoadedArtifact(loadedArtifact);
     } catch (err) {
       if (sequence !== loadSequence) return;
-      error = err.message || 'Failed to load artifact';
+      if (artifact?.id !== id) error = err.message || 'Failed to load artifact';
     } finally {
       if (sequence === loadSequence) loading = false;
     }
@@ -484,16 +491,6 @@ import Table from '$lib/components/Table.svelte';
     return String(t).replace(/[_-]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
-  function artifactVersionLabel(artifact) {
-    const candidates = [artifact?.version, artifact?.image_tag, artifact?.tag, artifact?.metadata?.version];
-    const name = String(artifact?.name || '').trim();
-    for (const candidate of candidates) {
-      const value = String(candidate || '').trim();
-      if (value && value !== name) return value;
-    }
-    return '-';
-  }
-
   function artifactSBOMDigest(artifact) {
     return String(artifact?.digest || artifact?.image_digest || artifact?.metadata?.digest || '').trim();
   }
@@ -525,20 +522,6 @@ import Table from '$lib/components/Table.svelte';
     return '';
   }
 
-  function userFacingSBOMError(err) {
-    const message = String(err?.message || '').trim();
-    if (!message) return 'Failed to publish SBOM generation request';
-    return message.replace(/NIP-07|NIP-46/gi, 'Nostr signer');
-  }
-
-  function userFacingVerifyError(err) {
-    const message = String(err?.message || '').trim();
-    if (!message) return 'Failed to verify signatures';
-    if (/method not found/i.test(message) || /not configured/i.test(message)) {
-      return 'Signature verification is not available from this Bahia service yet.';
-    }
-    return message.replace(/NIP-07|NIP-46/gi, 'Nostr signer');
-  }
 </script>
 
 <div class="page">
@@ -679,7 +662,7 @@ import Table from '$lib/components/Table.svelte';
           <div class="section-header">
             <div>
               <h2 class="section-title"><SbomIcon size={20} strokeWidth={1.75} ariaHidden="true" /> <span>SBOM</span></h2>
-              <p class="section-subtitle">Generate or import SPDX and CycloneDX manifests with signed Nostr intents. Completion is shown only after canonical <code>30078</code>/<code>30004</code> SBOM events arrive.</p>
+              <p class="section-subtitle">Generate or import SPDX and CycloneDX manifests. Results appear here when they are available.</p>
             </div>
             <div class="header-actions">
               <LoadingButton
@@ -713,7 +696,7 @@ import Table from '$lib/components/Table.svelte';
           <form class="sbom-import-panel" onsubmit={(event) => { event.preventDefault(); void handleImportSBOM(); }}>
             <div>
               <h3 class="import-title">Import SBOM</h3>
-              <p class="section-subtitle">Files up to {Math.floor(sbomInlineLimit / 1024)} KiB are sent inline. Larger files are uploaded to the configured Blossom server before the signed import intent is published.</p>
+              <p class="section-subtitle">Files up to {Math.floor(sbomInlineLimit / 1024)} KiB can be imported directly. Larger files are uploaded to the configured storage server first.</p>
             </div>
             <div class="import-controls">
               <label class="import-field">
@@ -805,8 +788,8 @@ import Table from '$lib/components/Table.svelte';
   {:else}
     <EmptyState
       iconComponent={UnknownIcon}
-      title="Artifact not found"
-      message="The requested artifact does not exist"
+      title="Artifact unavailable"
+      message="This artifact is not in the local store yet. It will appear when relay data arrives."
     >
       <LoadingButton variant="secondary" onAction={() => goto('/services')}>
         Back to Services
@@ -1097,10 +1080,6 @@ import Table from '$lib/components/Table.svelte';
     color: var(--text-muted);
     font-size: 0.875rem;
     line-height: 1.45;
-  }
-
-  .section-subtitle code {
-    color: var(--text-primary);
   }
 
   .error-message,

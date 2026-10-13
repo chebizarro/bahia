@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import SBOMDetails from '../../src/lib/components/SBOMDetails.svelte';
 import { renderComponent, textOf, tick } from './utils/svelte-component-test';
 
@@ -146,6 +146,26 @@ describe('SBOMDetails.svelte', () => {
     expect(text).toContain('View Contents');
   });
 
+  it('loads raw SBOM contents through the blob route when only a relay-projected hash is available', async () => {
+    const hash = 'a'.repeat(64);
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({ spdxVersion: 'SPDX-2.3', name: 'example', packages: [{ name: 'pkg' }] })
+    } as Response);
+    try {
+      const target = render({ sbom: { format: 'spdx', raw_hash: hash } });
+      await tick();
+      const button = [...target.querySelectorAll('button')].find((element) => element.textContent?.includes('View Contents'));
+      expect(button).toBeDefined();
+      button?.click();
+      await vi.waitFor(() => expect(textOf(target)).toContain('SBOM Contents'));
+      expect(fetchMock).toHaveBeenCalledWith(`/api/v1/blossom/blob/${hash}`);
+      expect(textOf(target)).toContain('Components (1)');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it('offers a View Contents button from an attestation digest with no location', () => {
     const target = render({
       attestation: {
@@ -185,5 +205,6 @@ describe('SBOMDetails.svelte', () => {
     expect(text).toContain('Attestation Details');
     expect(text).toContain('Format Unknown');
     expect(text).toContain('Package Count 0');
+    expect(text).toContain('SBOM contents are unavailable because this record has no storage location or content hash.');
   });
 });

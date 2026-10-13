@@ -393,6 +393,10 @@
       </div>
     {/if}
 
+    {#if !canViewSBOM && packages.length === 0}
+      <p class="muted">SBOM contents are unavailable because this record has no storage location or content hash.</p>
+    {/if}
+
     <!-- Loaded SBOM Contents -->
     {#if rawSBOMError}
       <div class="section">
@@ -740,7 +744,7 @@
     overflow: auto;
     border: 1px solid var(--border-color);
     border-radius: 6px;
-    background: var(--code-bg, rgba(0,0,0,0.3));
+    background: var(--code-block-bg);
   }
 
   .raw-json {
@@ -749,7 +753,7 @@
     font-family: monospace;
     font-size: 0.75rem;
     line-height: 1.5;
-    color: var(--text-primary);
+    color: var(--code-block-text);
     white-space: pre;
     tab-size: 2;
   }
