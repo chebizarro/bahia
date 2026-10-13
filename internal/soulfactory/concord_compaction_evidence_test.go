@@ -63,6 +63,10 @@ func TestConcordCompactionOmitsExactAuthorityCitationEvidence(t *testing.T) {
 	if fold.editions != 5 || len(fold.heads) != 4 || len(fold.suspended) != 0 {
 		t.Fatalf("prior structural fold = %#v", fold)
 	}
+	resolvedPrior := resolveConcordControlAuthority(fold, mustConcordID32(t, f.communityID), mustConcordPubKey(t, owner.pubkey))
+	if resolved, ok := resolvedPrior.head(memberEID); !ok || resolved.hash != action.hash {
+		t.Fatalf("complete prior-epoch evidence did not authorize the action: %#v ok=%t", resolved, ok)
+	}
 	plan, next, bundle := concordTestRefoundingPlan(t, f)
 	compaction, err := f.membership.republishConcordCompaction(t.Context(), next, fold,
 		plan.communityID32, plan.nextRoot[:], plan.nextControlRoot[:], 4, plan.nextControlPK)
@@ -72,6 +76,13 @@ func TestConcordCompactionOmitsExactAuthorityCitationEvidence(t *testing.T) {
 	joined := concordFoldRepublished(t, f, bundle, f.endpoint.published)
 	if joined.editions != 4 || len(joined.heads) != 4 {
 		t.Fatalf("fresh-joiner structural fold = %#v", joined)
+	}
+	resolvedJoined := resolveConcordControlAuthority(joined, mustConcordID32(t, f.communityID), mustConcordPubKey(t, owner.pubkey))
+	if _, ok := resolvedJoined.head(memberEID); ok {
+		t.Fatal("new-epoch head was trusted without its exact cited Grant edition")
+	}
+	if _, missing := resolvedJoined.unresolved[memberEID]; !missing {
+		t.Fatal("missing cross-epoch citation did not defer the action")
 	}
 	retained, ok := joined.head(memberEID)
 	if !ok || retained.seal.Content != action.seal.Content || retained.seal.Sig != action.seal.Sig {
@@ -97,7 +108,7 @@ func TestConcordCompactionOmitsExactAuthorityCitationEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, wrap := range f.endpoint.published {
-		single, err := foldConcordControlPlane([]*nostr.Event{&wrap}, mustConcordPubKey(t, bundle.ControlPK), read.ConversationKey)
+		single, err := collectConcordControlPlane([]*nostr.Event{&wrap}, mustConcordPubKey(t, bundle.ControlPK), read.ConversationKey)
 		if err != nil || single.editions != 1 {
 			t.Fatalf("emitted seal did not parse: %v", err)
 		}

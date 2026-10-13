@@ -381,9 +381,9 @@ func (f *concordControlPlaneFixture) rewrap(t *testing.T, seal nostr.Event) *nos
 
 func (f *concordControlPlaneFixture) fold(t *testing.T, events ...*nostr.Event) *concordControlFold {
 	t.Helper()
-	fold, err := foldConcordControlPlane(events, f.signer.PubKey, f.read.ConversationKey)
+	fold, err := collectConcordControlPlane(events, f.signer.PubKey, f.read.ConversationKey)
 	if err != nil {
-		t.Fatalf("foldConcordControlPlane() error = %v", err)
+		t.Fatalf("collectConcordControlPlane() error = %v", err)
 	}
 	return fold
 }

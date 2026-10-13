@@ -17,15 +17,9 @@ func TestConcordCompactionRewrapsStructuralHeads(t *testing.T) {
 	grantFirst := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 1, "")
 	grantHead := concordTestGrantEdition(t, fixture, owner, fixture.staff.pubkey, 2, grantFirst.hash)
 	metadata := concordTestControlEdition(t, fixture, owner, concordTestBytes32(t, 0x5e), 7, strings.Repeat("cd", 32), `{"name":"Fleet Private"}`)
-	queueConcordInboxLookup(fixture.endpoint, grantFirst.wrap, grantHead.wrap, metadata.wrap)
-	current, _, err := fixture.membership.communities[0].resolve(t.Context(), fixture.membership.relayClient)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fold, err := fixture.membership.fetchConcordControlPlane(t.Context(), current, concordRotatedBundle(t, fixture))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fold := concordFoldRepublished(t, fixture, concordRotatedBundle(t, fixture), []nostr.Event{
+		*grantFirst.wrap, *grantHead.wrap, *metadata.wrap,
+	})
 	plan, next, rotated := concordTestRefoundingPlan(t, fixture)
 	compaction, err := fixture.membership.republishConcordCompaction(t.Context(), next, fold,
 		plan.communityID32, plan.nextRoot[:], plan.nextControlRoot[:], plan.receipt.RootEpoch, plan.nextControlPK)
@@ -307,9 +301,9 @@ func concordFoldRepublished(t *testing.T, fixture *concordRotationFixture, rotat
 	for i := range events {
 		pointers = append(pointers, &events[i])
 	}
-	fold, err := foldConcordControlPlane(pointers, address, read.ConversationKey)
+	fold, err := collectConcordControlPlane(pointers, address, read.ConversationKey)
 	if err != nil {
-		t.Fatalf("foldConcordControlPlane() error = %v", err)
+		t.Fatalf("collectConcordControlPlane() error = %v", err)
 	}
 	return fold
 }
