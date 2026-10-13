@@ -73,6 +73,8 @@ Canonical route state is a service-authored `30900` record at the route coordina
 
 Use notification channels for outage open, change, and clear events. Treat stale probe evidence as unknown.
 
+Each probe advances a per-route observation sequence in canonical state. Withdrawal retains the sequence floor while clearing the active outage, so re-adding the route starts a new lineage position. A route transition has a deterministic identity derived from its route coordinate, prior and next outage/classification, and that sequence. Gate and periodic-supervisor observations of the same transition share one lineage identity; notification delivery is claimed once per channel and identity, including across daemon replicas. A later transition with a new sequence is delivered separately.
+
 ## Related
 
 - [Managed DNS and HTTPS Routes](../guides/managed-dns-and-https-routes.md)

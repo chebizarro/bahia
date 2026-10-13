@@ -77,13 +77,16 @@ type RouteCanaryProjector struct {
 }
 
 // routeCanaryPublished is one slot's last accepted record: the observation
-// second it carries (what orders observations), the created_at it was
-// published with (the floor the next record must exceed) and its content
-// fingerprint (what makes redelivery idempotent).
+// second it carries, its sequence (the causal ordering of observations), the
+// created_at it was published with (the floor the next record must exceed) and
+// its content fingerprint (what makes redelivery idempotent), and the lineage
+// ID (which absorbs duplicate transition observations with different clocks).
 type routeCanaryPublished struct {
 	occurredAt  gonostr.Timestamp
 	createdAt   gonostr.Timestamp
 	fingerprint string
+	sequence    int64
+	eventID     string
 }
 
 // NewRouteCanaryProjector subscribes a projector to route canary transitions.
@@ -265,6 +268,7 @@ type routeCanaryProjection struct {
 	ObservedInstanceStatus    domain.InstanceHealthStatus      `json:"observed_instance_status,omitempty"`
 	ServiceHealthyRouteBroken bool                             `json:"service_healthy_route_broken"`
 	OccurredAt                time.Time                        `json:"occurred_at"`
+	ObservationSequence       int64                            `json:"observation_sequence"`
 	// RouteCanary is the full durable route state, carried by the 30900 state.
 	RouteCanary *domain.RouteCanaryState `json:"route_canary,omitempty"`
 	// Evidence is the per-perspective probe summary, carried by the 4903 audit.
@@ -288,6 +292,7 @@ func (o routeCanaryObservation) content(schema string) routeCanaryProjection {
 		ObservedInstanceStatus:    o.instanceStatus,
 		ServiceHealthyRouteBroken: RouteCanaryServiceHealthyRouteBroken(o.state.Open, o.instanceStatus),
 		OccurredAt:                o.occurredAt.UTC(),
+		ObservationSequence:       o.state.ObservationSequence,
 	}
 }
 
@@ -443,6 +448,13 @@ func (p *RouteCanaryProjector) publish(ctx context.Context, obs routeCanaryObser
 			if last.fingerprint == fingerprint {
 				continue
 			}
+			if obs.transition != domain.RouteCanaryTransitionNone && obs.eventID != "" &&
+				last.eventID == obs.eventID && last.sequence == obs.state.ObservationSequence {
+				continue
+			}
+			if item.replaceable && obs.state.ObservationSequence < last.sequence {
+				continue
+			}
 			// A replaceable observable older than the one already accepted would
 			// only be discarded by relays and consumers; audit facts are
 			// immutable history and are always published.
@@ -460,7 +472,7 @@ func (p *RouteCanaryProjector) publish(ctx context.Context, obs routeCanaryObser
 			errs = append(errs, fmt.Errorf("publish route canary kind %d for %s: %w", item.event.Kind, coordinate, err))
 			continue
 		}
-		p.published[item.slot] = routeCanaryPublished{occurredAt: occurredAt, createdAt: item.event.CreatedAt, fingerprint: fingerprint}
+		p.published[item.slot] = routeCanaryPublished{occurredAt: occurredAt, createdAt: item.event.CreatedAt, fingerprint: fingerprint, sequence: obs.state.ObservationSequence, eventID: obs.eventID}
 	}
 	return errors.Join(errs...)
 }
@@ -486,8 +498,15 @@ func (p *RouteCanaryProjector) lastPublished(ctx context.Context, slot string, k
 	}
 	last := routeCanaryPublished{occurredAt: record.CreatedAt, createdAt: record.CreatedAt, fingerprint: fingerprint}
 	var projection routeCanaryProjection
-	if json.Unmarshal([]byte(record.Content), &projection) == nil && !projection.OccurredAt.IsZero() {
-		last.occurredAt = gonostr.Timestamp(projection.OccurredAt.Unix())
+	if json.Unmarshal([]byte(record.Content), &projection) == nil {
+		last.eventID = projection.EventID
+		last.sequence = projection.ObservationSequence
+		if !projection.OccurredAt.IsZero() {
+			last.occurredAt = gonostr.Timestamp(projection.OccurredAt.Unix())
+		}
+		if projection.RouteCanary != nil {
+			last.sequence = projection.RouteCanary.ObservationSequence
+		}
 	}
 	p.published[slot] = last
 	return last, true
@@ -500,14 +519,19 @@ func (p *RouteCanaryProjector) lastPublished(ctx context.Context, slot string, k
 // counts as recorded.
 func (p *RouteCanaryProjector) Withdraw(ctx context.Context, key domain.RouteCanaryKey, at time.Time) error {
 	coordinate := key.Coordinate()
+	slot := routeCanarySlot(kinds.CASControlState, coordinate)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	last, hasLast := p.lastPublished(ctx, slot, kinds.CASControlState, coordinate)
 	// occurred_at is the withdrawal time, which orders the tombstone against
 	// observations (lastPublished reads it back); created_at may be raised.
 	content, err := json.Marshal(struct {
-		Schema     string    `json:"schema"`
-		Coordinate string    `json:"coordinate"`
-		Deleted    bool      `json:"deleted"`
-		OccurredAt time.Time `json:"occurred_at"`
-	}{routeCanaryStateSchema, coordinate, true, at.UTC()})
+		Schema              string    `json:"schema"`
+		Coordinate          string    `json:"coordinate"`
+		Deleted             bool      `json:"deleted"`
+		OccurredAt          time.Time `json:"occurred_at"`
+		ObservationSequence int64     `json:"observation_sequence"`
+	}{routeCanaryStateSchema, coordinate, true, at.UTC(), last.sequence})
 	if err != nil {
 		return fmt.Errorf("encode route canary tombstone: %w", err)
 	}
@@ -517,10 +541,7 @@ func (p *RouteCanaryProjector) Withdraw(ctx context.Context, key domain.RouteCan
 	if err != nil {
 		return err
 	}
-	slot := routeCanarySlot(kinds.CASControlState, coordinate)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if last, ok := p.lastPublished(ctx, slot, kinds.CASControlState, coordinate); ok {
+	if hasLast {
 		if last.fingerprint == fingerprint {
 			return nil
 		}
@@ -531,6 +552,6 @@ func (p *RouteCanaryProjector) Withdraw(ctx context.Context, key domain.RouteCan
 	if err := p.publisher.PublishSignedEvent(ctx, &event); err != nil && !nostrutil.IsPublishQueued(err) {
 		return fmt.Errorf("publish route canary tombstone for %s: %w", coordinate, err)
 	}
-	p.published[slot] = routeCanaryPublished{occurredAt: gonostr.Timestamp(at.Unix()), createdAt: event.CreatedAt, fingerprint: fingerprint}
+	p.published[slot] = routeCanaryPublished{occurredAt: gonostr.Timestamp(at.Unix()), createdAt: event.CreatedAt, fingerprint: fingerprint, sequence: last.sequence}
 	return nil
 }

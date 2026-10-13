@@ -469,6 +469,11 @@ state replacement. Besides intent status (§3):
   `instance_status`, `service_healthy_route_broken`. An open outage is
   `unhealthy`, a warning or pre-threshold failure `degraded`, `route_ok`
   `healthy`.
+  The addressable `30900` route state carries `route_canary.observation_sequence`.
+  Transition payloads carry the same sequence and a deterministic `event_id`
+  derived from the route coordinate, prior/next outage and classification,
+  and observation sequence. The identity deduplicates lineage and per-channel
+  notification delivery when gate and supervisor observe the same transition.
 - **Managed instances**: instance status under the `runtime-instance-health`
   family.
 - **Continuity heartbeats**: `t=continuity-heartbeat`, `domain=continuity`,

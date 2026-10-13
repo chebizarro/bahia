@@ -534,6 +534,9 @@ type RouteCanaryState struct {
 	ConsecutiveFailures int `json:"consecutive_failures"`
 	// ConsecutiveSuccesses counts consecutive non-failing observations.
 	ConsecutiveSuccesses int `json:"consecutive_successes"`
+	// ObservationSequence increases once for each folded observation. It is the
+	// stable lineage position used to identify a transition across observers.
+	ObservationSequence int64 `json:"observation_sequence"`
 	// FailureReason is the sanitized, operator-facing cause.
 	FailureReason string `json:"failure_reason,omitempty"`
 	// TLSNotAfter is the last observed leaf expiry, when TLS was observed.
@@ -582,6 +585,7 @@ func EvaluateRouteCanary(
 ) (RouteCanaryState, RouteCanaryTransition) {
 	policy := thresholds.Normalized()
 	next := previous
+	next.ObservationSequence = previous.ObservationSequence + 1
 	next.Classification = classification
 	next.Perspective = perspective
 	next.LastObservedAt = now
@@ -636,6 +640,17 @@ type RouteCanaryEvent struct {
 	Evidence               string                    `json:"evidence,omitempty"`
 	ObservedInstanceStatus InstanceHealthStatus      `json:"observed_instance_status,omitempty"`
 	ObservedAt             time.Time                 `json:"observed_at"`
+	ObservationSequence    int64                     `json:"observation_sequence"`
+}
+
+// RouteCanaryTransitionID is shared by every observer that folds the same
+// prior route state into the same transition. ObservationSequence makes a later
+// occurrence of an otherwise identical transition a distinct lineage fact.
+func RouteCanaryTransitionID(previous, next RouteCanaryState) uuid.UUID {
+	from := fmt.Sprintf("%t:%s", previous.Open, previous.Classification)
+	to := fmt.Sprintf("%t:%s", next.Open, next.Classification)
+	name := fmt.Sprintf("%s|%s|%s|%d", next.Coordinate(), from, to, next.ObservationSequence)
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(name))
 }
 
 // DescribeRouteObservation renders a bounded, sanitized, operator-facing reason

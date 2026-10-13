@@ -26,9 +26,9 @@ func newPgRouteCanaryRepositoryWithDB(db pgQueryer) *PgRouteCanaryRepository {
 	return &PgRouteCanaryRepository{pool: db}
 }
 
-const routeCanaryStateColumns = `route_coordinate, service_id, environment_id, deployment_unit_id, hostname, open, classification, perspective, consecutive_failures, consecutive_successes, failure_reason, tls_not_after, last_observed_at, opened_at, last_recovered_at, updated_at`
+const routeCanaryStateColumns = `route_coordinate, service_id, environment_id, deployment_unit_id, hostname, open, classification, perspective, consecutive_failures, consecutive_successes, failure_reason, tls_not_after, last_observed_at, opened_at, last_recovered_at, updated_at, observation_sequence`
 
-const routeCanaryEventColumns = `id, route_coordinate, service_id, environment_id, deployment_unit_id, hostname, transition, previous_classification, classification, perspective, reason, evidence, observed_instance_status, observed_at`
+const routeCanaryEventColumns = `id, route_coordinate, service_id, environment_id, deployment_unit_id, hostname, transition, previous_classification, classification, perspective, reason, evidence, observed_instance_status, observed_at, observation_sequence`
 
 // UpsertStateWithEvent persists route state and appends its lineage record in a
 // single transaction, so an operator-visible outage can never exist without the
@@ -67,7 +67,7 @@ func (r *PgRouteCanaryRepository) UpsertState(ctx context.Context, state *domain
 
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO route_canary_state (`+routeCanaryStateColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		ON CONFLICT (route_coordinate) DO UPDATE SET
 			open = EXCLUDED.open,
 			classification = EXCLUDED.classification,
@@ -79,8 +79,10 @@ func (r *PgRouteCanaryRepository) UpsertState(ctx context.Context, state *domain
 			last_observed_at = EXCLUDED.last_observed_at,
 			opened_at = EXCLUDED.opened_at,
 			last_recovered_at = EXCLUDED.last_recovered_at,
-			updated_at = EXCLUDED.updated_at
-		WHERE EXCLUDED.last_observed_at >= route_canary_state.last_observed_at`,
+			updated_at = EXCLUDED.updated_at,
+			observation_sequence = EXCLUDED.observation_sequence
+		WHERE EXCLUDED.observation_sequence >= route_canary_state.observation_sequence
+		  AND EXCLUDED.last_observed_at >= route_canary_state.last_observed_at`,
 		state.Coordinate(),
 		state.ServiceID,
 		state.EnvironmentID,
@@ -97,6 +99,7 @@ func (r *PgRouteCanaryRepository) UpsertState(ctx context.Context, state *domain
 		state.OpenedAt,
 		state.LastRecoveredAt,
 		state.UpdatedAt,
+		state.ObservationSequence,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert route canary state: %w", err)
@@ -190,7 +193,8 @@ func (r *PgRouteCanaryRepository) AppendEvent(ctx context.Context, event *domain
 
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO route_canary_events (`+routeCanaryEventColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		ON CONFLICT (id) DO NOTHING`,
 		event.ID,
 		event.Coordinate(),
 		event.ServiceID,
@@ -205,6 +209,7 @@ func (r *PgRouteCanaryRepository) AppendEvent(ctx context.Context, event *domain
 		event.Evidence,
 		string(event.ObservedInstanceStatus),
 		event.ObservedAt,
+		event.ObservationSequence,
 	)
 	if err != nil {
 		return fmt.Errorf("append route canary event: %w", err)
@@ -254,6 +259,7 @@ func (r *PgRouteCanaryRepository) ListRecentEvents(ctx context.Context, key doma
 			&event.Evidence,
 			&instanceStatus,
 			&event.ObservedAt,
+			&event.ObservationSequence,
 		); err != nil {
 			return nil, fmt.Errorf("scan route canary event: %w", err)
 		}
@@ -274,6 +280,13 @@ func (r *PgRouteCanaryRepository) ListRecentEvents(ctx context.Context, key doma
 // withdrawn from desired state so a removed route does not alarm forever.
 func (r *PgRouteCanaryRepository) DeleteState(ctx context.Context, key domain.RouteCanaryKey) error {
 	return r.withinTx(ctx, func(txRepo *PgRouteCanaryRepository) error {
+		if _, err := txRepo.pool.Exec(ctx, `
+			INSERT INTO route_canary_sequence_floor (route_coordinate, observation_sequence)
+			SELECT route_coordinate, observation_sequence FROM route_canary_state WHERE route_coordinate = $1
+			ON CONFLICT (route_coordinate) DO UPDATE SET
+				observation_sequence = GREATEST(route_canary_sequence_floor.observation_sequence, EXCLUDED.observation_sequence)`, key.Coordinate()); err != nil {
+			return fmt.Errorf("retain route canary observation sequence: %w", err)
+		}
 		if _, err := txRepo.pool.Exec(ctx, `DELETE FROM route_canary_events WHERE route_coordinate = $1`, key.Coordinate()); err != nil {
 			return fmt.Errorf("delete route canary events: %w", err)
 		}
@@ -282,6 +295,20 @@ func (r *PgRouteCanaryRepository) DeleteState(ctx context.Context, key domain.Ro
 		}
 		return nil
 	})
+}
+
+// ObservationSequenceFloor preserves lineage identity when a withdrawn route
+// is later added again and PostgreSQL is the only durable route-state copy.
+func (r *PgRouteCanaryRepository) ObservationSequenceFloor(ctx context.Context, key domain.RouteCanaryKey) (int64, error) {
+	var sequence int64
+	err := r.pool.QueryRow(ctx, `SELECT observation_sequence FROM route_canary_sequence_floor WHERE route_coordinate = $1`, key.Coordinate()).Scan(&sequence)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read route canary observation sequence: %w", err)
+	}
+	return sequence, nil
 }
 
 type routeCanaryScanner interface {
@@ -312,6 +339,7 @@ func scanRouteCanaryState(scanner routeCanaryScanner) (*domain.RouteCanaryState,
 		&state.OpenedAt,
 		&state.LastRecoveredAt,
 		&state.UpdatedAt,
+		&state.ObservationSequence,
 	); err != nil {
 		return nil, err
 	}

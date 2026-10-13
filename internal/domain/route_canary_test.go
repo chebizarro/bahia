@@ -22,6 +22,30 @@ func baseTarget() RouteCanaryTarget {
 	}
 }
 
+func TestRouteCanaryTransitionIDUsesObservationSequenceAndState(t *testing.T) {
+	key := RouteCanaryKey{ServiceID: uuid.New(), EnvironmentID: uuid.New(), Hostname: "git.example.net"}
+	prior := RouteCanaryState{RouteCanaryKey: key, Classification: RouteCanaryClassificationRouteOK}
+	next, transition := EvaluateRouteCanary(prior, RouteCanaryClassificationUpstreamError, true,
+		RouteCanaryPerspectivePublicEdge, "upstream failed", nil,
+		RouteCanaryThresholds{FailureThreshold: 1, SuccessThreshold: 1}, time.Unix(100, 0).UTC())
+	if transition != RouteCanaryTransitionOpened || next.ObservationSequence != 1 {
+		t.Fatalf("first observation = %s, sequence %d", transition, next.ObservationSequence)
+	}
+	id := RouteCanaryTransitionID(prior, next)
+	if id != RouteCanaryTransitionID(prior, next) {
+		t.Fatal("the same transition must keep one lineage ID")
+	}
+	next.ObservationSequence++
+	if id == RouteCanaryTransitionID(prior, next) {
+		t.Fatal("a later observation must have a distinct lineage ID")
+	}
+	next.ObservationSequence--
+	next.Classification = RouteCanaryClassificationConnectFailed
+	if id == RouteCanaryTransitionID(prior, next) {
+		t.Fatal("a different next state must have a distinct lineage ID")
+	}
+}
+
 func verifiedTLS(notAfter time.Time) RouteCanaryTLSObservation {
 	return RouteCanaryTLSObservation{
 		HandshakeCompleted: true,
