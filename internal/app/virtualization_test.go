@@ -222,7 +222,7 @@ func TestVirtualizationSuspensionIsVisibleButDoesNotGateCoreReadiness(t *testing
 	}
 	found := false
 	for _, check := range snapshot.Checks {
-		if check.Name == "virtualization_canonical_recovery" {
+		if check.Name == "virtualization_legacy_api" {
 			found = true
 			if check.Status != HealthStatusWarn || !strings.Contains(check.Message, "signed-intent recovery") {
 				t.Fatalf("unexpected virtualization check: %#v", check)
@@ -241,9 +241,9 @@ func TestVirtualizationSuspensionUsesConfigurationWhenPostgresUnavailable(t *tes
 		available bool
 		want      bool
 	}{
-		{name: "postgres configured but absent", cfg: config.Config{DB: config.DBConfig{Host: "db.internal", Name: "bahia"}}, want: true},
+		{name: "postgres configured but absent", cfg: config.Config{DB: config.DBConfig{Host: "db.internal", Name: "bahia"}}, want: false},
 		{name: "virtualization configured without postgres", cfg: config.Config{Virtualization: config.VirtualizationConfig{PersistentVM: config.PersistentVMConfig{Enabled: true}}}, want: true},
-		{name: "postgres available", available: true, want: true},
+		{name: "postgres available", available: true, want: false},
 		{name: "no postgres or virtualization", want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,5 +251,13 @@ func TestVirtualizationSuspensionUsesConfigurationWhenPostgresUnavailable(t *tes
 				t.Fatalf("warning relevant = %t, want %t", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestVirtualizationWarmStartBelongsToReceiptRunner(t *testing.T) {
+	for _, domain := range canonicalProjectorWarmStartDomains() {
+		if domain == "virtualization" {
+			t.Fatal("generic projector may not re-sign virtualization records without receipt and relay OK proof")
+		}
 	}
 }

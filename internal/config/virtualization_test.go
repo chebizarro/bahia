@@ -37,10 +37,12 @@ virtualization:
 	require.NoError(t, err)
 	require.Equal(t, host, cfg.Virtualization.PersistentVM.HostID)
 	require.Equal(t, org, cfg.Virtualization.Hosts[0].OrgID)
+	withoutLegacyOperator := cfg.Virtualization
+	withoutLegacyOperator.OperatorPubkeys = nil
+	withoutLegacyOperator.ReconcilePubkey = ""
+	require.NoError(t, withoutLegacyOperator.Validate(), "persistent VM authority comes from the intent TrustSet")
 	for _, change := range []func(*VirtualizationConfig){
-		func(c *VirtualizationConfig) { c.OperatorPubkeys = nil },
 		func(c *VirtualizationConfig) { c.Hosts = nil },
-		func(c *VirtualizationConfig) { c.ReconcilePubkey = "" },
 		func(c *VirtualizationConfig) { c.PersistentVM.ImageRoot = "relative" },
 		func(c *VirtualizationConfig) {
 			c.PlaneEndpoints = []ExecutionPlaneEndpointConfig{{HostID: uuid.New(), EndpointRef: uuid.New(), Author: key}}

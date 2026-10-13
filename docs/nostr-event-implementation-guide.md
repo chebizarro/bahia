@@ -90,9 +90,10 @@ A new kind number requires a written justification that its relay behaviour
 ## Interop exceptions
 
 Virtualization `30900` requests use `t=virtualization` and an
-operation-specific `d` coordinate, but their current disposition is rejection:
-neither a PostgreSQL journal row nor a provider observation is canonical
-authorization or a restart-safe commit outcome. See the
+operation-specific `d` coordinate. HOST, IMAGE and persistent VM complete
+desired-state resource intents use the same domain with resource coordinates.
+Only the signed canonical `30900` outbox event and relay OK proof permit
+`30315` acceptance; SQL journal rows do not grant authority. See the
 [virtualization contract](event-spec.md#virtualization).
 
 - **Hive-CI.** `build/request` is an intent, but the CI bus is Hive-CI's own
