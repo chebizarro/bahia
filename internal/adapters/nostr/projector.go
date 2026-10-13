@@ -514,6 +514,10 @@ type cpStateFamily struct {
 // by the catalog kind stamped in legacy_kind. The worker topics are the worker
 // contract's.
 var cpStateFamilies = map[int]cpStateFamily{
+	int(kinds.CPStateFamilyVirtualizationHost):      {"virtualization", "host", kinds.CPStateTopicVirtualizationHost},
+	int(kinds.CPStateFamilyVirtualizationImage):     {"virtualization", "image", kinds.CPStateTopicVirtualizationImage},
+	int(kinds.CPStateFamilyVirtualizationVM):        {"virtualization", "vm", kinds.CPStateTopicVirtualizationVM},
+	int(kinds.CPStateFamilyVirtualizationOperation): {"virtualization", "operation", kinds.CPStateTopicVirtualizationOperation},
 	KindServiceState:                  {"service", "state", kinds.CPStateTopicServiceState},
 	KindServiceRegistry:               {"service", "registry", kinds.CPStateTopicServiceRegistry},
 	KindEnvironmentRegistry:           {"environment", "registry", kinds.CPStateTopicEnvironmentRegistry},

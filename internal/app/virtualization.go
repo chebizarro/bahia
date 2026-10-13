@@ -51,19 +51,19 @@ func NewVirtualization(deps VirtualizationDependencies) (*Virtualization, error)
 	}, nil
 }
 
-// virtualizationSuspensionRelevant uses configuration, not database connection
-// success: a failed PostgreSQL connection must not hide the suspension warning.
+// virtualizationSuspensionRelevant reports only configured legacy surfaces;
+// generic PostgreSQL availability is not evidence virtualization was enabled.
 func virtualizationSuspensionRelevant(cfg *config.Config, dbAvailable bool) bool {
-	return dbAvailable || cfg.DB.Host != "" || cfg.DB.Name != "" ||
-		cfg.Virtualization.PersistentVM.Enabled || len(cfg.Virtualization.PlaneEndpoints) > 0
+	_ = dbAvailable
+	return cfg.Virtualization.PersistentVM.Enabled || len(cfg.Virtualization.PlaneEndpoints) > 0
 }
 
-// registerVirtualizationSuspendedHealth reports the missing signed-intent
-// recovery source without making optional PostgreSQL state a core readiness gate.
+// registerVirtualizationSuspendedHealth reports only the unsupported legacy
+// SQL/plane surfaces without marking the canonical intent domain unavailable.
 func registerVirtualizationSuspendedHealth(provider *HealthProvider) {
-	provider.RegisterCheck("virtualization_canonical_recovery", func() HealthCheck {
-		return HealthCheck{Name: "virtualization_canonical_recovery", Status: HealthStatusWarn,
-			Message: "virtualization admission and projection suspended until signed-intent recovery replaces the PostgreSQL journal"}
+	provider.RegisterCheck("virtualization_legacy_api", func() HealthCheck {
+		return HealthCheck{Name: "virtualization_legacy_api", Status: HealthStatusWarn,
+			Message: "legacy virtualization SQL API and Loom plane remain suspended; signed-intent recovery is active for canonical persistent resources"}
 	})
 }
 

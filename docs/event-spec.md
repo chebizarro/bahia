@@ -326,6 +326,7 @@ service pubkey:
 | Backup | `backup-definition`, `backup-policy`, `backup-repository`, `backup-retention`, `backup-recipe`, `backup-run`, `backup-verification`, `backup-restore`, `backup-runtime` | `<prefix>:<id>` | public |
 | DNS | `dns-zone`, `dns-endpoint`, `dns-policy`, `dns-backend`, `dns-zone-sync` | `zone:<name>`, `dnsbackend:<ref>`, deterministic endpoint/policy ids | public |
 | Workers | `worker-state`, `worker-assignment`, `worker-drain`, `worker-eligibility`, `worker-cleanup` | `worker:state:<pubkey>`, `worker:assignment:<pubkey>`, `worker:drain:<pubkey>`, `worker:eligibility:<preview>`, `worker:cleanup:<pubkey>:<run>` | public |
+| Virtualization | `virtualization-host`, `virtualization-image`, `virtualization-vm`, `virtualization-operation` | `virtualization-host:<uuidv7>`, `vm-image:<uuidv7>`, `persistent-vm:<uuidv7>`, `vm-operation:<uuidv7>` | public desired state and bounded outcomes |
 | Supply chain | `sbom-reference`, `sbom-availability`, `artifact-signature`, `artifact-sbom`, `artifact-sbom-package` | content-addressed (`sbom:…:<sha256>`) | public |
 | Security | `security-scan-status`, `security-summary` | `security:scan-summary:<run>`, `security:target:<hash>` | public |
 | Security (execution) | `security-target`, `security-run`, `security-schedule`, `security-finding`, `security-finding-detail` | `security:target:<hash>`, `security:run:<id>` | fleet-OCK ciphertext |
@@ -404,30 +405,42 @@ drift. When a desired document is deleted or expires the consumer publishes
 
 ### Virtualization
 
-Operator-signed operation requests use kind `30900`, `t=bahia-intent`,
-`t=virtualization`, `domain=virtualization`,
-`schema=bahia.intent.virtualization.v1`, `op=request`, an `org` UUID,
-`intent_id=<uuidv7>`, and `d=vm-operation:<operation_id>`. The complete
-content binds `operation_id` (UUIDv7), `resource_id`,
-`resource_kind=persistent_vm`, `action` (`start`, `graceful_stop`, or `reboot`),
-`expected_generation`, `idempotency_key` equal to `intent_id`, and a reason.
-The daemon checks the signature, tenant permission, envelope and content
-binding, then refuses the operation while canonical commit and restart-safe
-execution are unavailable. It attempts a `rejected` `30315` status; a status
-publication failure leaves the request unaccepted, and a later replay can
-reattempt the refusal. A relay `OK` is not operation acceptance; no SQL
-journal row authorizes execution or state publication.
+Operator-signed kind `30900` resource intents use `t=bahia-intent`,
+`t=virtualization`, `domain=virtualization`, `schema=bahia.intent.virtualization.v1`,
+`org=<uuid>`, `intent_id=<uuidv7>`, and `op=create|update|delete`. Coordinates
+are `virtualization-host:<id>`, `vm-image:<id>`, and `persistent-vm:<id>`;
+every resource `id` is an author-minted UUIDv7 fixed at creation. Content is
+`{"id":"...","resource_kind":"host|image|persistent_vm","resource":{...}}`
+for create/update: `resource` is the complete desired domain document without
+service-owned metadata or observations. Updates and deletes carry
+`expected_updated_at` (the prior canonical revision); delete carries
+`deleted:true` instead of `resource`. Generation, timestamps and created-by
+are assigned by the service. VM create/update also requires proven canonical
+HOST and IMAGE references and a receipt-protected provider `define` effect.
+This initial contract supports stopped, non-bootstrap, non-Loom persistent VMs;
+other configurations fail closed with `bahia-4f10q.1` in the reason.
 
-`schema=bahia.state.virtualization.v1`, `d=<resource-prefix>:<uuid>`, tags
-`domain=virtualization`, `entity`, `org`, `generation`, `sequence`,
-`lifecycle_class`, and `journal=<org>:<sequence>:state`. Content is the public
-DTO only: `schema`, `sequence`, `change_type`, `occurred_at`, optional
-`approval_id`, `resource` (with a `deleted` flag). No evidence, bootstrap,
-console content, host path or credential bundle is projected. Audit facts use
-`schema=bahia.audit.virtualization.v1`, `state=<coordinate>`, `type`,
-`protected=true` and `journal=…:audit`. Consumers enforce journal
-sequence/generation ordering in addition to NIP-01 for previously signed
-records. The SQL-journal projector does not publish new state or audit.
+The v1 `vm-operation:<operation_id>` `op=request` contract remains: content
+binds UUIDv7 `operation_id`, canonical VM `resource_id`,
+`resource_kind=persistent_vm`, `action=start|graceful_stop|reboot`,
+`expected_generation`, `idempotency_key=intent_id`, and a reason. The target
+must be a proven, live canonical VM, not an SQL-only row. Before any provider
+effect, the service stores a local receipt binding the exact signed intent,
+coordinate and complete effect input. Replay after a prepared receipt inspects
+the exact provider operation marker and desired runtime state; if proof is
+ambiguous it refuses with `bahia-4f10q.1` rather than reissuing the effect.
+
+Canonical resource, tombstone and operation-outcome records are service-signed
+kind `30900` cp-state (`schema=bahia.cp-state.v1`, `domain=virtualization`,
+`legacy_kind=32045|32046|32047|32048`, `deleted=true|false`,
+`t=virtualization-host|virtualization-image|virtualization-vm|virtualization-operation`,
+the same `d`, `org`, `intent_id`, and `e=<operator intent event id>`). Content
+binds `id`, `org_id`, `resource_kind`, `updated_at`, `deleted`, `intent_id`, and
+the complete public `resource` when live. Only the signed outbox event plus
+its historical relay OK quorum proof can complete an intent; `30315` acceptance
+follows that proof. PostgreSQL is optional and is never recovery authority.
+The legacy SQL-journal state/audit projector remains disconnected. Loom
+VM-deployment-unit lifecycle is a separate domain, not unified here.
 
 ## 6. Operational status (`30315`)
 

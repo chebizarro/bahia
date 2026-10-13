@@ -19,7 +19,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/repository"
 )
 
-var ErrVirtualizationUnavailable = errors.New("virtualization unavailable")
+var ErrVirtualizationUnavailable = errors.New("bahia-4f10q.1: legacy SQL-first virtualization API unavailable; use signed canonical virtualization intents")
 
 // VirtualizationQuery shares tenant-fenced repository reads and public mapping
 // across REST and ContextVM. Authorization belongs to their ingress handlers.

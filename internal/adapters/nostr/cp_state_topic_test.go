@@ -17,6 +17,10 @@ import (
 // cpStateTopicsByFamily is every cp-state family's declared "t" topic. The
 // worker values are declared with the worker contract.
 var cpStateTopicsByFamily = map[int]string{
+	int(kinds.CPStateFamilyVirtualizationHost):      kinds.CPStateTopicVirtualizationHost,
+	int(kinds.CPStateFamilyVirtualizationImage):     kinds.CPStateTopicVirtualizationImage,
+	int(kinds.CPStateFamilyVirtualizationVM):        kinds.CPStateTopicVirtualizationVM,
+	int(kinds.CPStateFamilyVirtualizationOperation): kinds.CPStateTopicVirtualizationOperation,
 	KindServiceState:                                 kinds.CPStateTopicServiceState,
 	KindServiceRegistry:                              kinds.CPStateTopicServiceRegistry,
 	KindEnvironmentRegistry:                          kinds.CPStateTopicEnvironmentRegistry,

@@ -1298,7 +1298,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// Warm-start covers ALL cp-state domains: every domain's canonical
 	// records are published from mutation sites, and warm-start re-publishes
 	// only stale or missing records on restart.
-	warmStartDomains := nostrAdapter.CPStateDomains()
+	// Virtualization recovery must replay its signed intent and exact staged
+	// outbox event, never let the generic projector re-sign an unproven cache
+	// record with a new timestamp. Its receipt runner owns that domain.
+	warmStartDomains := canonicalProjectorWarmStartDomains()
 	if len(enabledDomains) == 0 {
 		// No intent subscriber → readiness has no filters. Register and
 		// immediately satisfy a sentinel so warm-start proceeds.
@@ -1441,10 +1444,28 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		return check
 	})
 
-	// Virtualization requests enter the signed intent pipeline for explicit
-	// rejection; the SQL-backed projector and provider remain disconnected.
+	// Virtualization resource and operation intents use canonical 30900 state,
+	// durable local receipts and relay OK proof. The SQL-first runtime stays off.
 	if enabledDomains["virtualization"] {
-		intentProcessor.RegisterHandler("virtualization", controlplane.NewVirtualizationIntentHandler())
+		virtualizationHandler := controlplane.NewVirtualizationIntentHandler(controlplane.VirtualizationIntentDependencies{
+			Outbox: localOutbox, Events: localEventStore, Signer: serviceKeyer,
+			Target: controlPlanePub.Target(),
+			Publish: func(ctx context.Context, ev nostr.Event) error {
+				return controlPlanePub.PublishProjection(ctx, ev, "virtualization", nil)
+			},
+			ProviderForHost: func(ctx context.Context, host domain.VirtualizationHost) (domain.PersistentVMProvider, error) {
+				return buildCanonicalVirtualizationProvider(ctx, cfg.Virtualization, auditEventRepo, host, logger)
+			},
+		})
+		intentProcessor.RegisterHandler("virtualization", virtualizationHandler)
+		recovery := &virtualizationRecoveryRunner{handler: virtualizationHandler, processor: intentProcessor, wake: make(chan struct{}, 1), logger: logger}
+		controlPlanePub.OnDelivered(func(ev nostr.Event) {
+			if virtualizationStateEvent(ev) {
+				recovery.Notify()
+			}
+		})
+		nostrProjector.AddPostWarmStartHook(func(context.Context) { recovery.Notify() })
+		bgManager.RegisterWithOptions(recovery, RunnerRequired(false))
 	}
 
 	// --- Backup canonical publisher and intent handler ---
@@ -1970,15 +1991,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Info("nostr read-model projector registered")
 	}
 
-	// Virtualization SQL journals are preserved for an explicit cutover, but
-	// cannot authorize state/audit signing or provider effects during normal
-	// startup. Admission and SQL-backed reads remain unavailable until a signed
-	// intent plus local/relay recovery source exists.
+	// Legacy SQL-first virtualization APIs remain disabled. Only the signed
+	// canonical intent contract above may authorize persistent provider work.
 	if err := cfg.Virtualization.Validate(); err != nil {
 		return nil, fmt.Errorf("configure virtualization: %w", err)
 	}
 	if virtualizationSuspensionRelevant(cfg, dbAvailable) {
-		logger.Warn("virtualization suspended: canonical signed-intent recovery is unavailable")
+		logger.Warn("bahia-4f10q.1: legacy virtualization SQL API and Loom plane remain unavailable; canonical intent resources and persistent provider operations are enabled")
 		registerVirtualizationSuspendedHealth(healthProvider)
 	}
 

@@ -83,6 +83,10 @@ func AssistantTranscriptSessionTopic(sessionID string) string {
 // The worker families' topics ("worker-state", "worker-assignment", ...) are
 // declared with the worker contract, not here.
 const (
+	CPStateTopicVirtualizationHost       = "virtualization-host"
+	CPStateTopicVirtualizationImage      = "virtualization-image"
+	CPStateTopicVirtualizationVM         = "virtualization-vm"
+	CPStateTopicVirtualizationOperation  = "virtualization-operation"
 	CPStateTopicServiceState             = "service-state"
 	CPStateTopicServiceRegistry          = "service-registry"
 	CPStateTopicEnvironmentRegistry      = "environment-registry"

@@ -103,9 +103,9 @@ func TestVirtualizationIntentCannotInheritAnotherDomainsProcessedID(t *testing.T
 	}, keyer.NewPlainKeySigner(nostr.Generate()), zap.NewNop())
 	processor := NewIntentProcessor(trust, store, status, IntentProcessorConfig{EnabledDomains: map[string]bool{"virtualization": true}}, zap.NewNop())
 	processor.RegisterHandler("virtualization", NewVirtualizationIntentHandler())
-	require.ErrorIs(t, processor.ProcessRelayIntent(t.Context(), ev), readmodel.ErrVirtualizationUnavailable)
+	require.ErrorContains(t, processor.ProcessRelayIntent(t.Context(), ev), "conflicts with previously accepted content")
 	require.Len(t, statuses, 1)
-	require.Equal(t, "rejected", extractTag(statuses[0], "status"))
+	require.Equal(t, "conflict", extractTag(statuses[0], "status"))
 	require.Equal(t, "test", processor.ProcessedIntent(request.IdempotencyKey).Domain,
 		"virtualization refusal does not overwrite another domain's marker")
 }

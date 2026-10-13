@@ -17,11 +17,10 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
-	"github.com/openagentsinc/bahia/internal/readmodel"
 	"github.com/stretchr/testify/require"
 )
 
-func TestVirtualizationSignedIntentIngressRemainsSuspended(t *testing.T) {
+func TestVirtualizationSignedIntentIngressRefusesAbsentCanonicalVM(t *testing.T) {
 	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
 	defer restoreDBHooks()
 	cfg := intentSubscriberTestConfig(t)
@@ -48,7 +47,7 @@ func TestVirtualizationSignedIntentIngressRemainsSuspended(t *testing.T) {
 		{"t", "bahia-intent"}, {"t", "virtualization"},
 	}, Content: string(content)}
 	require.NoError(t, event.Sign(actor))
-	require.ErrorIs(t, app.IntentProcessor.ProcessRelayIntent(t.Context(), event), readmodel.ErrVirtualizationUnavailable)
+	require.ErrorContains(t, app.IntentProcessor.ProcessRelayIntent(t.Context(), event), "vm-operation target has no canonical VM record")
 	require.False(t, app.IntentProcessor.IsProcessed(intentID.String()))
 }
 
@@ -219,7 +218,7 @@ func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
 			require.NoError(t, err)
 			intent.Actor = actor
 			err = app.IntentProcessor.ProcessInProcess(context.Background(), intent)
-			if domainName == "hiveci-policy" {
+			if domainName == "hiveci-policy" || domainName == "virtualization" {
 				// This domain requires a durable outcome status; the fixture has no write relays.
 				require.ErrorContains(t, err, "no write relays configured")
 			} else {
@@ -264,7 +263,7 @@ func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 		if domainName == "service" || domainName == "policy" {
 			require.ErrorContains(t, err, "disabled", domainName)
 			require.Empty(t, handler.received(), domainName)
-		} else if domainName == "hiveci-policy" {
+		} else if domainName == "hiveci-policy" || domainName == "virtualization" {
 			require.ErrorContains(t, err, "no write relays configured")
 			require.Len(t, handler.received(), 1, domainName)
 		} else {

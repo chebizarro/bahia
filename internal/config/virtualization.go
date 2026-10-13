@@ -55,8 +55,10 @@ func (c VirtualizationConfig) Validate() error {
 		k, err := nostr.PubKeyFromHex(s)
 		return err == nil && k != (nostr.PubKey{}) && k.Hex() == s
 	}
-	active := c.PersistentVM.Enabled || len(c.PlaneEndpoints) > 0
-	if active && len(c.OperatorPubkeys) == 0 {
+	// Persistent VM intents are authorized by the relay-derived TrustSet, not
+	// the legacy installation operator allowlist. The latter is still required
+	// by the unsupported Loom plane configuration.
+	if len(c.PlaneEndpoints) > 0 && len(c.OperatorPubkeys) == 0 {
 		return invalid()
 	}
 	for _, key := range c.OperatorPubkeys {
@@ -92,7 +94,7 @@ func (c VirtualizationConfig) Validate() error {
 		}
 	}
 	p := c.PersistentVM
-	if p.Enabled && (!hosts[p.HostID] || p.StoragePoolRef == uuid.Nil || !filepath.IsAbs(p.StateDir) || !filepath.IsAbs(p.ImageRoot) || p.StateDir == p.ImageRoot || c.ReconcilePubkey == "") {
+	if p.Enabled && (!hosts[p.HostID] || p.StoragePoolRef == uuid.Nil || !filepath.IsAbs(p.StateDir) || !filepath.IsAbs(p.ImageRoot) || p.StateDir == p.ImageRoot) {
 		return invalid()
 	}
 	endpoints := map[uuid.UUID]bool{}

@@ -14,6 +14,14 @@ import "strconv"
 // family id, not the numeric kind, is the sanctioned discriminator.
 type CPStateFamily int
 
+// Virtualization resource and operation records are 30900-only families.
+const (
+	CPStateFamilyVirtualizationHost      CPStateFamily = 32045
+	CPStateFamilyVirtualizationImage     CPStateFamily = 32046
+	CPStateFamilyVirtualizationVM        CPStateFamily = 32047
+	CPStateFamilyVirtualizationOperation CPStateFamily = 32048
+)
+
 // DNS cp-state families (legacy_kind 31975-31978).
 const (
 	CPStateFamilyDNSZone     CPStateFamily = DNSZoneState

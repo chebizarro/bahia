@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -15,28 +16,37 @@ import (
 	"github.com/openagentsinc/bahia/internal/readmodel"
 )
 
-// VirtualizationIntentHandler admits no provider work until a canonical
-// operation outcome and restart-safe executor are available. Registering the
-// domain lets the normal signed-intent pipeline reject requests explicitly
-// instead of silently ignoring them or falling through to the SQL journal.
-type VirtualizationIntentHandler struct{}
+// VirtualizationIntentHandler is implemented in virtualization_canonical_handler.go.
+// A handler without dependencies deliberately keeps the old fail-closed behavior.
+type VirtualizationIntentHandler struct{ runtime *virtualizationRuntime }
 
-func NewVirtualizationIntentHandler() *VirtualizationIntentHandler {
-	return &VirtualizationIntentHandler{}
+func NewVirtualizationIntentHandler(deps ...VirtualizationIntentDependencies) *VirtualizationIntentHandler {
+	h := &VirtualizationIntentHandler{}
+	if len(deps) != 0 {
+		h.runtime = newVirtualizationRuntime(deps[0])
+	}
+	return h
 }
 
 func (*VirtualizationIntentHandler) PermissionFor(string) domain.Permission {
 	return domain.PermWriteDeployments
 }
 
-func (*VirtualizationIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+func (h *VirtualizationIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := validateVirtualizationOperationIntent(intent); err != nil {
+	if intent.Op == "request" {
+		if err := validateVirtualizationOperationIntent(intent); err != nil {
+			return err
+		}
+	} else if err := validateVirtualizationResourceIntent(intent); err != nil {
 		return err
 	}
-	return readmodel.ErrVirtualizationUnavailable
+	if h.runtime == nil {
+		return readmodel.ErrVirtualizationUnavailable
+	}
+	return h.runtime.handle(ctx, intent)
 }
 
 type virtualizationOperationRequest struct {
@@ -61,6 +71,7 @@ func validateVirtualizationOperationIntent(intent *Intent) error {
 		intent.Domain != parsed.Domain || intent.Op != parsed.Op ||
 		intent.Schema != parsed.Schema || intent.OrgID != parsed.OrgID ||
 		intent.IntentID != parsed.IntentID || intent.Coordinate != parsed.Coordinate ||
+		!virtualizationSameRevision(intent.ExpectedUpdatedAt, parsed.ExpectedUpdatedAt) ||
 		!virtualizationSameContent(intent.Content, parsed.Content) ||
 		!virtualizationTagExactlyOnce(intent.Event.Tags, "d", parsed.Coordinate) ||
 		!virtualizationTagExactlyOnce(intent.Event.Tags, "domain", kinds.VirtualizationDomain) ||
@@ -89,11 +100,20 @@ func validateVirtualizationOperationIntent(intent *Intent) error {
 		request.OperationID == request.ResourceID || request.ResourceKind != domain.PersistentVMResource ||
 		request.ExpectedGeneration < 1 || request.IdempotencyKey != intent.IntentID ||
 		strings.TrimSpace(request.Reason) == "" ||
-		!virtualizationOperationAction(request.Action) ||
 		intent.Coordinate != "vm-operation:"+request.OperationID.String() {
 		return fmt.Errorf("virtualization request action or resource binding is invalid")
 	}
+	if !virtualizationOperationAction(request.Action) {
+		return fmt.Errorf("bahia-4f10q.1: unsupported vm-operation action %q", request.Action)
+	}
 	return nil
+}
+
+func virtualizationSameRevision(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
 }
 
 func virtualizationOperationAction(action domain.VMOperationKind) bool {
