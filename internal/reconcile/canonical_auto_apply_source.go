@@ -308,7 +308,7 @@ func (e DockerAutoApplyEffect) Observe(ctx context.Context, snapshot ApplySnapsh
 	}
 	obs, err := docker.Observe(ctx, snapshot.Spec.ServiceID, snapshot.Spec.EnvironmentID, snapshot.Spec.StableServiceKey)
 	if err != nil || obs == nil || obs.ObservedContainerID != container.ID {
-		return false, nil, fmt.Errorf("Docker observation did not confirm the exact managed container")
+		return false, nil, fmt.Errorf("docker observation did not confirm the exact managed container")
 	}
 	return true, obs, nil
 }

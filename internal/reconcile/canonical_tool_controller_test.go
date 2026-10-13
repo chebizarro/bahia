@@ -318,10 +318,18 @@ func TestCanonicalToolAdmissionSurvivesRestartBeforeApprovalReceipt(t *testing.T
 	require.NoError(t, f.store.Close())
 	store, err := localstore.Open(f.eventsPath)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	outbox, err := localstore.OpenOutbox(f.outboxPath)
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	toolStatusProof(t, store, outbox, f.serviceKey, f.approval)
 	runtimeSource, err := NewCanonicalRuntimeSource(store, f.serviceKey.Public().Hex())
 	require.NoError(t, err)

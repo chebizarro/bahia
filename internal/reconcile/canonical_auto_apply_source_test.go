@@ -21,7 +21,11 @@ import (
 func TestCanonicalAutoApplySourceBindsLocalSignedDecisionAndWinnersWithoutDatabase(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	serviceKey, operatorKey := nostr.Generate(), nostr.Generate()
 	orgID, serviceID, envID, unitID, artifactID, intentID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	spec := domain.DesiredServiceSpec{SchemaVersion: domain.DesiredStateSchemaVersion,
