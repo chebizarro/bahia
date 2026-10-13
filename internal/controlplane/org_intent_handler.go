@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -912,9 +914,41 @@ func (h *RelayMemberEventHandler) HydrateTrustSetFromHistory(ctx context.Context
 		return
 	}
 
+	// Different retained coordinates can name the same member (legacy d-tags
+	// and opaque UUID d-tags). Replay oldest first, and on a timestamp tie
+	// replay the higher ID first, so the NIP-01 lowest ID wins last.
+	sort.Slice(records, func(i, j int) bool {
+		if !records[i].CreatedAt.Equal(records[j].CreatedAt) {
+			return records[i].CreatedAt.Before(records[j].CreatedAt)
+		}
+		return records[i].ID > records[j].ID
+	})
 	hydrated := 0
 	for _, rec := range records {
-		if err := h.HandleEncryptedMemberEvent(ctx, rec.Content, 0, "", ""); err != nil {
+		var tags [][]string
+		if err := json.Unmarshal(rec.Tags, &tags); err != nil {
+			h.logger.Debug("TrustSet warm-start: invalid member tags", zap.String("event_id", rec.ID), zap.Error(err))
+			continue
+		}
+		var dTag, topic string
+		legacyKind := 0
+		for _, tag := range tags {
+			if len(tag) < 2 {
+				continue
+			}
+			switch tag[0] {
+			case "d":
+				dTag = tag[1]
+			case "t":
+				topic = tag[1]
+			case "legacy_kind":
+				legacyKind, _ = strconv.Atoi(tag[1])
+			}
+		}
+		if topic != "org-member" {
+			continue
+		}
+		if err := h.HandleEncryptedMemberEvent(ctx, rec.Content, legacyKind, dTag, topic); err != nil {
 			h.logger.Debug("TrustSet warm-start: failed to process member event",
 				zap.String("event_id", rec.ID), zap.Error(err))
 			continue

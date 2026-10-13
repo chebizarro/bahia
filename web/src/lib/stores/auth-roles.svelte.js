@@ -348,10 +348,12 @@ function processMemberRecords(store, servicePubkey, userPubkey) {
     // Only process events from the service pubkey
     if (event.pubkey !== servicePubkey) continue;
 
-    // The coordinate identifies the member without decrypting other members'
-    // records. Check the decrypted identity too; either one alone is insufficient.
+    // New coordinates are keyed opaque UUIDs. Retained legacy coordinates
+    // remain readable, but only the decrypted identity grants a role.
     const dTag = getTagValue(event, 'd') || '';
-    if (!dTag.startsWith('org:member:') || !dTag.endsWith(`:${userPubkey}`)) continue;
+    const opaqueCoordinate = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(dTag);
+    const legacyCoordinate = dTag.startsWith('org:member:');
+    if (!opaqueCoordinate && !legacyCoordinate) continue;
 
     // Check if this is a confidential envelope
     if (!isConfidentialEnvelope(event.content)) continue;
@@ -364,7 +366,7 @@ function processMemberRecords(store, servicePubkey, userPubkey) {
       const orgID = parsed.key_org;
       const versionStr = parsed.key_version;
       if (!orgID || !versionStr) continue;
-      if (dTag !== `org:member:${orgID}:${userPubkey}`) continue;
+      if (legacyCoordinate && dTag !== `org:member:${orgID}:${userPubkey}`) continue;
 
       if (!/^v[1-9]\d*$/.test(versionStr)) continue;
       const version = Number(versionStr.substring(1));

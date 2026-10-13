@@ -135,6 +135,21 @@ custody, publishes CORD-06 rekey blobs and sends direct invites to the supplied
 survivors. The receipt contains epochs, commitments and recipients, never root
 or channel keys.
 
+### CORD-04 authority containment
+
+The Control Plane fetch validates the owner-rooted Role and Grant evidence for
+all head candidates before comparing versions. A same-version collision
+prefers the authorized higher-ranked actor, then the lowest rumor id among
+peers. Missing exact Grant citations, forked chains and cyclic roster evidence
+leave an entity unresolved rather than authorizing a guessed head.
+
+This current-epoch fold does not enable Refounding. A compacted new epoch can
+lack a non-head Grant edition that an action cites; a fresh joiner cannot
+validate that action from the supported bootstrap material. Non-owner rotations
+also require verification of the outgoing rekey citation and recipients. Until
+those gates have a supported contract, the owner-only Private Channel rekey
+path remains the only enabled rotation.
+
 ## Configuration
 
 ```yaml

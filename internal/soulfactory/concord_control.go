@@ -30,6 +30,10 @@ const (
 	// a fresh joiner holding only the newest root derives the same one
 	// (CORD-04 §1).
 	concordLabelGrant = "concord/grant"
+	// concordLabelPins derives one Pin List coordinate from its Channel id.
+	concordLabelPins        = "concord/pins"
+	concordLabelBanlist     = "concord/banlist"
+	concordLabelInviteLinks = "concord/invite-links"
 )
 
 // concordEditionLabel is CORD-04 §1's edition-hash domain separator. It is a
@@ -92,24 +96,29 @@ type concordEdition struct {
 	hash string
 	// actor is the seal's real npub: the authority a receiver judges, never the
 	// control_root holder who published the wrap (CORD-04 §5).
-	actor   nostr.PubKey
-	rumorID nostr.ID
+	actor    nostr.PubKey
+	rumorID  nostr.ID
+	citation concordAuthorityCitation
+	content  string
 	// seal is the kind-20014 plaintext seal, verbatim as it arrived.
 	seal nostr.Event
 }
 
 // concordControlFold is a folded Control Plane: one head per entity.
 //
-// This is a structural fold, not an authorized CORD-04 projection. It does not
-// resolve the owner-rooted Roster or retain exact non-head citation evidence.
-// Rotate refuses operations that would rely on it (bahia-185t0); receiver-side
-// validation cannot justify minting keys or compacting these unverified heads.
+// A raw fold retains all exact signed evidence for the CORD-04 resolver; its
+// preliminary heads are structural only. The production fetch returns the
+// owner-rooted resolved form, never these preliminary heads.
 type concordControlFold struct {
 	// heads maps an entity coordinate to its current edition.
 	heads map[[32]byte]concordEdition
 	// suspended names entities whose held chain forked. They have no usable
 	// head: a compaction must not seat one and a citation must not name one.
 	suspended map[[32]byte]struct{}
+	// all retains exact signed non-head evidence, including cited Grants.
+	all map[[32]byte][]concordEdition
+	// unresolved names entities whose authority evidence is incomplete.
+	unresolved map[[32]byte]struct{}
 	// editions counts what was accepted, for operator-facing receipts.
 	editions int
 }
@@ -120,6 +129,9 @@ func (f *concordControlFold) head(entity [32]byte) (concordEdition, bool) {
 		return concordEdition{}, false
 	}
 	if _, forked := f.suspended[entity]; forked {
+		return concordEdition{}, false
+	}
+	if _, missing := f.unresolved[entity]; missing {
 		return concordEdition{}, false
 	}
 	edition, ok := f.heads[entity]
@@ -165,6 +177,19 @@ func concordGrantLocator(communityID, member [32]byte) ([32]byte, error) {
 	return concordHKDF(communityID[:], concordLabelGrant, member, nil, nil)
 }
 
+// concordPinsLocator implements CORD-02 A.6's epochless Pin List coordinate.
+func concordPinsLocator(communityID, channelID [32]byte) ([32]byte, error) {
+	return concordHKDF(communityID[:], concordLabelPins, channelID, nil, nil)
+}
+
+func concordBanlistLocator(communityID [32]byte) ([32]byte, error) {
+	return concordHKDF(communityID[:], concordLabelBanlist, [32]byte{}, nil, nil)
+}
+
+func concordInviteLinksLocator(communityID, creator [32]byte) ([32]byte, error) {
+	return concordHKDF(communityID[:], concordLabelInviteLinks, creator, nil, nil)
+}
+
 // concordControlReadKey derives the Control Plane read key (CORD-02 §5). Its
 // conv_key decrypts every wrap at the plane's address; the address itself is
 // held, never derived, so it is checked against the bundle rather than computed.
@@ -172,15 +197,15 @@ func concordControlReadKey(communityRoot []byte, communityID [32]byte, epoch uin
 	return deriveConcordGroupKey(concordLabelControl, communityRoot, communityID, &epoch)
 }
 
-// foldConcordControlPlane folds a bag of wraps from one Control Plane address
-// into current state.
+// collectConcordControlPlane parses a bag of wraps from one Control Plane
+// address into exact signed evidence and preliminary structural heads.
 //
 // Acceptance is not authorization (CORD-04 §5): an edition is retained on its
 // seal's signature, and the actor's rank is the receiver's judgment. What is
 // enforced here is provenance and shape — the wrap is authored by the held
 // address, the seal is plaintext and self-signed, and the rumor's own pubkey
 // matches the seal's (NIP-59's impersonation check).
-func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKey [32]byte) (*concordControlFold, error) {
+func collectConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKey [32]byte) (*concordControlFold, error) {
 	if address == nostr.ZeroPK {
 		return nil, fmt.Errorf("control Plane address is unset")
 	}
@@ -225,12 +250,14 @@ func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKe
 	}
 
 	fold := &concordControlFold{
-		heads:     make(map[[32]byte]concordEdition, len(byEntity)),
-		suspended: make(map[[32]byte]struct{}),
-		editions:  accepted,
+		heads:      make(map[[32]byte]concordEdition, len(byEntity)),
+		suspended:  make(map[[32]byte]struct{}),
+		all:        byEntity,
+		unresolved: make(map[[32]byte]struct{}),
+		editions:   accepted,
 	}
 	for entity, editions := range byEntity {
-		head, ok := foldConcordEntity(editions)
+		head, ok := foldConcordEntityStructural(editions)
 		if !ok {
 			fold.suspended[entity] = struct{}{}
 			continue
@@ -240,7 +267,7 @@ func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKe
 	return fold, nil
 }
 
-// foldConcordEntity resolves one entity's editions to its head.
+// foldConcordEntityStructural selects a preliminary head without authority.
 //
 // The head is the highest version whose held chain is intact (CORD-04 §1). A
 // *gap* is not a break: a compaction prunes an entity's ancestors and re-seats
@@ -255,7 +282,7 @@ func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKe
 // higher version is not necessarily authorized either. This structural helper
 // does not implement that filter and its output must not authorize rotation or
 // seed a production compaction until the full evidence is resolved.
-func foldConcordEntity(editions []concordEdition) (concordEdition, bool) {
+func foldConcordEntityStructural(editions []concordEdition) (concordEdition, bool) {
 	sort.Slice(editions, func(i, j int) bool {
 		if editions[i].version != editions[j].version {
 			return editions[i].version < editions[j].version
@@ -343,6 +370,10 @@ func parseConcordControlEdition(sealJSON string) (concordEdition, error) {
 	if (version == 1) != (prevBytes == nil) {
 		return concordEdition{}, fmt.Errorf("edition version %d and its chain link disagree", version)
 	}
+	citation, err := parseConcordAuthorityCitation(rumor.Tags)
+	if err != nil {
+		return concordEdition{}, fmt.Errorf("edition vac: %w", err)
+	}
 	hash, err := concordEditionHash(eid, version, prevBytes, []byte(rumor.Content))
 	if err != nil {
 		return concordEdition{}, err
@@ -355,9 +386,37 @@ func parseConcordControlEdition(sealJSON string) (concordEdition, error) {
 		hash:    hash,
 		actor:   seal.PubKey,
 		// Recomputed from the decrypted bytes; an embedded id is never trusted.
-		rumorID: rumor.GetID(),
-		seal:    seal,
+		rumorID:  rumor.GetID(),
+		citation: citation,
+		content:  rumor.Content,
+		seal:     seal,
 	}, nil
+}
+
+// parseConcordAuthorityCitation validates the exact three-part sync floor.
+// A malformed or duplicate vac is not a usable authority claim.
+func parseConcordAuthorityCitation(tags nostr.Tags) (concordAuthorityCitation, error) {
+	var citation concordAuthorityCitation
+	for _, tag := range tags {
+		if len(tag) == 0 || tag[0] != "vac" {
+			continue
+		}
+		if !citation.absent() || len(tag) != 4 {
+			return concordAuthorityCitation{}, fmt.Errorf("duplicate or malformed vac tag")
+		}
+		if _, err := concordID32(tag[1]); err != nil {
+			return concordAuthorityCitation{}, fmt.Errorf("grant coordinate: %w", err)
+		}
+		if _, err := concordID32(tag[3]); err != nil {
+			return concordAuthorityCitation{}, fmt.Errorf("grant hash: %w", err)
+		}
+		version, err := strconv.ParseUint(tag[2], 10, 64)
+		if err != nil || version == 0 || strconv.FormatUint(version, 10) != tag[2] {
+			return concordAuthorityCitation{}, fmt.Errorf("grant version is not a positive canonical decimal")
+		}
+		citation = concordAuthorityCitation{eid: tag[1], version: version, hash: tag[3]}
+	}
+	return citation, nil
 }
 
 // concordSingleTag returns the first value of the named tag, or "" when the tag
@@ -387,7 +446,21 @@ func concordTagUint(tags nostr.Tags, name string) (uint64, error) {
 	return value, nil
 }
 
-// fetchConcordControlPlane fetches and folds the Control Plane at one epoch.
+// foldConcordControlPlane resolves owner-rooted authority before any head is
+// exposed to production callers.
+func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKey [32]byte, community [32]byte, owner nostr.PubKey) (*concordControlFold, error) {
+	if owner == nostr.ZeroPK {
+		return nil, fmt.Errorf("Control Plane owner is unset")
+	}
+	raw, err := collectConcordControlPlane(events, address, convKey)
+	if err != nil {
+		return nil, err
+	}
+	return resolveConcordControlAuthority(raw, community, owner), nil
+}
+
+// fetchConcordControlPlane fetches the Control Plane at one epoch and resolves
+// its owner-rooted authority before returning any usable head.
 //
 // A fetch failure is an error rather than an empty fold: CORD-06 §3 aborts a
 // Refounding whose Control Plane cannot be reliably folded, and an empty plane
@@ -424,15 +497,16 @@ func (m *concordMembership) fetchConcordControlPlane(
 	if err != nil {
 		return nil, fmt.Errorf("fetch the Control Plane at epoch %d: %w", bundle.RootEpoch, err)
 	}
-	return foldConcordControlPlane(plane.Events, address, read.ConversationKey)
+	owner, err := nostr.PubKeyFromHex(bundle.Owner)
+	if err != nil {
+		return nil, fmt.Errorf("Control Plane owner: %w", err)
+	}
+	return foldConcordControlPlane(plane.Events, address, read.ConversationKey, communityID32, owner)
 }
 
-// resolveConcordRotationAuthority is a structural citation lookup,
-// not an authority verifier. Rotate permits only its owner/channel-only fast
-// path: the validated owner needs no citation (CORD-04 §1). The other branches
-// cannot prove a Grant's type, member, Roles, current rank or scoped permission,
-// and must remain behind the stage 1 refusal until those checks and the full
-// compaction evidence are implemented (bahia-185t0).
+// resolveConcordRotationAuthority reads a CORD-04-resolved citation. Rotate
+// still permits only the owner/channel-only path: outgoing rekey permissions,
+// recipients, and cross-epoch compaction evidence are separate release gates.
 func (m *concordMembership) resolveConcordRotationAuthority(
 	ctx context.Context,
 	community validatedConcordCommunity,

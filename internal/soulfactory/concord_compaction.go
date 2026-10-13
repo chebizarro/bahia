@@ -55,6 +55,9 @@ type ConcordGuestbookSnapshot struct {
 	SnapshotID string `json:"snapshot_id"`
 	Members    int    `json:"members"`
 	Chunks     int    `json:"chunks"`
+	// Warning makes the recipient-only membership seed explicit to operators:
+	// an omitted prior member can rejoin, but will not appear in this snapshot.
+	Warning string `json:"warning,omitempty"`
 	// Error records why seeding stopped. The snapshot is CORD-06 §3's
 	// best-effort final step — a Refounding succeeds with or without it — so a
 	// failure is reported on the receipt rather than returned.
@@ -103,10 +106,37 @@ func (m *concordMembership) republishConcordCompaction(
 	}
 	compaction.Address = signer.PubKey.Hex()
 
+	// CORD-04 §7 does not carry a deleted Channel's Pin List across the
+	// epoch. The Channel's terminal metadata head is kept as its tombstone;
+	// only its derived Pin List is dead weight. An unreadable or malformed
+	// Channel head never licenses an omission.
+	deletedPins := make(map[[32]byte]struct{})
+	for channelID, head := range fold.heads {
+		if head.vsk != 2 {
+			continue
+		}
+		var metadata struct {
+			Deleted bool `json:"deleted"`
+		}
+		var rumor nostr.Event
+		if err := json.Unmarshal([]byte(head.seal.Content), &rumor); err != nil || json.Unmarshal([]byte(rumor.Content), &metadata) != nil || !metadata.Deleted {
+			continue
+		}
+		pins, err := concordPinsLocator(communityID, channelID)
+		if err != nil {
+			return compaction, fmt.Errorf("derive Pin List for channel %x: %w", channelID, err)
+		}
+		deletedPins[pins] = struct{}{}
+	}
 	// Deterministic order, so a resumed Refounding re-publishes the same heads
 	// in the same sequence and a partial run resumes where it stopped.
 	entities := make([][32]byte, 0, len(fold.heads))
 	for entity := range fold.heads {
+		if head := fold.heads[entity]; head.vsk == 11 {
+			if _, deleted := deletedPins[entity]; deleted {
+				continue
+			}
+		}
 		entities = append(entities, entity)
 	}
 	sort.Slice(entities, func(i, j int) bool {
@@ -182,7 +212,10 @@ func (m *concordMembership) seedConcordGuestbookSnapshot(
 	newEpoch uint64,
 	members []string,
 ) ConcordGuestbookSnapshot {
-	snapshot := ConcordGuestbookSnapshot{Epoch: newEpoch, Members: len(members)}
+	snapshot := ConcordGuestbookSnapshot{
+		Epoch: newEpoch, Members: len(members),
+		Warning: "Guestbook snapshot is seeded from rotation Recipients, not coalesced prior Guestbook membership; members omitted from Recipients are not attested and must publish a new Join after receiving the epoch key",
+	}
 	if len(members) == 0 {
 		return snapshot
 	}

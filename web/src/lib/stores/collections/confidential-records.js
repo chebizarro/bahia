@@ -3,14 +3,14 @@ import { CAS_CONTROL_STATE } from '../../nostr/kinds.gen.js';
 import { contentKeyStateFor } from '../auth-roles.svelte.js';
 import { queryTopic, getDTag, getTagValue } from './store-query.js';
 
-export function readConfidentialTopic(topic, legacyKind) {
+export function readConfidentialTopic(topic, legacyKind, { includeDeleted = false } = {}) {
   const rows = [];
   const tombstones = [];
   let unreadable = 0;
   const reencryptionPending = [];
   for (const event of queryTopic(topic, [CAS_CONTROL_STATE])) {
     if (getTagValue(event, 'legacy_kind') !== String(legacyKind)) continue;
-    if (getTagValue(event, 'deleted') === 'true') {
+    if (!includeDeleted && getTagValue(event, 'deleted') === 'true') {
       tombstones.push({ dTag: getDTag(event), created_at: event.created_at });
       continue;
     }
@@ -29,9 +29,9 @@ export function readConfidentialTopic(topic, legacyKind) {
       const content = JSON.parse(decryptConfidentialContent(key, event.content, {
         legacyKind, dTag: getDTag(event), topic
       }));
-      if (content.deleted === true) {
+      if (content.deleted === true || getTagValue(event, 'deleted') === 'true') {
         tombstones.push({ dTag: getDTag(event), created_at: event.created_at });
-        continue;
+        if (!includeDeleted) continue;
       }
       rows.push({ ...content, nostr_event_id: event.id, nostr_created_at: event.created_at,
         dTag: getDTag(event), event });

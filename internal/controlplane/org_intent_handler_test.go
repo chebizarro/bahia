@@ -1372,6 +1372,43 @@ func TestHydrateTrustSetFromHistory_AuthorizesIntent(t *testing.T) {
 	}
 }
 
+func TestHydrateTrustSetFromOCKHistoryFoldsOpaqueAndLegacyMemberCoordinates(t *testing.T) {
+	ctx := t.Context()
+	orgID := uuid.New()
+	member := pubkeyFromHex(t, memberAKeyHex)
+	manager, _, _ := newTestOCKManager(t, []string{member})
+	encryptor := NewConfidentialEncryptor(manager, nil)
+	legacyD := "org:member:" + orgID.String() + ":" + member
+	opaqueD := uuid.New().String()
+	makeRecord := func(id, dTag, role string, deleted bool, at time.Time) repository.NostrEventRecord {
+		t.Helper()
+		plaintext, err := json.Marshal(map[string]any{"org_id": orgID.String(), "pubkey": member, "role": role, "deleted": deleted})
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := encryptor.EncryptConfidential(ctx, orgID.String(), plaintext, 32006, dTag, "org-member", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repository.NostrEventRecord{ID: id, Kind: 30900, Content: content, CreatedAt: at,
+			Tags: mustMarshalTags(t, [][]string{{"d", dTag}, {"t", "org-member"}, {"legacy_kind", "32006"}})}
+	}
+	at := time.Unix(1_700_000_000, 0)
+	legacy := makeRecord("ff", legacyD, "owner", false, at)
+	opaque := makeRecord("aa", opaqueD, "viewer", false, at)
+	trustSet := NewTrustSet(nil, zap.NewNop())
+	handler := NewRelayMemberEventHandler(encryptor, nil, trustSet, nil, zap.NewNop())
+	handler.HydrateTrustSetFromHistory(ctx, &mockMemberHistory{records: []repository.NostrEventRecord{opaque, legacy}})
+	if got := trustSet.RelayMembersFor(orgID.String())[member]; got != domain.RoleViewer {
+		t.Fatalf("same-time lowest-id opaque record lost to legacy record: %q", got)
+	}
+	removed := makeRecord("zz", opaqueD, "", true, at.Add(time.Second))
+	handler.HydrateTrustSetFromHistory(ctx, &mockMemberHistory{records: []repository.NostrEventRecord{removed, opaque, legacy}})
+	if _, present := trustSet.RelayMembersFor(orgID.String())[member]; present {
+		t.Fatal("newer opaque tombstone did not remove legacy membership")
+	}
+}
+
 func TestLegacyPathMemberPublishUpdatesTrustSet(t *testing.T) {
 	// Item B: member added via the legacy ContextVM path appears in TrustSet's
 	// relay source with Postgres absent, driven by the onMemberPublished callback.

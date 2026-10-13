@@ -78,6 +78,18 @@ describe('encrypted payments/orgs stores', () => {
     expect(accepted.pending).toBe(true);
   });
 
+  it('folds legacy and opaque member records by decrypted identity, including tombstones', async () => {
+    const record = (id, role, at, deleted = false) => ({ org_id: 'org-1', pubkey: 'alice', role,
+      deleted, nostr_event_id: id, nostr_created_at: at, event: { tags: [['deleted', String(deleted)]] } });
+    topicMock.rows.set('org-member', [record('legacy', 'owner', 1), record('opaque', 'viewer', 2)]);
+    await orgsStore.loadOrgDetail('org-1');
+    expect(orgsStore.orgMemberListState.members).toHaveLength(1);
+    expect(orgsStore.orgMemberListState.members[0].role).toBe('viewer');
+    topicMock.rows.get('org-member').push(record('removed', 'viewer', 3, true));
+    await orgsStore.loadOrgDetail('org-1');
+    expect(orgsStore.orgMemberListState.members).toEqual([]);
+  });
+
   it('mints an org id and submits a gift-wrapped create intent', async () => {
     const created = await orgsStore.createOrg({ name: 'demo', displayName: 'Demo Org' });
     expect(created.id).toMatch(/^[0-9a-f-]{36}$/);

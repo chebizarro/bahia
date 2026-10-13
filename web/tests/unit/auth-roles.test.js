@@ -113,7 +113,8 @@ function buildFixtureKeyEnvelope(orgID = TEST_ORG_ID, version = 1) {
   };
 }
 
-function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBKEY, role = 'admin', deleted = false, version = 1, createdAt = 1700000001, id = `member-${orgID}-${pubkey}-${createdAt}`, dTagPubkey = pubkey } = {}) {
+function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBKEY, role = 'admin', deleted = false, version = 1, createdAt = 1700000001, id = `member-${orgID}-${pubkey}-${createdAt}`, dTagPubkey = pubkey,
+  dTag = `org:member:${orgID}:${dTagPubkey}` } = {}) {
   const memberPlaintext = JSON.stringify({
     org_id: orgID,
     pubkey,
@@ -127,7 +128,7 @@ function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBK
     key_ref: 'ock:' + orgID,
     key_version: 'v' + version,
     legacy_kind: '32006',
-    d: 'org:member:' + orgID + ':' + dTagPubkey,
+    d: dTag,
     t: 'org-member'
   };
 
@@ -149,7 +150,7 @@ function buildFixtureMemberRecord({ orgID = TEST_ORG_ID, pubkey = TEST_USER_PUBK
     created_at: createdAt,
     kind: 30900,
     tags: [
-      ['d', 'org:member:' + orgID + ':' + dTagPubkey],
+      ['d', dTag],
       ['t', 'org-member'],
       ['legacy_kind', '32006'],
       ['deleted', String(deleted)]
@@ -238,6 +239,21 @@ describe('auth-roles', () => {
 
     expect(orgRoles[TEST_ORG_ID]).toBe('admin');
 
+    stopRoleDerivation();
+  });
+
+  it('reads opaque and retained legacy member coordinates by decrypted identity and event order', async () => {
+    const { startRoleDerivation, orgRoles, stopRoleDerivation } = await import('../../src/lib/stores/auth-roles.svelte.js');
+    const envelope = buildFixtureKeyEnvelope();
+    const opaque = '3ce9031a-a82c-5dc0-a383-ea6e89b72562';
+    const store = createMockStore([envelope,
+      buildFixtureMemberRecord({ role: 'owner', createdAt: 1700000001 }),
+      buildFixtureMemberRecord({ role: 'viewer', createdAt: 1700000002, dTag: opaque })]);
+    await startRoleDerivation({ store, userPubkey: TEST_USER_PUBKEY, servicePubkey: TEST_SERVICE_PUBKEY,
+      signer: { decryptNip44: vi.fn().mockResolvedValue(envelope.content) } });
+    expect(orgRoles[TEST_ORG_ID]).toBe('viewer');
+    store.emit(buildFixtureMemberRecord({ deleted: true, createdAt: 1700000003, dTag: opaque }));
+    expect(orgRoles[TEST_ORG_ID]).toBeUndefined();
     stopRoleDerivation();
   });
 

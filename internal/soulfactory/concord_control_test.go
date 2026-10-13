@@ -115,6 +115,21 @@ func TestConcordGrantLocatorMatchesTheFrozenDerivation(t *testing.T) {
 	}
 }
 
+func TestConcordPinsLocatorMatchesFrozenDerivation(t *testing.T) {
+	communityID := concordTestBytes32(t, 0xc0)
+	channelID := concordTestBytes32(t, 0x42)
+	info := append([]byte(concordLabelPins), 0x00)
+	info = append(info, channelID[:]...)
+	want, err := hkdf.Key(sha256.New, communityID[:], nil, string(info), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := concordPinsLocator(communityID, channelID)
+	if err != nil || hex.EncodeToString(got[:]) != hex.EncodeToString(want) {
+		t.Fatalf("pins locator = %x, want %x: %v", got, want, err)
+	}
+}
+
 // TestConcordControlFoldTakesTheChainedHead covers CORD-04 §1's fold: the head
 // is the highest version whose held chain is intact, a lower version never
 // downgrades it, and a compaction's dangling `prev` is a baseline rather than a
@@ -366,9 +381,9 @@ func (f *concordControlPlaneFixture) rewrap(t *testing.T, seal nostr.Event) *nos
 
 func (f *concordControlPlaneFixture) fold(t *testing.T, events ...*nostr.Event) *concordControlFold {
 	t.Helper()
-	fold, err := foldConcordControlPlane(events, f.signer.PubKey, f.read.ConversationKey)
+	fold, err := collectConcordControlPlane(events, f.signer.PubKey, f.read.ConversationKey)
 	if err != nil {
-		t.Fatalf("foldConcordControlPlane() error = %v", err)
+		t.Fatalf("collectConcordControlPlane() error = %v", err)
 	}
 	return fold
 }

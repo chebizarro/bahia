@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	gonostr "fiatjaf.com/nostr"
@@ -33,6 +34,58 @@ func (e *refoundingEncryptor) RotateKey(context.Context, string) error {
 func (e *refoundingEncryptor) RotateKeyExcluding(ctx context.Context, orgID, removed string) error {
 	e.excluded = removed
 	return e.RotateKey(ctx, orgID)
+}
+
+func TestOrgMemberCoordinateIsOpaqueStableAndKeyed(t *testing.T) {
+	org := uuid.New()
+	member := &domain.OrgMember{OrgID: org, Pubkey: strings.Repeat("a", 64), Role: domain.RoleViewer}
+	sink := &captureProjectionPublisher{}
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+	publisher := NewOrgCanonicalPublisher(projector, &refoundingEncryptor{version: 1}, zap.NewNop())
+	first, err := publisher.orgMemberDTag(t.Context(), org, member.Pubkey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed, err := uuid.Parse(first); err != nil || parsed.Version() != 5 {
+		t.Fatalf("member d-tag %q is not an opaque UUID: %v", first, err)
+	}
+	if strings.Contains(first, member.Pubkey) || strings.Contains(first, org.String()) {
+		t.Fatalf("member d-tag reveals metadata: %q", first)
+	}
+	if err := publisher.PublishMember(t.Context(), member, false); err != nil {
+		t.Fatal(err)
+	}
+	member.Role = domain.RoleAdmin
+	if err := publisher.PublishMember(t.Context(), member, false); err != nil {
+		t.Fatal(err)
+	}
+	member.Pubkey = strings.Repeat("b", 64)
+	if err := publisher.PublishMember(t.Context(), member, false); err != nil {
+		t.Fatal(err)
+	}
+	records := sink.snapshot()
+	if len(records) != 3 || tagValue(records[0].Tags, "d") != first || tagValue(records[1].Tags, "d") != first {
+		t.Fatalf("updates changed the member coordinate: %#v", records)
+	}
+	if tagValue(records[2].Tags, "d") == first {
+		t.Fatal("two members share one coordinate")
+	}
+	other := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, nil, zap.NewNop(), WithConfidentialStateHashKeys(testStateHashKeyring(0x11)))
+	otherPublisher := NewOrgCanonicalPublisher(other, &refoundingEncryptor{version: 1}, zap.NewNop())
+	changedKey, err := otherPublisher.orgMemberDTag(t.Context(), org, strings.Repeat("a", 64))
+	if err != nil || changedKey == first {
+		t.Fatalf("rotated coordinate key did not change d-tag: %q %v", changedKey, err)
+	}
+}
+
+func TestOrgMemberCoordinateNeedsSecretBeforeRotation(t *testing.T) {
+	projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), &captureProjectionPublisher{}, nil, zap.NewNop(), WithConfidentialStateHashKeys(nil))
+	encryptor := &refoundingEncryptor{version: 1}
+	publisher := NewOrgCanonicalPublisher(projector, encryptor, zap.NewNop())
+	err := publisher.PublishMember(t.Context(), &domain.OrgMember{OrgID: uuid.New(), Pubkey: strings.Repeat("a", 64)}, true)
+	if err == nil || encryptor.rotations != 0 {
+		t.Fatalf("missing key must fail before rotation: err=%v rotations=%d", err, encryptor.rotations)
+	}
 }
 
 func TestPublishMemberRotationFailurePreventsCanonicalRecord(t *testing.T) {

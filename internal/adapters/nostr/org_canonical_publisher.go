@@ -2,13 +2,17 @@ package nostr
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -113,6 +117,10 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 	if p.encryptor == nil {
 		return fmt.Errorf("confidential encryptor not configured; refusing member publish")
 	}
+	dTag, err := p.orgMemberDTag(ctx, member.OrgID, member.Pubkey)
+	if err != nil {
+		return err
+	}
 	orgID := member.OrgID.String()
 	downgrade := !deleted && len(prevRole) > 0 && prevRole[0] != "" && domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0])
 	strict := false
@@ -139,7 +147,6 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 			return err
 		}
 	}
-	dTag := orgMemberDTag(member.OrgID, member.Pubkey)
 	content := map[string]any{
 		"deleted": deleted,
 		"org_id":  member.OrgID.String(),
@@ -152,7 +159,10 @@ func (p *OrgCanonicalPublisher) PublishMember(ctx context.Context, member *domai
 		putRecordTime(content, "updated_at", member.UpdatedAt)
 	}
 	// No p tags — member pubkeys are confidential.
-	entityID := uuid.NewSHA1(member.OrgID, []byte(member.Pubkey))
+	entityID, err := uuid.Parse(dTag)
+	if err != nil {
+		return fmt.Errorf("invalid opaque member coordinate: %w", err)
+	}
 	legacyKind := KindOrgMemberRegistry
 	topic := ""
 	if fam, ok := cpStateFamilies[legacyKind]; ok {
@@ -225,8 +235,24 @@ func (p *OrgCanonicalPublisher) publishEncrypted(ctx context.Context, legacyKind
 	return publishContent, nil
 }
 
-// orgMemberDTag returns the d-tag coordinate for an org member record:
-// "org:member:<org-id>:<pubkey>", matching the design's membership event model.
-func orgMemberDTag(orgID uuid.UUID, pubkey string) string {
-	return "org:member:" + orgID.String() + ":" + pubkey
+// orgMemberDTag is stable for a member while the confidential-dedupe key is
+// stable, but cannot be tested against a guessed public key by a relay. The
+// domain separator prevents reuse of the state_hash tag's HMAC preimage.
+func (p *OrgCanonicalPublisher) orgMemberDTag(ctx context.Context, orgID uuid.UUID, pubkey string) (string, error) {
+	if p.projector == nil || p.projector.stateHashKeys == nil {
+		return "", fmt.Errorf("publish org member: no confidential-dedupe system key: %w", secretstore.ErrNotConfigured)
+	}
+	var coordinate string
+	err := p.projector.stateHashKeys.Use(ctx, secretstore.PurposeConfidentialDedupe, "", func(_ secretstore.SystemKeyRef, key []byte) error {
+		mac := hmac.New(sha256.New, key)
+		_, _ = mac.Write([]byte("bahia/org-member-coordinate/v1\x00"))
+		_, _ = mac.Write(orgID[:])
+		_, _ = mac.Write([]byte(strings.ToLower(pubkey)))
+		coordinate = uuid.NewSHA1(uuid.NameSpaceOID, mac.Sum(nil)).String()
+		return nil
+	})
+	if err != nil {
+		return "", fmt.Errorf("derive opaque org-member coordinate: %w", err)
+	}
+	return coordinate, nil
 }

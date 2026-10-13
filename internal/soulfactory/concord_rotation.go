@@ -72,9 +72,8 @@ type ConcordRotationReceipt struct {
 	RotatedAt         time.Time                 `json:"rotated_at"`
 }
 
-// concordFoldIsCompactable checks only the structural part of CORD-06 §3's
-// abort rule. It does not prove authority; Rotate refuses every Refounding
-// until that evidence can also be resolved.
+// concordFoldIsCompactable rejects structural forks and unresolved authority.
+// Rotate still refuses every Refounding until cross-epoch evidence is available.
 //
 // A suspended entity is exactly that failure. Its chain forked, so no head is
 // trustworthy — and a compaction that silently omitted it would prune the
@@ -86,6 +85,9 @@ func concordFoldIsCompactable(fold *concordControlFold) error {
 	}
 	if len(fold.suspended) > 0 {
 		return fmt.Errorf("%d Control Plane entities have forked chains; CORD-06 §3 aborts a Refounding it cannot reliably fold rather than compacting a partial one", len(fold.suspended))
+	}
+	if len(fold.unresolved) > 0 {
+		return fmt.Errorf("%d Control Plane entities have unresolved CORD-04 authority; refusing to compact incomplete evidence", len(fold.unresolved))
 	}
 	return nil
 }
@@ -170,11 +172,12 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 		return nil, err
 	}
 
-	// Stage 1 containment: source.resolve validated the owner's
-	// binding to community_id. Only that owner's channel-only rekey needs no
-	// roster evidence. The structural fold below proves neither a delegate's
-	// authority nor the eligibility of the heads a Refounding would copy.
-	// Refuse before even fetching that fold, and before planning mints keys.
+	// Stage 1 containment: source.resolve validated the owner's binding to
+	// community_id. Only that owner's channel-only rekey needs no roster
+	// evidence. Current-epoch authority resolution cannot establish that exact
+	// citations remain available to a fresh joiner after compaction, nor prove
+	// the outgoing rekey's delegate authority and recipients. Refuse before
+	// planning mints keys.
 	if rotation.Refound {
 		return nil, fmt.Errorf("concord Refounding for %s refused: CORD-04 authority unresolved for the complete Control Plane; owner-rooted Roles/Grants and exact cited Grant editions are not verified for all candidates, so CORD-06 compaction cannot be trusted even for the owner; see docs/soul-factory.md#cord-04-authority-containment", communityID)
 	}
@@ -183,7 +186,7 @@ func (m *concordMembership) Rotate(ctx context.Context, rotation ConcordRotation
 	}
 
 	// The owner channel-only path returns an absent citation without a fetch.
-	// The remaining refounding machinery is not enabled by a structural fold.
+	// The remaining refounding machinery is not enabled by a current-epoch fold.
 	citation, fold, err := m.resolveConcordRotationAuthority(ctx, current, bundle, staffPK, rotation.Refound)
 	if err != nil {
 		return nil, fmt.Errorf("concord rotation for %s: %w", communityID, err)
