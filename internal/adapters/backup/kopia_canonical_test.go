@@ -52,7 +52,7 @@ func TestCanonicalKopiaConfigIsPrivateEphemeralAndTagged(t *testing.T) {
 		require.Equal(t, os.FileMode(0700), parent.Mode().Perm())
 	}}
 	backend := NewKopiaBackend(withKopiaCommandRunner(runner))
-	result, err := backend.CreateCanonicalSnapshot(context.Background(), repo, recipe, runID, value)
+	result, err := backend.createCanonicalSnapshot(context.Background(), repo, recipe, runID, value)
 	require.NoError(t, err)
 	require.Equal(t, "snapshot-1", result.ID)
 	_, err = os.Stat(path)
@@ -68,7 +68,7 @@ func TestCanonicalKopiaDoesNotEchoCredentialOrCLIOutput(t *testing.T) {
 	recipe := kopiaRecipeFixture(repo.ID)
 	value := secretstore.NewValue([]byte(`{"config":{},"password":"sensitive-marker"}`), time.Now().Add(time.Minute))
 	backend := NewKopiaBackend(withKopiaCommandRunner(inspectCanonicalKopiaRunner{err: errors.New("sensitive-marker"), output: "sensitive-marker"}))
-	_, err := backend.CreateCanonicalSnapshot(context.Background(), repo, recipe, uuid.New(), value)
+	_, err := backend.createCanonicalSnapshot(context.Background(), repo, recipe, uuid.New(), value)
 	require.ErrorIs(t, err, service.ErrBackupBackendExecution)
 	require.NotContains(t, err.Error(), "sensitive-marker")
 	require.NotContains(t, err.Error(), "secret-stderr")
@@ -84,18 +84,18 @@ func TestCanonicalKopiaObservesExactCompleteTaggedSnapshot(t *testing.T) {
 		require.Equal(t, []string{"snapshot", "list", "--json", "--all", "--incomplete", "--tags", "bahia-run:" + runID.String(), "--tags", "bahia-step:snapshot-create"}, args[2:])
 	}}
 	backend := NewKopiaBackend(withKopiaCommandRunner(runner))
-	result, found, err := backend.ObserveCanonicalSnapshot(context.Background(), repo, runID, value)
+	result, found, err := backend.observeCanonicalSnapshot(context.Background(), repo, runID, value)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, "snapshot-1", result.ID)
 
 	backend = NewKopiaBackend(withKopiaCommandRunner(inspectCanonicalKopiaRunner{output: `[]`}))
-	_, found, err = backend.ObserveCanonicalSnapshot(context.Background(), repo, runID, value)
+	_, found, err = backend.observeCanonicalSnapshot(context.Background(), repo, runID, value)
 	require.NoError(t, err)
 	require.False(t, found)
 
 	backend = NewKopiaBackend(withKopiaCommandRunner(inspectCanonicalKopiaRunner{output: `[{"id":"snapshot-1","incomplete":"interrupted","tags":{"tag:bahia-run":"` + runID.String() + `","tag:bahia-step":"snapshot-create"}}]`}))
-	_, _, err = backend.ObserveCanonicalSnapshot(context.Background(), repo, runID, value)
+	_, _, err = backend.observeCanonicalSnapshot(context.Background(), repo, runID, value)
 	require.ErrorIs(t, err, service.ErrBackupBackendExecution)
 }
 
@@ -105,6 +105,18 @@ func TestCanonicalKopiaRejectsLegacyConfigPath(t *testing.T) {
 	repo.Metadata = map[string]any{"kopia_config_file": "/some/path"}
 	value := secretstore.NewValue([]byte(`{"config":{},"password":"secret-password"}`), time.Now().Add(time.Minute))
 	backend := NewKopiaBackend(withKopiaCommandRunner(inspectCanonicalKopiaRunner{}))
-	_, _, err := backend.ObserveCanonicalSnapshot(context.Background(), repo, uuid.New(), value)
+	_, _, err := backend.observeCanonicalSnapshot(context.Background(), repo, uuid.New(), value)
 	require.ErrorIs(t, err, service.ErrBackupBackendConfiguration)
+}
+
+func TestCanonicalKopiaRefusesMissingSignetPassword(t *testing.T) {
+	repo := kopiaRepositoryFixture()
+	repo.CredentialProfile = uuid.NewString()
+	repo.Metadata = nil
+	value := secretstore.NewValue([]byte(`{"config":{"storage":{}}}`), time.Now().Add(time.Minute))
+	called := false
+	backend := NewKopiaBackend(withKopiaCommandRunner(inspectCanonicalKopiaRunner{call: func([]string, []string) { called = true }}))
+	_, _, err := backend.observeCanonicalSnapshot(context.Background(), repo, uuid.New(), value)
+	require.ErrorIs(t, err, service.ErrBackupBackendConfiguration)
+	require.False(t, called, "a host keyring or ambient password must not be consulted")
 }

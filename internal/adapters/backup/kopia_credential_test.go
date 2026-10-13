@@ -36,9 +36,9 @@ func TestPinnedKopiaCredentialRefusesMovedVersionBeforeDelivery(t *testing.T) {
 	values := &backupCredentialValues{}
 	moved := pin
 	moved.Version++
-	value, err := ResolvePinnedKopiaCredential(t.Context(), snapshot, backupCredentialRecords{ref: moved}, values)
+	value, err := resolvePinnedKopiaCredential(t.Context(), snapshot, backupCredentialRecords{ref: moved}, values)
 	require.Nil(t, value)
-	require.ErrorIs(t, err, ErrBackupCredentialMoved)
+	require.ErrorIs(t, err, errBackupCredentialMoved)
 	require.Zero(t, values.calls)
 }
 
@@ -48,7 +48,7 @@ func TestPinnedKopiaCredentialReturnsHeldVersionAndCallerZeroizes(t *testing.T) 
 	snapshot := &domain.BackupExecutionSnapshot{Repository: domain.BackupRepository{CredentialProfile: id.String()}, CredentialRef: &pin}
 	held := secretstore.NewValue([]byte(`{"storage":{}}`), time.Now().Add(time.Minute))
 	values := &backupCredentialValues{secret: domain.SecretRef{CredentialRef: &pin}, value: held}
-	value, err := ResolvePinnedKopiaCredential(t.Context(), snapshot, backupCredentialRecords{ref: pin}, values)
+	value, err := resolvePinnedKopiaCredential(t.Context(), snapshot, backupCredentialRecords{ref: pin}, values)
 	require.NoError(t, err)
 	require.Same(t, held, value)
 	require.Equal(t, 1, values.calls)
@@ -64,8 +64,8 @@ func TestPinnedKopiaCredentialZeroizesMismatchedDelivery(t *testing.T) {
 	moved.Version++
 	held := secretstore.NewValue([]byte("secret"), time.Now().Add(time.Minute))
 	values := &backupCredentialValues{secret: domain.SecretRef{CredentialRef: &moved}, value: held}
-	value, err := ResolvePinnedKopiaCredential(t.Context(), snapshot, backupCredentialRecords{ref: pin}, values)
+	value, err := resolvePinnedKopiaCredential(t.Context(), snapshot, backupCredentialRecords{ref: pin}, values)
 	require.Nil(t, value)
-	require.ErrorIs(t, err, ErrBackupCredentialMoved)
+	require.ErrorIs(t, err, errBackupCredentialMoved)
 	require.Nil(t, held.Bytes())
 }

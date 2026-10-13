@@ -21,11 +21,11 @@ type CanonicalSnapshot struct {
 	ID string
 }
 
-// CreateCanonicalSnapshot performs the tagged external effect. The caller owns
+// createCanonicalSnapshot performs the tagged external effect. The caller owns
 // the resolved, version-pinned Signet value and must zeroize it after return.
 // The value is a JSON object containing config (Kopia repository config JSON)
 // and password (Kopia repository password), never a filesystem path.
-func (b *KopiaBackend) CreateCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, recipe *domain.BackupRecipe, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, error) {
+func (b *KopiaBackend) createCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, recipe *domain.BackupRecipe, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, error) {
 	if runID == uuid.Nil || recipe == nil || repo == nil || recipe.RepositoryID != repo.ID || credential == nil {
 		return CanonicalSnapshot{}, fmt.Errorf("%w: canonical Kopia snapshot inputs are incomplete", service.ErrBackupBackendConfiguration)
 	}
@@ -53,11 +53,11 @@ func (b *KopiaBackend) CreateCanonicalSnapshot(ctx context.Context, repo *domain
 	return result, err
 }
 
-// ObserveCanonicalSnapshot queries Kopia's own tagged manifests. A missing
+// observeCanonicalSnapshot queries Kopia's own tagged manifests. A missing
 // manifest after an effect-started receipt is NOT permission to repeat create:
 // the caller must require operator recovery because a failed or incomplete
 // upload may have caused effects not represented by a complete manifest.
-func (b *KopiaBackend) ObserveCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, bool, error) {
+func (b *KopiaBackend) observeCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, bool, error) {
 	if runID == uuid.Nil || repo == nil || credential == nil {
 		return CanonicalSnapshot{}, false, fmt.Errorf("%w: canonical Kopia observation inputs are incomplete", service.ErrBackupBackendConfiguration)
 	}
@@ -114,7 +114,7 @@ func (b *KopiaBackend) withCanonicalConfig(ctx context.Context, repo *domain.Bac
 		Config   json.RawMessage `json:"config"`
 		Password string          `json:"password"`
 	}
-	if err := json.Unmarshal(value, &held); err != nil || len(held.Config) == 0 || !json.Valid(held.Config) || held.Password == "" {
+	if err := json.Unmarshal(value, &held); err != nil || len(held.Config) == 0 || held.Config[0] != '{' || !json.Valid(held.Config) || held.Password == "" || strings.ContainsRune(held.Password, 0) {
 		return fmt.Errorf("%w: Signet-held Kopia credential requires config JSON and password", service.ErrBackupBackendConfiguration)
 	}
 	defer clear(held.Config)
