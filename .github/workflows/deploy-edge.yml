@@ -232,15 +232,36 @@ jobs:
             status=$?
             if [[ "$rollback_armed" == "1" ]]; then
               echo "Rollout health gate failed; restoring previous digest-pinned Compose state" >&2
-              cp "$rollback" "$COMPOSE_FILE"
-              docker compose -f "$COMPOSE_FILE" config --quiet
-              docker compose -f "$COMPOSE_FILE" up -d bahia web
-              curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null || true
-              python3 scripts/relay_policy_rollout_gate.py verify --url "$ready_url" --baseline "$baseline" || true
-              curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS \
-                -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null || true
-              curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
-                -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null || true
+              if ! cp "$rollback" "$COMPOSE_FILE"; then
+                echo "::error::Rollback restore failed: Compose backup copy" >&2
+                status=1
+              fi
+              if ! docker compose -f "$COMPOSE_FILE" config --quiet; then
+                echo "::error::Rollback restore failed: Compose config validation" >&2
+                status=1
+              fi
+              if ! docker compose -f "$COMPOSE_FILE" up -d bahia web; then
+                echo "::error::Rollback restore failed: Bahia/web Compose restart" >&2
+                status=1
+              fi
+              if ! curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null; then
+                echo "::error::Rollback verification failed: Bahia readiness ($ready_url)" >&2
+                status=1
+              fi
+              if ! python3 scripts/relay_policy_rollout_gate.py verify --url "$ready_url" --baseline "$baseline"; then
+                echo "::error::Rollback verification failed: relay-policy invariant" >&2
+                status=1
+              fi
+              if ! curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS \
+                -H 'Accept: application/nostr+json' "http://${EDGE_HEALTH_HOST}:3334/relay" >/dev/null; then
+                echo "::error::Rollback verification failed: relay HTTP endpoint" >&2
+                status=1
+              fi
+              if ! curl --retry 12 --retry-delay 5 --retry-all-errors --retry-connrefused \
+                -fsS "http://${EDGE_HEALTH_HOST}:8081/" >/dev/null; then
+                echo "::error::Rollback verification failed: web HTTP endpoint" >&2
+                status=1
+              fi
             fi
             exit "$status"
           }

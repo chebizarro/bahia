@@ -184,16 +184,14 @@ explicit `non_secret_env_keys` exemption refuses the candidate by key name.
 ### 2.1 `TrustSet`
 
 `internal/controlplane/trust_set.go` resolves `HasPermission(orgID, pubkey,
-permission)` through three sources, in priority order:
+permission)` through two sources, in priority order:
 
 1. **Relay membership** — org-member cp-state records the daemon itself
    publishes (hydrated into the trust set as they are processed). When any exist
    for an org they are used exclusively.
-2. **Postgres `org_members`** — read-only delegate to `auth.RBAC`, used only when
-   a database is configured and the org has no relay membership yet.
-3. **Config `bootstrap_owners`** — `nostr.bootstrap_owners: {"<org-uuid>":
-   "<hex-pubkey>"}` grants owner-level permission for an org that has no members
-   from either source above.
+2. **Config `bootstrap_owners`** — `nostr.bootstrap_owners: {"<org-uuid>":
+   "<hex-pubkey>"}` grants owner-level permission for an org that has no relay
+   members. PostgreSQL `org_members` rows never authorize intents.
 
 Roles are `viewer < deployer < admin < owner`; permissions are the
 `domain.Permission` constants (`services:write`, `deployments:approve`, ...).

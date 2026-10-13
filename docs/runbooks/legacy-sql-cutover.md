@@ -4,6 +4,8 @@ Normal Bahia startup never imports PostgreSQL rows into canonical relay/local st
 
 ## Operator re-assertion review
 
+Before rotating or re-asserting state, confirm canonical relay membership records exist for every intended org member. PostgreSQL-only `org_members` rows do not authorize signed `30900` intents. Operators who relied on those rows lose authorization until membership records are republished and hydrated from relays; do not use the SQL rows as an emergency authorization fallback. State re-assertion republishes memberships, so verify relay acceptance and the daemon trust set before continuing.
+
 `bahia-migrate export` reads the three SQL-only candidate families into a new, private review directory. It does not publish, sign, access a service key, import SQL rows into the daemon, or mark cutover complete. Run it with a dedicated PostgreSQL role that has `SELECT` but no table writes, schema `CREATE`, or elevated role privileges; the command enforces those checks and uses one `REPEATABLE READ READ ONLY` snapshot. The directory must not already exist and must be an absolute path.
 
 ```bash
