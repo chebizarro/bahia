@@ -91,7 +91,7 @@ func TestOpenBuildsTheTagIndexForExistingStores(t *testing.T) {
 
 	store, err := Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	require.Empty(t, slices.Collect(store.pagedQuery(nostr.Filter{Tags: nostr.TagMap{"a": {f.config}}}, 0)), "precondition: the eventstore alone matches nothing")
 	done, err := tagIndexMarker.Done(store.backend().DB)
 	require.NoError(t, err)

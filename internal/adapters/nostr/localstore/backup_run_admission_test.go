@@ -73,7 +73,7 @@ func TestBackupRunStatusPublicationReservesBeforeRelayAndSerializesAdmission(t *
 func TestBackupRunAdmissionScanSkipsMalformedRecordWithoutStarvingLaterACK(t *testing.T) {
 	outbox, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	service := nostr.Generate()
 	coordinate := "backup-run:" + uuid.NewString()
 	requestID := nostr.Generate().Public().Hex()
@@ -144,7 +144,7 @@ func TestBackupRunStatusClockBackfillsRetainedStatusOnUpgrade(t *testing.T) {
 	require.NoError(t, outbox.Close())
 	reopened, err := OpenOutbox(path)
 	require.NoError(t, err)
-	defer reopened.Close()
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	floor, err := reopened.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
 	require.NoError(t, err)
 	require.Equal(t, createdAt, floor)
@@ -209,7 +209,7 @@ func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 	require.NoError(t, outbox.Close())
 	outbox, err = OpenOutbox(path)
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	prior, err = outbox.GetBackupRunAdmission("intent-1", coordinate, requestID)
 	require.NoError(t, err)
 	require.Equal(t, event.ID.Hex(), prior.StateEventID, "restart must preserve exact request binding")
@@ -219,7 +219,7 @@ func TestBackupRunAdmissionCommitsEventAndIdentityAtomically(t *testing.T) {
 func TestBackupRunAdmissionRequiresQuorumAndRetainsACKAfterPrune(t *testing.T) {
 	outbox, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	key := nostr.Generate()
 	coordinate := "backup-run:" + uuid.NewString()
 	requestID := nostr.Generate().Public().Hex()
@@ -263,7 +263,7 @@ func TestBackupRunAdmissionRequiresQuorumAndRetainsACKAfterPrune(t *testing.T) {
 func TestBackupRunAdmissionRejectsWrongEnvelopeWithoutMutation(t *testing.T) {
 	outbox, err := OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	key := nostr.Generate()
 	event := nostr.Event{Kind: 30900, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"d", "backup-run:bad"}, {"t", "other"}, {"legacy_kind", "31996"}, {"deleted", "false"}}}
 	require.NoError(t, event.Sign(key))

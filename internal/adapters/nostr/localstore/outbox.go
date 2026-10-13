@@ -784,7 +784,7 @@ func isProofEligibleForRound(tx *bbolt.Tx, ev nostr.Event) bool {
 
 func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
 	ev := entry.Event
-	if !(isProofEligibleEvent(ev) || isBackupRunTerminalStatusEvent(ev)) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
+	if !isProofEligibleEvent(ev) && !isBackupRunTerminalStatusEvent(ev) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
 		return DeliveryProof{}, false
 	}
 	relayOK := make(map[string]bool, len(policy.WriteRelays))

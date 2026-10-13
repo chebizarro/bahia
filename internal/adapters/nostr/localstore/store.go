@@ -32,6 +32,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/boltcoord"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 )
 
 // Buckets Bahia keeps next to the eventstore's own in the same bbolt file.
@@ -155,10 +156,10 @@ func openBackend(path string) (*boltdb.BoltBackend, error) {
 // isCorruptStoreError reports whether bbolt refused the file because of its
 // contents rather than because another process holds it.
 func isCorruptStoreError(err error) bool {
-	return errors.Is(err, bbolt.ErrInvalid) ||
-		errors.Is(err, bbolt.ErrVersionMismatch) ||
-		errors.Is(err, bbolt.ErrChecksum) ||
-		errors.Is(err, bbolt.ErrInvalidMapping)
+	return errors.Is(err, bolterrors.ErrInvalid) ||
+		errors.Is(err, bolterrors.ErrVersionMismatch) ||
+		errors.Is(err, bolterrors.ErrChecksum) ||
+		errors.Is(err, bolterrors.ErrInvalidMapping)
 }
 
 // Close releases this handle. Closing a handle twice is a no-op.

@@ -217,7 +217,7 @@ func TestOpenRepairsStoresWrittenBeforeTheDeletionIndexOnce(t *testing.T) {
 	writeAsBeforeTheIndex(t, path, stale)
 	reopened, err := Open(path)
 	require.NoError(t, err)
-	defer reopened.Close()
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	require.True(t, reopened.hasLocked(stale.ID), "a marked store is not repaired again")
 	require.True(t, reopened.hasLocked(current.ID))
 }
