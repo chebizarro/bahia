@@ -1,4 +1,5 @@
 <script>
+  import { escapeHtml } from '$lib/escape-html.js';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
   import Select from '$lib/components/Select.svelte';
@@ -25,15 +26,6 @@
   let reconciliationOperations = $derived(operations.filter((operation) =>
     ['environment', 'observation', 'remediation', 'deployment'].includes(operation.domain)
   ));
-
-  function escapeHtml(text) {
-    return String(text ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
-  }
 
   function serviceName(serviceId) {
     const svc = services.find((candidate) => candidate.id === serviceId);

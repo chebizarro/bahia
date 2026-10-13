@@ -58,6 +58,10 @@ locally signed intents, and the daemon's HTTP API is not a data path. Code:
    gate.
 7. Events are applied per animation frame with dirty flags per collection.
 
+A signed-in session whose protected read REQ closes before EOSE sees the relay
+reason in an operator-facing alert. Public cached state still renders; protected
+state may be incomplete until the relay admits the read and reaches EOSE.
+
 There is no backend auth probe and no `backendAuthenticated` flag. Roles come
 from decrypted membership records (see [confidential state](confidential-state.md#what-readers-do));
 they gate mutation affordances, not rendering. An unauthenticated or

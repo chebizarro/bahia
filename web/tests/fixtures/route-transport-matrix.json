@@ -12,16 +12,6 @@
   ],
   "route_file_rest_import_allowlist": [
     {
-      "file": "web/src/routes/config-fabric/[coordinate]/+page.svelte",
-      "permitted_transport_classes": [
-        "rest_to_nostr_bridge"
-      ],
-      "allowed_imports": [
-        "$lib/api/write.js"
-      ],
-      "allowed_usage": "NIP-98-signed REST publish mutation only; Config Fabric reads derive from verified store events."
-    },
-    {
       "file": "web/src/routes/instance-health/+page.svelte",
       "permitted_transport_classes": [
         "rest_compatibility"
@@ -246,22 +236,23 @@
     {
       "id": "config-fabric-operator-console",
       "surface": "`/config-fabric/**` desired/effective configuration, audit, publish, and rollback",
-      "transport_class": "rest_to_nostr_bridge",
+      "transport_class": "nostr_native",
       "route_files": [
         "web/src/routes/config-fabric/+page.svelte",
         "web/src/routes/config-fabric/[coordinate]/+page.svelte"
       ],
       "control_files": [
-        "web/src/lib/api/client.js",
-        "internal/api/handlers/config_fabric.go",
+        "web/src/lib/config-fabric/store.js",
+        "web/src/lib/config-fabric/ConfigPublishForm.svelte",
+        "web/src/lib/config-fabric/publish.js",
         "internal/service/config_fabric.go"
       ],
       "evidence": [
-        "The browser consumes desired and config-status Nostr events through the Config Fabric drift API.",
-        "Publish and rollback requests are validated, signed by the configured operator Signet identity, persisted as desired events, and require relay acceptance.",
-        "The browser never receives or submits a raw signing key and rejects secret-looking policy content before publication."
+        "The browser derives desired and config-status records from verified relay events in the local store.",
+        "Publish and rollback sign canonical NIP-51/NIP-78 desired events with the active operator signer and require a relay OK.",
+        "The daemon mounts only a Config Fabric drift GET; the removed REST write route returns 404."
       ],
-      "rest_import_policy": "allowed_only_for_operator_signet_nostr_bridge"
+      "rest_import_policy": "forbidden_for_browser_command_ingress"
     },
     {
       "id": "workers-read-models-and-controls",
@@ -655,5 +646,6 @@
       ],
       "rest_import_policy": "allowed_for_explicit_non_signer_first_supervision_compatibility_surface"
     }
-  ]
+  ],
+  "lib_rest_import_allowlist": []
 }

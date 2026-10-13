@@ -11,7 +11,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   let activeTab = $state('status');
   let statuses = $state([]);
   let assessments = $state([]);
-  let requests = $state([]);
   let continuityEvents = $state([]);
   let error = $state(null);
 
@@ -24,7 +23,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
         if (disposed) return;
         statuses = snapshot.statuses;
         assessments = snapshot.assessments;
-        requests = snapshot.requests;
         continuityEvents = snapshot.events;
         error = snapshot.error;
       },
@@ -112,7 +110,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
   <nav class="tabs" aria-label="Continuity views">
     <button type="button" class:active={activeTab === 'status'} onclick={() => (activeTab = 'status')}>Status</button>
     <button type="button" class:active={activeTab === 'topology'} onclick={() => (activeTab = 'topology')}>Topology</button>
-    <button type="button" class:active={activeTab === 'requests'} onclick={() => (activeTab = 'requests')}>Requests ({requests.length})</button>
     <button type="button" class:active={activeTab === 'simulation'} onclick={() => (activeTab = 'simulation')}>Simulation</button>
   </nav>
 
@@ -120,14 +117,14 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
     <!-- Operator-signed kinds are trusted from the signed-in key, widened by the daemon's fleet-OCK encrypted operator allowlist when this session can decrypt it. -->
     <p class="operator-scope-note" data-testid="continuity-operator-scope-note">
       {#if authState.status === 'authenticated' && operatorAllowlistAvailable(OPERATOR_ALLOWLIST_SCOPE_CONTINUITY)}
-        Topology, requests and simulation show the definitions, requests and heartbeats signed by your key and by the
+        Topology and simulation show the definitions and heartbeats signed by your key and by the
         authorized fleet operators in the Bahia service's operator allowlist. Status includes every operator's changes, because the Bahia service signs it.
       {:else if authState.status === 'authenticated'}
-        Topology, requests and simulation use only the definitions, requests and heartbeats signed by your key.
+        Topology and simulation use only the definitions and heartbeats signed by your key.
         Documents published by other fleet operators are not shown here. Status includes every operator's changes, because the Bahia service signs it.
       {:else}
-        Sign in as a fleet operator to see topology, requests and simulation: without a signed-in key, no operator-signed
-        definitions, requests or heartbeats are shown. Status is signed by the Bahia service and is always shown.
+        Sign in as a fleet operator to see topology and simulation: without a signed-in key, no operator-signed
+        definitions or heartbeats are shown. Status is signed by the Bahia service and is always shown.
       {/if}
     </p>
   {/if}
@@ -206,32 +203,6 @@ import { shortenPubkey } from '$lib/nostr/nostr-hex.js';
     {/if}
   {:else if activeTab === 'topology'}
     <TopologyView {assessments} {statuses} />
-  {:else if activeTab === 'requests'}
-    {#if requests.length === 0}
-      <section class="empty-card">
-        <h2>No continuity requests observed</h2>
-        <p>Failover and recovery requests (kinds 38430 and 38431) will appear here as relay events arrive.</p>
-      </section>
-    {:else}
-      <section class="status-grid" aria-label="Continuity requests">
-        {#each requests as request (request.id)}
-          <article class="service-card">
-            <div class="card-topline">
-              <div>
-                <h2>{request.service_key || 'Unscoped service'}</h2>
-                <p>{request.request_type} request</p>
-              </div>
-              <span class="status-badge recovering">{request.request_type.toUpperCase()}</span>
-            </div>
-            {#if request.worker_pubkey}
-              <div class="profile-row"><span>Worker</span><code>{shortenPubkey(request.worker_pubkey, { lead: 10, tail: 6 }) || 'Not assigned'}</code></div>
-            {/if}
-            {#if request.reason}<div class="reason"><span>Reason</span><p>{request.reason}</p></div>{/if}
-            <footer><span>Requested {changedAtLabel(request.created_at)}</span></footer>
-          </article>
-        {/each}
-      </section>
-    {/if}
   {:else}
     <SimulationPanel baseline={assessments} {statuses} {continuityEvents} />
   {/if}

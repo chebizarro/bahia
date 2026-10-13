@@ -17,7 +17,6 @@ import {
   trustedContinuityAuthors,
   initContinuityStoreBinding,
   teardownContinuityStoreBinding,
-  continuityRequestsFromEvents,
   continuityStatusesFromEvents,
   deriveContinuityAssessments,
   parseContinuityStatusEvent,
@@ -43,12 +42,11 @@ function event(overrides: Record<string, any>) {
 describe('continuity Nostr read models', () => {
   it('scopes service projections to seed roots and operator-authored families to the authenticated operator', () => {
     const filters = continuityNostrFilters({ serviceAuthors: [SERVICE_AUTHOR], operatorAuthors: [WORKER_AUTHOR] });
-    expect(filters).toHaveLength(6);
+    expect(filters).toHaveLength(5);
     expect(filters).toEqual(expect.arrayContaining([
       expect.objectContaining({ kinds: [30351], authors: [SERVICE_AUTHOR] }),
       expect.objectContaining({ kinds: [30353], authors: [SERVICE_AUTHOR] }),
       expect.objectContaining({ kinds: [31400, 31401, 31402, 31403, 31404], authors: [WORKER_AUTHOR] }),
-      expect.objectContaining({ kinds: [38430, 38431], authors: [WORKER_AUTHOR] }),
       expect.objectContaining({ kinds: [30315], authors: [WORKER_AUTHOR] }),
       expect.objectContaining({ kinds: [30900], '#t': ['worker-state'], authors: [SERVICE_AUTHOR] })
     ]));
@@ -72,18 +70,6 @@ describe('continuity Nostr read models', () => {
     expect(updates.at(-1).events.map((item: any) => item.id)).toContain('live');
     unsubscribe();
     expect(bootMock.refresh).toBeNull();
-  });
-
-  it('represents failover and recovery request events', () => {
-    const requests = continuityRequestsFromEvents([
-      event({ id: 'failover-request', kind: 38430, tags: [['service', SERVICE], ['worker', 'standby-a']], content: { reason: 'primary unavailable' } }),
-      event({ id: 'recovery-request', kind: 38431, tags: [['service', SERVICE]], content: { worker_pubkey: 'primary-a' } })
-    ]);
-
-    expect(requests).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'failover-request', request_type: 'failover', service_key: SERVICE, worker_pubkey: 'standby-a' }),
-      expect.objectContaining({ id: 'recovery-request', request_type: 'recovery', service_key: SERVICE, worker_pubkey: 'primary-a' })
-    ]));
   });
 
   it('decodes kind 30351 continuity status read models from content and tags', () => {
@@ -274,7 +260,7 @@ describe('continuity app-lifetime store binding', () => {
     const added = requests.slice(beforeLogin);
     expect(added.length).toBeGreaterThan(0);
     expect(added.every((request) => request.filters.every((filter: any) => filter.authors[0] === OPERATOR))).toBe(true);
-    expect(added[0].filters.map((filter: any) => filter.kinds)).toEqual([[31400, 31401, 31402, 31403, 31404], [38430, 38431], [30315]]);
+    expect(added[0].filters.map((filter: any) => filter.kinds)).toEqual([[31400, 31401, 31402, 31403, 31404], [30315]]);
     expect(authorsOf().every((authors) => Array.isArray(authors) && authors.length === 1)).toBe(true);
     teardownContinuityStoreBinding();
   });
@@ -285,9 +271,9 @@ describe('continuity app-lifetime store binding', () => {
   it('trusts the allowlisted continuity operators plus the signed-in key once the allowlist is readable', async () => {
     const { operatorAllowlists } = await import('../../src/lib/stores/operator-allowlist.svelte.js');
     const OTHER_OPERATOR = 'd'.repeat(64);
-    const mine = event({ id: 'req-mine', kind: 38430, pubkey: OPERATOR, tags: [['service', SERVICE]] });
-    const theirs = event({ id: 'req-theirs', kind: 38430, pubkey: OTHER_OPERATOR, tags: [['service', SERVICE]] });
-    const stranger = event({ id: 'req-stranger', kind: 38430, pubkey: WORKER_AUTHOR, tags: [['service', SERVICE]] });
+    const mine = event({ id: 'profile-mine', kind: 31400, pubkey: OPERATOR, tags: [['service', SERVICE]] });
+    const theirs = event({ id: 'profile-theirs', kind: 31400, pubkey: OTHER_OPERATOR, tags: [['service', SERVICE]] });
+    const stranger = event({ id: 'profile-stranger', kind: 31400, pubkey: WORKER_AUTHOR, tags: [['service', SERVICE]] });
     const { pool, requests } = start();
     bootMock.store.query = (filter: any) => [mine, theirs, stranger].filter((candidate) =>
       filter.kinds.includes(candidate.kind) && filter.authors.includes(candidate.pubkey));
@@ -295,20 +281,20 @@ describe('continuity app-lifetime store binding', () => {
     bootMock.auth.status = 'authenticated';
     bootMock.auth.pubkey = OPERATOR;
     expect(trustedContinuityAuthors().operatorAuthors).toEqual([OPERATOR]);
-    expect(continuityRequestsFromEvents(continuityEventsFromStore()).map((row) => row.id)).toEqual(['req-mine']);
+    expect(continuityEventsFromStore().map((row) => row.id)).toEqual(['profile-mine']);
 
     operatorAllowlists.continuity = [OTHER_OPERATOR];
     const before = requests.length;
     initContinuityStoreBinding();
     expect(trustedContinuityAuthors().operatorAuthors).toEqual([OPERATOR, OTHER_OPERATOR]);
-    expect(continuityRequestsFromEvents(continuityEventsFromStore()).map((row) => row.id).sort()).toEqual(['req-mine', 'req-theirs']);
+    expect(continuityEventsFromStore().map((row) => row.id).sort()).toEqual(['profile-mine', 'profile-theirs']);
     const added = requests.slice(before);
     expect(added.length).toBeGreaterThan(0);
     expect(added.every((request) => request.filters.every((filter: any) => filter.authors.join() === [OPERATOR, OTHER_OPERATOR].join()))).toBe(true);
 
     operatorAllowlists.continuity = null;
     expect(trustedContinuityAuthors().operatorAuthors).toEqual([OPERATOR]);
-    expect(continuityRequestsFromEvents(continuityEventsFromStore()).map((row) => row.id)).toEqual(['req-mine']);
+    expect(continuityEventsFromStore().map((row) => row.id)).toEqual(['profile-mine']);
     teardownContinuityStoreBinding();
   });
 

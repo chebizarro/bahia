@@ -1,4 +1,5 @@
 <script>
+  import { escapeHtml } from '$lib/escape-html.js';
   import { boot, onStoreRefresh } from '$lib/nostr/boot.js';
   import { blossomAdminSnapshot } from '$lib/stores/operational-views.js';
   import { onContentKeyChange } from '$lib/stores/auth-roles.svelte.js';
@@ -143,15 +144,6 @@
       return { variant: 'success', text: 'Signed' };
     }
     return { variant: 'default', text: 'None' };
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 
   function artifactNameLabel(artifact) {

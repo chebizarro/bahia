@@ -14,14 +14,7 @@ export function normalizeNotificationLogs(response) {
   throw new Error('Unexpected notification log response');
 }
 
-export function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+export { escapeHtml } from '$lib/escape-html.js';
 
 export function channelTypeLabel(type) {
   switch (type) {

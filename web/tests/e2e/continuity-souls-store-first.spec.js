@@ -5,7 +5,7 @@ const now = Math.floor(Date.now() / 1000);
 const untrusted = e2eTestPubkey('untrusted-continuity-souls');
 
 // Kinds owned by the continuity and SoulFactory read models.
-const READ_MODEL_KINDS = [30351, 30353, 31400, 31401, 31402, 31403, 31404, 38430, 38431,
+const READ_MODEL_KINDS = [30351, 30353, 31400, 31401, 31402, 31403, 31404,
   31950, 31951, 31952, 31953, 1950, 1951, 6950, 7950, 30317];
 
 const status = (service, pubkey = E2E_SERVICE_PUBKEY, createdAt = now) => ({
@@ -23,16 +23,17 @@ const fleetConfig = (pubkey = TEST_PUBKEY, model = '') => ({
   content: JSON.stringify({ schema: 'soulfactory-fleet-config/v1', template: {}, defaults: { model, bindings: [], required_plugins: [] } })
 });
 
-const failoverRequest = (service, pubkey) => ({
-  kind: 38430, pubkey, created_at: now,
-  tags: [['service', service], ['worker', 'standby-a']], content: JSON.stringify({ reason: 'primary unavailable' })
+const profile = (service, pubkey) => ({
+  kind: 31400, pubkey, created_at: now,
+  tags: [['d', `continuity-profile:${service}`], ['service', service], ['primary', 'primary-a'], ['profile', 'full']],
+  content: JSON.stringify({ service_key: service, primary_worker_pubkey: 'primary-a' })
 });
 
 async function setup(page) {
   await installE2EMocks(page, { nostrEvents: [
     status('svc-cached'), status('svc-forged', untrusted),
     // Operator-signed kinds are trusted from the signed-in key only.
-    failoverRequest('svc-mine', TEST_PUBKEY), failoverRequest('svc-other-operator', untrusted),
+    profile('svc-mine', TEST_PUBKEY), profile('svc-other-operator', untrusted),
     soul('cached-soul', 'Cached Fleet Soul'), soul('forged-soul', 'Forged Fleet Soul', untrusted),
     // A stranger re-signing a trusted Soul's coordinate must not replace it.
     soul('cached-soul', 'Hijacked Fleet Soul', untrusted, now + 60),
@@ -72,17 +73,17 @@ test('continuity renders the verified cache on reload with the relay unreachable
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-forged' })).toHaveCount(0);
   // Operator-signed kinds are only requested once the session is signed in, so
-  // wait until the request is cached too before cutting the relay off.
-  await expect.poll(() => cachedKinds(page)).toEqual(expect.arrayContaining([30351, 38430]));
+  // wait until the definition is cached too before cutting the relay off.
+  await expect.poll(() => cachedKinds(page)).toEqual(expect.arrayContaining([30351, 31400]));
 
   await reloadWithRelayUnreachable(page);
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-forged' })).toHaveCount(0);
   await expect(page.getByText('Loading continuity history')).toHaveCount(0);
 
-  // Operator-signed requests: mine is shown, another signer's is not, and the
+  // Operator-signed definitions: mine is shown, another signer's is not, and the
   // view says so instead of silently omitting other operators' documents.
-  await page.getByRole('button', { name: /^Requests/ }).click();
+  await page.getByRole('button', { name: 'Topology' }).click();
   await expect(page.getByRole('heading', { name: 'svc-mine' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'svc-other-operator' })).toHaveCount(0);
   await expect(page.getByTestId('continuity-operator-scope-note')).toContainText('other fleet operators are not shown');
