@@ -168,6 +168,7 @@ function emptySession(sessionId) {
     pendingApprovals: [],
     submittedEffects: 0,
     uncertainEffects: 0,
+    abandonedEffects: 0,
     closed: false,
     closedAt: '',
     authoritative: false,
@@ -280,7 +281,8 @@ function applySessionEvent(event) {
     currentRunId: parsed.currentRunId, executionRevision: parsed.executionRevision,
     phase: parsed.phase, scope: parsed.scope, proposal: parsed.proposal,
     pendingApprovals: parsed.pendingApprovals, submittedEffects: parsed.submittedEffects,
-    uncertainEffects: parsed.uncertainEffects, checkpointEventId: parsed.checkpointEventId,
+    uncertainEffects: parsed.uncertainEffects, abandonedEffects: parsed.abandonedEffects,
+    checkpointEventId: parsed.checkpointEventId,
     // A session never reopens, so closure is sticky: a session_closed refusal
     // (backends without the projection field) is not undone by a projection
     // that does not carry `closed`.

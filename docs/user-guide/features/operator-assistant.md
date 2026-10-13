@@ -30,6 +30,8 @@ On a route with a documentation topic the composer shows a dismissible reference
 
 **Stop** prevents new work; operations already submitted may still finish and nothing is rolled back. When a run ends with an uncertain submitted effect, the **Uncertain downstream work** panel asks for the downstream request event id (**Submit evidence**) or an explicit **Abandon with attestation** with a reason. Missing relay events or an interrupted request are never treated as proof that an action failed; durable truth is the canonical state and the assistant's `30315` status events (`#domain=assistant`, with a `phase` such as `tool_call_requested`, `approval_required`, or `loop_completed`).
 
+The session view marks a run with abandoned operations as **outcome unknown** and shows the count from its public projection. Abandonment closes accounting but does not prove success or failure; verify downstream state before retrying. Individual work identities and attestation details remain in the encrypted execution checkpoint, not in the browser-readable projection.
+
 ## Configuration
 
 ```yaml

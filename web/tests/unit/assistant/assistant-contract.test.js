@@ -65,6 +65,13 @@ describe('assistant session version parsing', () => {
       ...content, scope: { allowed_tools: null, arguments: { private: true } }
     }))).toBeNull();
   });
+
+  it('reads abandoned effects only from a v2 session projection', () => {
+    const base = { session_id: 'session-1', execution_version: 2, workflow: 'batch', current_run_id: 'run-1', phase: 'failed' };
+    expect(parseAssistantSessionEvent(projection('bahia.assistant-session.v2', { ...base, abandoned_effects: 2 })).abandonedEffects).toBe(2);
+    expect(parseAssistantSessionEvent(projection('bahia.assistant-session.v2', base)).abandonedEffects).toBe(0);
+    expect(parseAssistantSessionEvent(projection('bahia.assistant-session.v1', { abandoned_effects: 2 })).abandonedEffects).toBe(0);
+  });
 });
 
 describe('assistant v2 closed-session projection fields', () => {
