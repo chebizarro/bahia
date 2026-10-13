@@ -90,6 +90,8 @@ var cpStateTopicsByFamily = map[int]string{
 	KindRuntimeObservationState:                      kinds.CPStateTopicRuntimeObservation,
 	kinds.ManagedInstanceHealthRecord:                kinds.CPStateTopicManagedInstanceHealth,
 	kinds.RouteCanaryRecord:                          kinds.CPStateTopicRouteCanary,
+	int(kinds.CPStateFamilyHostnameReservation):      kinds.CPStateTopicHostnameReservation,
+	int(kinds.CPStateFamilyHostnameRecovery):         kinds.CPStateTopicHostnameRecovery,
 	kinds.SoulRuntimePolicyRecord:                    kinds.CPStateTopicSoulRuntimePolicy,
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): kinds.CPStateTopicSoulFactoryAdapterLedger,
 	int(kinds.CPStateFamilyOperatorAllowlist):        kinds.CPStateTopicOperatorAllowlist,

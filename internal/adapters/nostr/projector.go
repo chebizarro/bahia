@@ -592,8 +592,8 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindRuntimeObservationState:                 {"runtime", "observation", kinds.CPStateTopicRuntimeObservation},
 	kinds.ManagedInstanceHealthRecord:           {"runtime", "instance-health", kinds.CPStateTopicManagedInstanceHealth},
 	kinds.RouteCanaryRecord:                     {"route", "canary", kinds.CPStateTopicRouteCanary},
-	int(kinds.CPStateFamilyHostnameReservation): {"route", "hostname-reservation", kinds.CPStateTopicHostnameReservation},
-	int(kinds.CPStateFamilyHostnameRecovery):    {"route", "hostname-recovery", kinds.CPStateTopicHostnameRecovery},
+	int(kinds.CPStateFamilyHostnameReservation): {"hostname", "reservation", kinds.CPStateTopicHostnameReservation},
+	int(kinds.CPStateFamilyHostnameRecovery):    {"hostname", "recovery", kinds.CPStateTopicHostnameRecovery},
 	kinds.SoulRuntimePolicyRecord:               {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
 	// Governed provisioning adapter ledger; published by the
 	// soulfactory package through the publisher seam, not the projector.
