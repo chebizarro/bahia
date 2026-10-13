@@ -35,7 +35,8 @@ type VirtualizationServices struct {
 	Workers     repository.WorkerRepository
 	Principal   func(context.Context, uuid.UUID) (*auth.Principal, error)
 	Logger      *zap.Logger
-	policy      *virtualizationPolicy
+	//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
+	policy *virtualizationPolicy
 }
 type vmWork struct {
 	org, id uuid.UUID
@@ -48,26 +49,32 @@ type virtualizationRun struct {
 type virtualizationRuntime struct {
 	repo          repository.VirtualizationRepository
 	organizations readmodel.VirtualizationOrganizations
-	bus           events.Publisher
-	host          *domain.VirtualizationHost
-	provider      domain.PersistentVMProvider
-	vmService     *service.PersistentVMService
-	worker        *service.VMOperationWorker
-	vmReconciler  *reconcile.PersistentVMReconciler
-	planeService  *service.ExecutionPlaneService
-	planes        *reconcile.ExecutionPlaneReconciler
-	endpoints     []domain.ExecutionPlaneEndpoint
-	policy        *virtualizationPolicy
-	logger        *zap.Logger
-	ready         atomic.Bool
-	started       chan struct{}
-	mu            sync.Mutex
-	pending       map[vmWork]struct{}
-	capabilities  map[uuid.UUID][]domain.ExecutionPlaneCapability
-	wake          chan struct{}
-	runs          map[vmWork]virtualizationRun
+	//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
+	bus      events.Publisher
+	host     *domain.VirtualizationHost
+	provider domain.PersistentVMProvider
+	//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
+	vmService    *service.PersistentVMService
+	worker       *service.VMOperationWorker
+	vmReconciler *reconcile.PersistentVMReconciler
+	//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
+	planeService *service.ExecutionPlaneService
+	planes       *reconcile.ExecutionPlaneReconciler
+	endpoints    []domain.ExecutionPlaneEndpoint
+	//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
+	policy  *virtualizationPolicy
+	logger  *zap.Logger
+	ready   atomic.Bool
+	started chan struct{}
+	mu      sync.Mutex
+	pending map[vmWork]struct{}
+	//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
+	capabilities map[uuid.UUID][]domain.ExecutionPlaneCapability
+	wake         chan struct{}
+	runs         map[vmWork]virtualizationRun
 }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func newVirtualizationRuntime(deps VirtualizationDependencies, cfg VirtualizationServices) (*virtualizationRuntime, error) {
 	r := &virtualizationRuntime{repo: deps.Repository, organizations: deps.Organizations, bus: deps.Bus, host: cfg.Host, provider: cfg.Provider, endpoints: cfg.Endpoints, policy: cfg.policy, logger: cfg.Logger, pending: map[vmWork]struct{}{}, capabilities: map[uuid.UUID][]domain.ExecutionPlaneCapability{}, wake: make(chan struct{}, 1), started: make(chan struct{}), runs: map[vmWork]virtualizationRun{}}
 	if r.logger == nil {
@@ -111,6 +118,8 @@ func (r *virtualizationRuntime) enqueue(w vmWork) {
 	default:
 	}
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) changed(ctx context.Context, ref repository.VirtualizationResourceRef) {
 	typ := events.EventVirtualizationResourceChanged
 	if ref.Kind == domain.VMOperationResource {
@@ -119,11 +128,15 @@ func (r *virtualizationRuntime) changed(ctx context.Context, ref repository.Virt
 	// Request cancellation after commit cannot suppress publication of the wakeup.
 	r.bus.Publish(context.WithoutCancel(ctx), events.Event{Type: typ, Data: events.VirtualizationChange{OrgID: ref.OrgID.String(), ResourceID: ref.ID.String()}})
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) metric(ctx context.Context, name string, l telemetry.VirtualizationLabels, value float64) {
 	if err := telemetry.RecordVirtualization(ctx, name, l, value); err != nil {
 		r.report(err)
 	}
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) operation(ctx context.Context, op domain.VMOperation) {
 	if op.Phase == domain.VMOperationAccepted {
 		r.enqueue(vmWork{op.OrgID, op.ID, domain.VMOperationResource})
@@ -142,9 +155,13 @@ func (r *virtualizationRuntime) operation(ctx context.Context, op domain.VMOpera
 	}
 	r.enqueue(vmWork{op.OrgID, op.ResourceID, domain.PersistentVMResource})
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) observed(ctx context.Context, v domain.PersistentVMDeployment, _ domain.VMObservation) {
 	r.changed(ctx, repository.VirtualizationResourceRef{OrgID: v.OrgID, Kind: domain.PersistentVMResource, ID: v.ID})
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) sample(ctx context.Context, v domain.PersistentVMDeployment, o domain.VMObservation) {
 	// Every persisted sample wakes the aggregate collector, even without drift.
 	r.changed(ctx, repository.VirtualizationResourceRef{OrgID: v.OrgID, Kind: domain.PersistentVMResource, ID: v.ID})
@@ -156,6 +173,8 @@ func (r *virtualizationRuntime) sample(ctx context.Context, v domain.PersistentV
 		r.metric(ctx, "guest_agent_probes_total", telemetry.VirtualizationLabels{Provider: string(v.Provider), LifecycleClass: string(v.LifecycleClass), Result: result}, 1)
 	}
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) inventory(ctx context.Context, h domain.VirtualizationHost, entries []domain.VMInventoryEntry) {
 	// Inventory includes foreign/orphan resources, unlike the desired repository.
 	counts := map[domain.VMOwnershipClass]float64{domain.VMOwned: 0, domain.VMOrphan: 0, domain.VMForeign: 0}
@@ -171,6 +190,8 @@ func (r *virtualizationRuntime) inventory(ctx context.Context, h domain.Virtuali
 	}
 	r.changed(ctx, repository.VirtualizationResourceRef{OrgID: h.OrgID, Kind: domain.VirtualizationHostResource, ID: h.ID})
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (r *virtualizationRuntime) planeChanged(ctx context.Context, c reconcile.ExecutionPlaneChange) error {
 	l := telemetry.VirtualizationLabels{Provider: "loom", Operation: "probe", Reason: string(c.Diagnostic.Code)}
 	switch c.Kind {

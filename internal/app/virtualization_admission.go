@@ -13,11 +13,15 @@ import (
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 type vmAdmission struct{ runtime *virtualizationRuntime }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func vmIntentPrincipal(p controlplane.VirtualizationPrincipal) *auth.Principal {
 	return &auth.Principal{Subject: p.PubKey, PubKey: p.PubKey, Method: auth.MethodNIP98}
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func operationAdmission(op *domain.VMOperation, err error) (controlplane.VirtualizationAdmission, error) {
 	if err != nil {
 		return controlplane.VirtualizationAdmission{}, err
@@ -27,6 +31,8 @@ func operationAdmission(op *domain.VMOperation, err error) (controlplane.Virtual
 	}
 	return controlplane.VirtualizationAdmission{ResourceID: op.ResourceID, OperationID: op.ID, Generation: op.ResourceGeneration}, nil
 }
+
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (a vmAdmission) MutatePersistentVM(ctx context.Context, actor controlplane.VirtualizationPrincipal, method string, m controlplane.VirtualizationMutation) (controlplane.VirtualizationAdmission, error) {
 	r := a.runtime
 	if !r.ready.Load() {
@@ -96,8 +102,10 @@ func (a vmAdmission) MutatePersistentVM(ctx context.Context, actor controlplane.
 	}
 }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 type planeAdmission struct{ runtime *virtualizationRuntime }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (a planeAdmission) MutateExecutionPlane(ctx context.Context, actor controlplane.VirtualizationPrincipal, action string, m controlplane.VirtualizationMutation) (controlplane.VirtualizationAdmission, error) {
 	r := a.runtime
 	if !r.ready.Load() {
