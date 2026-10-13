@@ -1,4 +1,5 @@
 <script>
+  import { escapeHtml } from '$lib/escape-html.js';
   import IntentGate from '$lib/components/IntentGate.svelte';
   import { page } from '$app/stores';
   import { onMount, untrack } from 'svelte';
@@ -74,15 +75,6 @@
   function severityLabel(sev) {
     const s = String(sev || '').toLowerCase();
     return s.charAt(0).toUpperCase() + s.slice(1) || 'Unknown';
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
   }
 
   function packageLabel(finding) {

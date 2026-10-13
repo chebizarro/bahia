@@ -1,4 +1,5 @@
 <script>
+  import { escapeHtml } from '$lib/escape-html.js';
   import Card from '$lib/components/Card.svelte';
   import Table from '$lib/components/Table.svelte';
   import Modal from '$lib/components/Modal.svelte';
@@ -53,16 +54,6 @@
     if (type.startsWith('service.')) return 'success';
     if (type.startsWith('worker.')) return 'default';
     return 'default';
-  }
-
-  // Helper: escape HTML to prevent XSS (pure string replacement)
-  function escapeHtml(text) {
-    return String(text ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
   }
 
   function dashboardStateActions(row) {
