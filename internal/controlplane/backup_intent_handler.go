@@ -15,6 +15,7 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
@@ -115,9 +116,8 @@ type BackupIntentExecutors struct {
 // the handler reconciles the entity toward it regardless of whether prior
 // events for the coordinate have been seen.
 //
-// Backup intents are fleet-scoped: the handler implements FleetScopedHandler
-// so the intent processor authorizes via FleetOperatorGate rather than
-// per-org membership.
+// Backup intents are org-scoped: the processor requires backups:manage for
+// the signed org and handlers bind resources to service-signed canonical owners.
 //
 // Operations (intent op tag):
 //   - recipe-apply: create/update a backup recipe
@@ -142,6 +142,7 @@ type BackupIntentHandler struct {
 	runAdmission             BackupRunAdmissionWriter
 	runPending               BackupRunPendingWriter
 	runCredentialRecords     BackupRunCredentialRecords
+	ownerReader              BackupOwnershipReader
 	runAsyncIntakeEnabled    bool
 	executors                BackupIntentExecutors
 	status                   *IntentStatusPublisher
@@ -158,6 +159,7 @@ type BackupIntentHandlerConfig struct {
 	RunAdmission             BackupRunAdmissionWriter
 	RunPending               BackupRunPendingWriter
 	RunCredentialRecords     BackupRunCredentialRecords
+	OwnerReader              BackupOwnershipReader
 	RunAsyncIntakeEnabled    bool
 	Executors                BackupIntentExecutors
 	Status                   *IntentStatusPublisher
@@ -179,6 +181,7 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		runAdmission:             cfg.RunAdmission,
 		runPending:               cfg.RunPending,
 		runCredentialRecords:     cfg.RunCredentialRecords,
+		ownerReader:              cfg.OwnerReader,
 		runAsyncIntakeEnabled:    cfg.RunAsyncIntakeEnabled,
 		executors:                cfg.Executors,
 		status:                   cfg.Status,
@@ -194,6 +197,12 @@ func (h *BackupIntentHandler) HandleIntent(ctx context.Context, intent *Intent) 
 	}
 	if intent.Op != "run" && (h.registry == nil || h.sqlRepositoryUnavailable) {
 		return fmt.Errorf("%w: %s requires a SQL-backed registry", ErrBackupRepositoryUnavailable, intent.Op)
+	}
+	switch intent.Op {
+	case "recipe-apply", "policy-apply", "repository-register", "definition-apply", "delete":
+		if h.publisher == nil {
+			return fmt.Errorf("canonical backup publisher is unavailable")
+		}
 	}
 	switch intent.Op {
 	case "recipe-apply":
@@ -228,10 +237,41 @@ func (h *BackupIntentHandler) PermissionFor(_ string) domain.Permission {
 	return domain.PermManageBackups
 }
 
-// IsFleetScoped returns true because all backup operations are fleet-scoped.
-// The intent processor authorizes via FleetOperatorGate.
+// IsFleetScoped returns false: backup mutations require backups:manage in the
+// org bound to the canonical resource, not fleet-operator identity alone.
 func (h *BackupIntentHandler) IsFleetScoped() bool {
-	return true
+	return false
+}
+
+func (h *BackupIntentHandler) requireOwner(ctx context.Context, intent *Intent, family int, id uuid.UUID, orgID uuid.UUID) error {
+	if intent == nil || intent.OrgID == uuid.Nil || orgID == uuid.Nil || orgID != intent.OrgID || id == uuid.Nil {
+		return fmt.Errorf("backup owner must match the signed org tag and entity id; republish ownerless legacy state")
+	}
+	if h.ownerReader == nil {
+		return fmt.Errorf("canonical backup ownership reader is unavailable")
+	}
+	owner, found, err := h.ownerReader.OwnerOf(ctx, family, id)
+	if err != nil {
+		return err
+	}
+	if found && owner != orgID {
+		return fmt.Errorf("backup %s belongs to another org; ownership is immutable", id)
+	}
+	return nil
+}
+
+func (h *BackupIntentHandler) requireReferenceOwner(ctx context.Context, family int, id, orgID uuid.UUID) error {
+	if h.ownerReader == nil || id == uuid.Nil || orgID == uuid.Nil {
+		return fmt.Errorf("canonical backup ownership reader or reference is unavailable")
+	}
+	owner, found, err := h.ownerReader.OwnerOf(ctx, family, id)
+	if err != nil {
+		return err
+	}
+	if !found || owner != orgID {
+		return fmt.Errorf("backup reference %s has no canonical state owned by org %s; republish ownerless legacy state", id, orgID)
+	}
+	return nil
 }
 
 // --- Config entity handlers (operator-authored) ---
@@ -240,6 +280,17 @@ func (h *BackupIntentHandler) handleRecipeApply(ctx context.Context, intent *Int
 	recipe, err := backupRecipeFromIntentContent(intent)
 	if err != nil {
 		return fmt.Errorf("parse recipe from intent: %w", err)
+	}
+	if err := h.requireOwner(ctx, intent, kinds.BackupRecipeRegistry, recipe.ID, recipe.OrgID); err != nil {
+		return err
+	}
+	if err := h.requireReferenceOwner(ctx, kinds.BackupRepositoryRegistry, recipe.RepositoryID, recipe.OrgID); err != nil {
+		return err
+	}
+	if recipe.PolicyID != nil {
+		if err := h.requireReferenceOwner(ctx, kinds.BackupPolicyRegistry, *recipe.PolicyID, recipe.OrgID); err != nil {
+			return err
+		}
 	}
 
 	// Level-triggered: look up by ID for upsert.
@@ -266,18 +317,22 @@ func (h *BackupIntentHandler) handleRecipeApply(ctx context.Context, intent *Int
 	if err := domain.ValidateBackupRecipe(recipe); err != nil {
 		return fmt.Errorf("validate recipe: %w", err)
 	}
-	if err := h.registry.CreateOrUpdateRecipe(ctx, recipe); err != nil {
-		return fmt.Errorf("apply recipe: %w", err)
+	if err := h.publishRecipe(ctx, recipe, false); err != nil {
+		return err
 	}
-
-	// Publish canonical state.
-	return h.publishRecipe(ctx, recipe, false)
+	if err := h.registry.CreateOrUpdateRecipe(ctx, recipe); err != nil {
+		return fmt.Errorf("index canonical recipe: %w", err)
+	}
+	return nil
 }
 
 func (h *BackupIntentHandler) handlePolicyApply(ctx context.Context, intent *Intent) error {
 	policy, err := backupPolicyFromIntentContent(intent)
 	if err != nil {
 		return fmt.Errorf("parse policy from intent: %w", err)
+	}
+	if err := h.requireOwner(ctx, intent, kinds.BackupPolicyRegistry, policy.ID, policy.OrgID); err != nil {
+		return err
 	}
 
 	if policy.ID == uuid.Nil {
@@ -292,17 +347,22 @@ func (h *BackupIntentHandler) handlePolicyApply(ctx context.Context, intent *Int
 	if err := domain.ValidateBackupPolicy(policy); err != nil {
 		return fmt.Errorf("validate policy: %w", err)
 	}
-	if err := h.registry.CreateOrUpdatePolicy(ctx, policy); err != nil {
-		return fmt.Errorf("apply policy: %w", err)
+	if err := h.publishPolicy(ctx, policy, false); err != nil {
+		return err
 	}
-
-	return h.publishPolicy(ctx, policy, false)
+	if err := h.registry.CreateOrUpdatePolicy(ctx, policy); err != nil {
+		return fmt.Errorf("index canonical policy: %w", err)
+	}
+	return nil
 }
 
 func (h *BackupIntentHandler) handleRepositoryRegister(ctx context.Context, intent *Intent) error {
 	repo, err := backupRepositoryFromIntentContent(intent)
 	if err != nil {
 		return fmt.Errorf("parse repository from intent: %w", err)
+	}
+	if err := h.requireOwner(ctx, intent, kinds.BackupRepositoryRegistry, repo.ID, repo.OrgID); err != nil {
+		return err
 	}
 
 	if repo.ID == uuid.Nil {
@@ -317,11 +377,13 @@ func (h *BackupIntentHandler) handleRepositoryRegister(ctx context.Context, inte
 	if err := domain.ValidateBackupRepository(repo); err != nil {
 		return fmt.Errorf("validate repository: %w", err)
 	}
-	if err := h.registry.CreateOrUpdateRepository(ctx, repo); err != nil {
-		return fmt.Errorf("apply repository: %w", err)
+	if err := h.publishRepository(ctx, repo, false); err != nil {
+		return err
 	}
-
-	return h.publishRepository(ctx, repo, false)
+	if err := h.registry.CreateOrUpdateRepository(ctx, repo); err != nil {
+		return fmt.Errorf("index canonical repository: %w", err)
+	}
+	return nil
 }
 
 func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent *Intent) error {
@@ -332,6 +394,17 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 	def, err := backupDefinitionFromIntentContent(intent)
 	if err != nil {
 		return fmt.Errorf("parse definition from intent: %w", err)
+	}
+	if err := h.requireOwner(ctx, intent, kinds.BackupDefinitionRegistry, def.ID, def.OrgID); err != nil {
+		return err
+	}
+	for _, ref := range []struct {
+		family int
+		id     uuid.UUID
+	}{{kinds.BackupRepositoryRegistry, def.RepositoryID}, {kinds.BackupPolicyRegistry, def.PolicyID}, {kinds.BackupRecipeRegistry, def.RecipeID}} {
+		if err := h.requireReferenceOwner(ctx, ref.family, ref.id, def.OrgID); err != nil {
+			return err
+		}
 	}
 
 	if def.ID == uuid.Nil {
@@ -368,11 +441,13 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 	if err := domain.ValidateBackupDefinition(def); err != nil {
 		return fmt.Errorf("validate definition: %w", err)
 	}
-	if err := h.definitions.UpsertBackupDefinition(ctx, def); err != nil {
-		return fmt.Errorf("apply definition: %w", err)
+	if err := h.publishDefinition(ctx, def, false); err != nil {
+		return err
 	}
-
-	return h.publishDefinition(ctx, def, false)
+	if err := h.definitions.UpsertBackupDefinition(ctx, def); err != nil {
+		return fmt.Errorf("index canonical definition: %w", err)
+	}
+	return nil
 }
 
 // --- Daemon-triggered handlers (run, restore, verification, retention) ---
@@ -490,10 +565,12 @@ func (h *BackupIntentHandler) verifyRunInputs(ctx context.Context, requested *do
 	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
 		return err
 	}
+	policy := requested.ExecutionSnapshot.Policy
 	if requested.Backend != domain.BackupBackendKopia || requested.VerificationMode != domain.BackupVerificationNone ||
-		requested.ExecutionSnapshot.Policy != nil || len(requested.ExecutionSnapshot.Recipe.Include) != 0 ||
+		(policy != nil && (policy.RequireVerification || policy.VerificationMode != domain.BackupVerificationNone)) ||
+		len(requested.ExecutionSnapshot.Recipe.Include) != 0 ||
 		len(requested.ExecutionSnapshot.Recipe.Exclude) != 0 {
-		return fmt.Errorf("bahia-cd0wr: only a single unfiltered Kopia snapshot without verification or policy is enabled")
+		return fmt.Errorf("bahia-cd0wr: only a single unfiltered Kopia snapshot without verification effects is enabled")
 	}
 	if _, err := backupAdapter.CanonicalSnapshotEffectArgs(&requested.ExecutionSnapshot.Recipe, requested.ID); err != nil {
 		return fmt.Errorf("bahia-cd0wr: unsupported Kopia snapshot input: %w", err)
@@ -533,6 +610,18 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 	}
 	snapshot := requested.ExecutionSnapshot
 	recipe, repository := snapshot.Recipe, snapshot.Repository
+	if requested.OrgID == uuid.Nil || requested.OrgID != receipt.OrgID ||
+		requested.DefinitionID == uuid.Nil || requested.DefinitionID != receipt.DefinitionID ||
+		snapshot.Definition.OrgID != requested.OrgID || snapshot.Definition.ID != requested.DefinitionID ||
+		recipe.OrgID != requested.OrgID || repository.OrgID != requested.OrgID {
+		return fmt.Errorf("execution snapshot ownership conflicts with signed run inputs; republish ownerless legacy backup state")
+	}
+	if snapshot.DefinitionEventID == "" || snapshot.Definition.RepositoryID != requested.RepositoryID ||
+		snapshot.Definition.RecipeID != requested.RecipeID ||
+		(requested.PolicyID == nil && snapshot.Definition.PolicyID != uuid.Nil) ||
+		(requested.PolicyID != nil && snapshot.Definition.PolicyID != *requested.PolicyID) {
+		return fmt.Errorf("execution snapshot definition conflicts with signed run inputs")
+	}
 	if err := domain.ValidateBackupRecipe(&recipe); err != nil {
 		return fmt.Errorf("execution snapshot recipe is invalid: %w", err)
 	}
@@ -541,6 +630,9 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 	}
 	if snapshot.Policy != nil {
 		policy := *snapshot.Policy
+		if policy.OrgID != requested.OrgID {
+			return fmt.Errorf("execution snapshot policy belongs to a different org")
+		}
 		if err := domain.ValidateBackupPolicy(&policy); err != nil {
 			return fmt.Errorf("execution snapshot policy is invalid: %w", err)
 		}
@@ -621,6 +713,16 @@ func (h *BackupIntentHandler) handleVerification(ctx context.Context, intent *In
 	if err != nil {
 		return fmt.Errorf("parse verification from intent: %w", err)
 	}
+	if h.runReceipts == nil {
+		return fmt.Errorf("backup verification requires canonical run ownership receipt")
+	}
+	run, err := h.runReceipts.GetBackupRunReceipt(ctx, record.BackupRunID)
+	if err != nil {
+		return err
+	}
+	if run == nil || run.OrgID == uuid.Nil || run.OrgID != intent.OrgID {
+		return fmt.Errorf("backup verification run has no canonical state owned by the signed org")
+	}
 	if record.ID == uuid.Nil {
 		record.ID = domain.NewEntityID()
 	}
@@ -668,6 +770,9 @@ func (h *BackupIntentHandler) handleRepositoryProbe(ctx context.Context, intent 
 	if repo == nil {
 		return fmt.Errorf("no repository_id or repository name specified")
 	}
+	if err := h.requireReferenceOwner(ctx, kinds.BackupRepositoryRegistry, repo.ID, intent.OrgID); err != nil {
+		return err
+	}
 
 	if h.executors.ProbeExecutor != nil {
 		go func() {
@@ -683,6 +788,22 @@ func (h *BackupIntentHandler) handleDelete(ctx context.Context, intent *Intent) 
 	entityType, entityID, err := backupParseDeleteCoordinate(intent)
 	if err != nil {
 		return fmt.Errorf("parse delete coordinate: %w", err)
+	}
+	family := 0
+	switch entityType {
+	case "recipe":
+		family = kinds.BackupRecipeRegistry
+	case "policy":
+		family = kinds.BackupPolicyRegistry
+	case "repository":
+		family = kinds.BackupRepositoryRegistry
+	case "definition":
+		family = kinds.BackupDefinitionRegistry
+	default:
+		return fmt.Errorf("unknown backup entity type for delete: %q", entityType)
+	}
+	if err := h.requireReferenceOwner(ctx, family, entityID, intent.OrgID); err != nil {
+		return err
 	}
 
 	switch entityType {

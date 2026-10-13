@@ -1523,6 +1523,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if backupReceiptErr != nil {
 		logger.Warn("backup run canonical receipt reader unavailable", zap.Error(backupReceiptErr))
 	}
+	backupOwnerReader, backupOwnerErr := controlplane.NewLocalBackupOwnershipReader(localEventStore, servicePubkey)
+	if backupOwnerErr != nil {
+		logger.Warn("backup canonical ownership reader unavailable", zap.Error(backupOwnerErr))
+	}
 	if cfg.BackupRun.AsyncIntakeEnabled {
 		if !enabledDomains["backup"] || !cfg.Nostr.PublishEnabled || backupHistory == nil || backupRunReceipts == nil ||
 			secretValues == nil || secretText == nil || secretResolver == nil || runtimeApplyLock == nil ||
@@ -1550,6 +1554,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				RunAdmission:             backupCanonical,
 				RunPending:               backupCanonical,
 				RunCredentialRecords:     secretText,
+				OwnerReader:              backupOwnerReader,
 				RunAsyncIntakeEnabled:    cfg.BackupRun.AsyncIntakeEnabled,
 				Status:                   intentStatus,
 				Logger:                   logger,

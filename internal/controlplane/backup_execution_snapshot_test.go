@@ -26,20 +26,24 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	defer func() { _ = events.Close(); _ = outbox.Close() }()
 	key := nostr.Generate()
 	now := time.Now().UTC().Truncate(time.Second)
-	repo := domain.BackupRepository{ID: uuid.New(), Name: "repo", Backend: domain.BackupBackendKopia, RepositoryURI: "file:/data", CreatedAt: now, UpdatedAt: now}
-	policy := domain.BackupPolicy{ID: uuid.New(), Name: "policy", RequireVerification: false, VerificationMode: domain.BackupVerificationNone, CreatedAt: now, UpdatedAt: now}
-	recipe := domain.BackupRecipe{ID: uuid.New(), Name: "recipe", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: repo.ID, PolicyID: &policy.ID, TargetRef: "/data", VerificationMode: domain.BackupVerificationNone, CreatedAt: now, UpdatedAt: now}
+	orgID := testOrgID()
+	repo := domain.BackupRepository{ID: uuid.New(), OrgID: orgID, Name: "repo", Backend: domain.BackupBackendKopia, RepositoryURI: "file:/data", CreatedAt: now, UpdatedAt: now}
+	policy := domain.BackupPolicy{ID: uuid.New(), OrgID: orgID, Name: "policy", RequireVerification: false, VerificationMode: domain.BackupVerificationNone, CreatedAt: now, UpdatedAt: now}
+	recipe := domain.BackupRecipe{ID: uuid.New(), OrgID: orgID, Name: "recipe", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: repo.ID, PolicyID: &policy.ID, TargetRef: "/data", VerificationMode: domain.BackupVerificationNone, CreatedAt: now, UpdatedAt: now}
+	definition := domain.BackupDefinition{ID: uuid.New(), OrgID: orgID, Name: "definition", RepositoryID: repo.ID, PolicyID: policy.ID, RecipeID: recipe.ID, RecipeVersion: recipe.Version, CreatedBy: key.Public().Hex(), CreatedAt: now, UpdatedAt: now}
+	definitionTags, definitionContent := nostradapter.BackupDefinitionRegistryRecord(&definition, false)
+	definitionEvent := configSnapshotEvent(t, key, kinds.BackupDefinitionRegistry, kinds.CPStateTopicBackupDefinition, nostradapter.BackupDefinitionDTag(definition.ID), definitionTags, definitionContent)
 	recipeTags, recipeContent := nostradapter.BackupRecipeRegistryRecord(&recipe, false)
 	recipeEvent := configSnapshotEvent(t, key, kinds.BackupRecipeRegistry, kinds.CPStateTopicBackupRecipe, nostradapter.BackupRecipeDTag(recipe.ID), recipeTags, recipeContent)
 	repoTags, repoContent := nostradapter.BackupRepositoryRegistryRecord(&repo, false)
 	repoEvent := configSnapshotEvent(t, key, kinds.BackupRepositoryRegistry, kinds.CPStateTopicBackupRepository, nostradapter.BackupRepositoryDTag(repo.ID), repoTags, repoContent)
 	policyTags, policyContent := nostradapter.BackupPolicyRegistryRecord(&policy, false)
 	policyEvent := configSnapshotEvent(t, key, kinds.BackupPolicyRegistry, kinds.CPStateTopicBackupPolicy, nostradapter.BackupPolicyDTag(policy.ID), policyTags, policyContent)
-	snapshot := &domain.BackupExecutionSnapshot{RecipeEventID: recipeEvent.ID.Hex(), RepositoryEventID: repoEvent.ID.Hex(), PolicyEventID: policyEvent.ID.Hex(), Recipe: recipe, Repository: repo, Policy: &policy}
+	snapshot := &domain.BackupExecutionSnapshot{DefinitionEventID: definitionEvent.ID.Hex(), RecipeEventID: recipeEvent.ID.Hex(), RepositoryEventID: repoEvent.ID.Hex(), PolicyEventID: policyEvent.ID.Hex(), Recipe: recipe, Repository: repo, Policy: &policy, Definition: definition}
 	reader, err := NewLocalBackupRunReceipts(events, outbox, key.Public().Hex())
 	require.NoError(t, err)
 	proof := reader.(backupExecutionConfigProof)
-	for _, ev := range []nostr.Event{recipeEvent, repoEvent, policyEvent} {
+	for _, ev := range []nostr.Event{definitionEvent, recipeEvent, repoEvent, policyEvent} {
 		_, err = events.SaveEvent(ev)
 		require.NoError(t, err)
 	}
@@ -54,7 +58,7 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 		Relays: map[string]localstore.RelayDelivery{"wss://relay.example": {Accepted: true}}, State: localstore.OutboxPending})
 	require.NoError(t, err)
 	require.ErrorContains(t, proof.VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt", "one OK without the publisher's delivered/quorum marker is insufficient")
-	for _, ev := range []nostr.Event{recipeEvent, repoEvent, policyEvent} {
+	for _, ev := range []nostr.Event{definitionEvent, recipeEvent, repoEvent, policyEvent} {
 		_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
 		require.NoError(t, err)
 		_, err = outbox.CommitPublisherRound(ev.ID, localstore.OutboxRound{Target: "control-plane", Rounds: 1, Delivered: true,
@@ -80,6 +84,7 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 	var requested map[string]any
 	require.NoError(t, json.Unmarshal([]byte(request.Content), &requested))
 	requested["recipe_id"], requested["repository_id"], requested["policy_id"] = recipe.ID.String(), repo.ID.String(), policy.ID.String()
+	requested["org_id"], requested["definition_id"] = orgID.String(), definition.ID.String()
 	requested["backend"], requested["target_ref"], requested["verification_mode"] = recipe.Backend, recipe.TargetRef, recipe.VerificationMode
 	requested["execution_snapshot"] = snapshot
 	payload, err := json.Marshal(requested)
@@ -132,16 +137,26 @@ func TestBackupExecutionSnapshotRequiresSignedACKedRegistryVersions(t *testing.T
 func TestBackupExecutionSnapshotRejectsRequestReceiptDrift(t *testing.T) {
 	request := backupReceiptRequest(t, nostr.Generate())
 	run := backupReceiptRun(request, domain.RunStatusQueued)
-	recipe := domain.BackupRecipe{ID: run.RecipeID, Name: "recipe", Version: "1", RepositoryID: run.RepositoryID, PolicyID: run.PolicyID, Backend: run.Backend, TargetRef: run.TargetRef, VerificationMode: run.VerificationMode}
-	repo := domain.BackupRepository{ID: run.RepositoryID, Name: "repo", RepositoryURI: "file:/data", Backend: run.Backend}
-	snapshot := &domain.BackupExecutionSnapshot{RecipeEventID: nostr.Generate().Public().Hex(), RepositoryEventID: nostr.Generate().Public().Hex(), Recipe: recipe, Repository: repo}
+	recipe := domain.BackupRecipe{ID: run.RecipeID, OrgID: run.OrgID, Name: "recipe", Version: "1", RepositoryID: run.RepositoryID, PolicyID: run.PolicyID, Backend: run.Backend, TargetRef: run.TargetRef, VerificationMode: run.VerificationMode}
+	repo := domain.BackupRepository{ID: run.RepositoryID, OrgID: run.OrgID, Name: "repo", RepositoryURI: "file:/data", Backend: run.Backend}
+	definition := domain.BackupDefinition{ID: run.DefinitionID, OrgID: run.OrgID, RepositoryID: run.RepositoryID, RecipeID: run.RecipeID, PolicyID: *run.PolicyID}
+	snapshot := &domain.BackupExecutionSnapshot{DefinitionEventID: nostr.Generate().Public().Hex(), RecipeEventID: nostr.Generate().Public().Hex(), RepositoryEventID: nostr.Generate().Public().Hex(), Recipe: recipe, Repository: repo, Definition: definition}
 	run.ExecutionSnapshot = snapshot
 	if run.PolicyID != nil {
-		snapshot.Policy = &domain.BackupPolicy{ID: *run.PolicyID, Name: "policy", VerificationMode: domain.BackupVerificationNone}
+		snapshot.Policy = &domain.BackupPolicy{ID: *run.PolicyID, OrgID: run.OrgID, Name: "policy", VerificationMode: domain.BackupVerificationNone}
 		snapshot.PolicyEventID = nostr.Generate().Public().Hex()
 	}
 	requested := run
 	require.NoError(t, validateBackupExecutionSnapshot(&requested, &run))
+	policyless := run
+	policylessSnapshot := *snapshot
+	policylessSnapshot.Recipe = recipe
+	policylessSnapshot.Recipe.PolicyID = nil
+	policylessSnapshot.Policy = nil
+	policylessSnapshot.PolicyEventID = ""
+	policyless.PolicyID = nil
+	policyless.ExecutionSnapshot = &policylessSnapshot
+	require.ErrorContains(t, validateBackupExecutionSnapshot(&policyless, &policyless), "definition conflicts", "a policyless run cannot claim a policy-bound definition")
 	run.ExecutionSnapshot = &domain.BackupExecutionSnapshot{}
 	require.ErrorContains(t, validateBackupExecutionSnapshot(&requested, &run), "ACKed run receipt")
 	run.ExecutionSnapshot = snapshot
@@ -165,7 +180,8 @@ func TestBackupExecutionSnapshotRefusesQueuedPartialAndPrunedRejection(t *testin
 			require.NoError(t, err)
 			defer outbox.Close()
 			key := nostr.Generate()
-			recipe := domain.BackupRecipe{ID: uuid.New(), Name: "recipe", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/data", VerificationMode: domain.BackupVerificationNone}
+			orgID := testOrgID()
+			recipe := domain.BackupRecipe{ID: uuid.New(), OrgID: orgID, Name: "recipe", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/data", VerificationMode: domain.BackupVerificationNone}
 			tags, content := nostradapter.BackupRecipeRegistryRecord(&recipe, false)
 			ev := configSnapshotEvent(t, key, kinds.BackupRecipeRegistry, kinds.CPStateTopicBackupRecipe, nostradapter.BackupRecipeDTag(recipe.ID), tags, content)
 			_, err = events.SaveEvent(ev)
@@ -190,7 +206,7 @@ func TestBackupExecutionSnapshotRefusesQueuedPartialAndPrunedRejection(t *testin
 			require.Empty(t, proof)
 			reader, err := NewLocalBackupRunReceipts(events, outbox, key.Public().Hex())
 			require.NoError(t, err)
-			snapshot := &domain.BackupExecutionSnapshot{RecipeEventID: ev.ID.Hex(), Recipe: recipe}
+			snapshot := &domain.BackupExecutionSnapshot{DefinitionEventID: ev.ID.Hex(), RecipeEventID: ev.ID.Hex(), Definition: domain.BackupDefinition{ID: uuid.New(), OrgID: orgID}, Recipe: recipe, Repository: domain.BackupRepository{OrgID: orgID}}
 			require.ErrorContains(t, reader.(backupExecutionConfigProof).VerifyBackupExecutionConfig(t.Context(), snapshot), "no ACKed relay delivery receipt")
 		})
 	}

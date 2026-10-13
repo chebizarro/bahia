@@ -17,11 +17,12 @@
             "source": "web.backup.repositories.register"
           },
           "name": "archive",
+          "org_id": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
           "repository_uri": "kopia://archive"
         }
       },
       "event": {
-        "content": "{\"backend\":\"kopia\",\"id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"metadata\":{\"source\":\"web.backup.repositories.register\"},\"name\":\"archive\",\"repository_uri\":\"kopia://archive\"}",
+        "content": "{\"backend\":\"kopia\",\"id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"metadata\":{\"source\":\"web.backup.repositories.register\"},\"name\":\"archive\",\"org_id\":\"f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7\",\"repository_uri\":\"kopia://archive\"}",
         "created_at": 1720000000,
         "kind": 30900,
         "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -73,10 +74,12 @@
         "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "content": {
           "backend": "kopia",
+          "definition_id": "018f1fae-7b91-7bea-81d6-0669758de947",
           "id": "018f1fae-7b91-7bea-81d6-0669758de946",
           "metadata": {
             "source": "web.backup.run"
           },
+          "org_id": "f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7",
           "recipe_id": "018f1fae-7b91-7bea-81d6-0669758de944",
           "repository_id": "018f1fae-7b91-7bea-81d6-0669758de943",
           "target_ref": "fs:/srv/app",
@@ -84,7 +87,7 @@
         }
       },
       "event": {
-        "content": "{\"backend\":\"kopia\",\"id\":\"018f1fae-7b91-7bea-81d6-0669758de946\",\"metadata\":{\"source\":\"web.backup.run\"},\"recipe_id\":\"018f1fae-7b91-7bea-81d6-0669758de944\",\"repository_id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"target_ref\":\"fs:/srv/app\",\"verification_mode\":\"none\"}",
+        "content": "{\"backend\":\"kopia\",\"definition_id\":\"018f1fae-7b91-7bea-81d6-0669758de947\",\"id\":\"018f1fae-7b91-7bea-81d6-0669758de946\",\"metadata\":{\"source\":\"web.backup.run\"},\"org_id\":\"f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7\",\"recipe_id\":\"018f1fae-7b91-7bea-81d6-0669758de944\",\"repository_id\":\"018f1fae-7b91-7bea-81d6-0669758de943\",\"target_ref\":\"fs:/srv/app\",\"verification_mode\":\"none\"}",
         "created_at": 1720000000,
         "kind": 30900,
         "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

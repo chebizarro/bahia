@@ -12,6 +12,11 @@ A usable backup plan combines:
 - **Definition** — the service/environment resource set governed by the repository, policy, and recipe.
 
 Credentials stay in the secret store. Published records contain references and redacted operational metadata.
+Repository, policy, recipe, and definition intents include the owning
+organization UUID in both `org` tag and `content.org_id`. The organization is
+fixed at creation. A legacy record without a canonical owner is not made
+usable by editing its SQL index; an operator must republish owner-attested
+canonical state.
 
 The MCP registry exposes apply, list, and inspect tools for each resource under both a base name such as `apply_backup_policy` and a `bahia_` alias such as `bahia_apply_backup_policy`. See [MCP Tools](../mcp-tools.md) for the complete names.
 
@@ -23,24 +28,17 @@ Use the Backup UI or:
 - `request_backup_verification` / `bahia_request_backup_verification`
 - `request_backup_retention` / `bahia_request_backup_retention`
 
-**Backup run intake and execution are currently paused.** The
-`request_backup_run` MCP tool still requires an exact operator-signed event,
-but a new production request does not stage a queued run or return `pending` or
-`accepted`. A retained unexpired pending request is also reported as unavailable;
-an expired or definitively refused retained request has one signed rejection
-status queued to the operator relays. Replay reports that rejection as settled
-only after relay quorum accepts it; otherwise the same event remains available
-for outbox retry. An already-admitted, fully ACKed historical request can be recognized on exact-ID
-replay. Do not treat a PostgreSQL run row or local relay observation as an
-admission receipt.
-
-The implemented but disabled admission protocol is tested to stage a signed
-queued state only after exact configuration proofs, then report `pending`
-until both the run state and final signed accepted status reach their required
-relay quorums. It must not be enabled before signer-enforced single-writer
-custody, canonical credential recovery, and exactly-once execution are
-available. A queued state would still not start execution or prove repository
-credential recovery. Retention request intake remains unavailable.
+Backup run intake is disabled by default. When an operator enables it with
+signer-enforced single-writer custody, canonical credential recovery, local
+outbox, and relay quorum, the supported effect is one unfiltered Kopia
+snapshot without verification effects; a non-verifying policy may be pinned.
+A run request needs an exact
+operator-signed event that binds `org_id`, `definition_id`, the definition
+coordinate, and service-signed configuration event IDs. The daemon checks
+the org on every pinned configuration record, retains a run admission receipt,
+and reports `pending` until both run state and accepted status reach relay
+quorum. SQL rows and local relay observations are not admission receipts.
+Unsupported backup effects and retention request intake remain unavailable.
 Verification should prove that stored data can be read and checked, not only
 that an upload command exited successfully.
 

@@ -353,6 +353,15 @@ service pubkey:
 | Continuity | `continuity-heartbeat` (on `30315`) | per worker | public |
 | Audit correlation | `cp-audit` (on `4903`) | — | protected (kind) |
 
+Backup repository, policy, recipe, definition, and run records carry an `org`
+tag and matching `content.org_id`. A backup run also carries
+`definition=backup-definition:<uuid>` and matching `definition_id` and
+`definition_coordinate` content fields. Its signed intent binds that org and
+definition ID; its execution snapshot pins the exact service-signed
+definition, recipe, repository, and optional policy event IDs. An ownerless
+legacy record does not confer authorization: the operator republishes
+owner-attested canonical state, rather than filling an ownership column in SQL.
+
 "Public" means the sidecar serves the topic to unauthenticated readers;
 "protected" means a NIP-42-authenticated, admitted reader is required
 (`nostr.sidecar.read_auth_mode`, default `enforce`). Ciphertext families are

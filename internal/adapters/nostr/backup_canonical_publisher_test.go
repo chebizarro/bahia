@@ -13,6 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var backupPublisherTestOrgID = uuid.MustParse("11111111-1111-4111-8111-111111111111")
+
 // --- BackupCanonicalPublisher acceptance tests -------------------------------
 //
 // These tests verify the backup canonical publisher invariants:
@@ -35,6 +37,7 @@ func TestBackupCanonicalPublisher_OneEventPerMaterialChange(t *testing.T) {
 	recipeID := uuid.New()
 	recipe := &domain.BackupRecipe{
 		ID:           recipeID,
+		OrgID:        backupPublisherTestOrgID,
 		Name:         "daily-backup",
 		Version:      "v1.0",
 		Backend:      domain.BackupBackendKopia,
@@ -88,35 +91,35 @@ func TestBackupCanonicalPublisher_DTagAndLegacyKindForAllEntityTypes(t *testing.
 			name: "recipe",
 			publish: func() error {
 				id := uuid.New()
-				return pub.PublishRecipe(ctx, &domain.BackupRecipe{ID: id, Name: "r", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/"})
+				return pub.PublishRecipe(ctx, &domain.BackupRecipe{ID: id, OrgID: backupPublisherTestOrgID, Name: "r", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/"})
 			},
 			wantLegacy: "31995",
 		},
 		{
 			name: "policy",
 			publish: func() error {
-				return pub.PublishPolicy(ctx, &domain.BackupPolicy{ID: uuid.New(), Name: "p"})
+				return pub.PublishPolicy(ctx, &domain.BackupPolicy{ID: uuid.New(), OrgID: backupPublisherTestOrgID, Name: "p"})
 			},
 			wantLegacy: "31992",
 		},
 		{
 			name: "repository",
 			publish: func() error {
-				return pub.PublishRepository(ctx, &domain.BackupRepository{ID: uuid.New(), Name: "repo", Backend: domain.BackupBackendKopia})
+				return pub.PublishRepository(ctx, &domain.BackupRepository{ID: uuid.New(), OrgID: backupPublisherTestOrgID, Name: "repo", Backend: domain.BackupBackendKopia})
 			},
 			wantLegacy: "31993",
 		},
 		{
 			name: "definition",
 			publish: func() error {
-				return pub.PublishDefinition(ctx, &domain.BackupDefinition{ID: uuid.New(), Name: "def", RepositoryID: uuid.New(), PolicyID: uuid.New(), RecipeID: uuid.New()})
+				return pub.PublishDefinition(ctx, &domain.BackupDefinition{ID: uuid.New(), OrgID: backupPublisherTestOrgID, Name: "def", RepositoryID: uuid.New(), PolicyID: uuid.New(), RecipeID: uuid.New()})
 			},
 			wantLegacy: "31991",
 		},
 		{
 			name: "run",
 			publish: func() error {
-				return pub.PublishRun(ctx, &domain.BackupRun{ID: uuid.New(), RecipeID: uuid.New(), RepositoryID: uuid.New(), Backend: domain.BackupBackendKopia, Status: domain.RunStatusQueued})
+				return pub.PublishRun(ctx, &domain.BackupRun{ID: uuid.New(), OrgID: backupPublisherTestOrgID, DefinitionID: uuid.New(), RecipeID: uuid.New(), RepositoryID: uuid.New(), Backend: domain.BackupBackendKopia, Status: domain.RunStatusQueued})
 			},
 			wantLegacy: "31996",
 		},
@@ -183,6 +186,7 @@ func TestBackupCanonicalPublisher_ContentChangeAfterChar64IsPublished(t *testing
 	repoID := uuid.New()
 	recipe1 := &domain.BackupRecipe{
 		ID:           recipeID,
+		OrgID:        backupPublisherTestOrgID,
 		Name:         "daily-backup-recipe-with-a-very-long-name-to-push-past-64-chars",
 		Version:      "v1.0",
 		Backend:      domain.BackupBackendKopia,
@@ -191,6 +195,7 @@ func TestBackupCanonicalPublisher_ContentChangeAfterChar64IsPublished(t *testing
 	}
 	recipe2 := &domain.BackupRecipe{
 		ID:           recipeID,
+		OrgID:        backupPublisherTestOrgID,
 		Name:         "daily-backup-recipe-with-a-very-long-name-to-push-past-64-chars",
 		Version:      "v1.0",
 		Backend:      domain.BackupBackendKopia,
@@ -272,6 +277,8 @@ func TestBackupCanonicalPublisher_RunVerificationErrorIsLogged(t *testing.T) {
 
 	run := &domain.BackupRun{
 		ID:           uuid.New(),
+		OrgID:        backupPublisherTestOrgID,
+		DefinitionID: uuid.New(),
 		RecipeID:     uuid.New(),
 		RepositoryID: uuid.New(),
 		Backend:      domain.BackupBackendKopia,
@@ -344,6 +351,8 @@ func TestBackupCanonicalPublisher_RuntimeObservationRepublish(t *testing.T) {
 	// Publishing a run should trigger debounced runtime observation.
 	run := &domain.BackupRun{
 		ID:           uuid.New(),
+		OrgID:        backupPublisherTestOrgID,
+		DefinitionID: uuid.New(),
 		RecipeID:     uuid.New(),
 		RepositoryID: uuid.New(),
 		Backend:      domain.BackupBackendKopia,

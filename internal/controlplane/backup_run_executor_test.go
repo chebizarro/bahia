@@ -94,10 +94,9 @@ func newBackupExecutorFixture(t *testing.T) *backupExecutorFixture {
 	f := &backupExecutorFixture{outbox: outbox, service: nostr.Generate(), actor: nostr.Generate(), effect: &backupSnapshotFake{}}
 	f.state = backupStateSignerFake{f.service}
 	request := signedBackupRunFixture(t, f.actor, func(content map[string]any) {
-		delete(content, "policy_id")
 		s := content["execution_snapshot"].(domain.BackupExecutionSnapshot)
-		s.Policy, s.Recipe.PolicyID = nil, nil
-		s.PolicyEventID = ""
+		s.Policy.RequireVerification = false
+		s.Policy.VerificationMode = domain.BackupVerificationNone
 		s.Recipe.VerificationMode = domain.BackupVerificationNone
 		s.Recipe.TargetRef = "fs:/database"
 		content["target_ref"] = s.Recipe.TargetRef

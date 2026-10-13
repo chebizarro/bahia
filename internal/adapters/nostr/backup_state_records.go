@@ -22,6 +22,7 @@ func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (gono
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      recipe.ID.String(),
+		"org_id":  recipe.OrgID.String(),
 	}
 	if !deleted {
 		content["name"] = recipe.Name
@@ -39,6 +40,7 @@ func BackupRecipeRegistryRecord(recipe *domain.BackupRecipe, deleted bool) (gono
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
+		{"org", recipe.OrgID.String()},
 		{"recipe", "backup-recipe:" + recipe.ID.String()},
 		{"recipe_id", recipe.ID.String()},
 		{"repository_id", recipe.RepositoryID.String()},
@@ -61,6 +63,7 @@ func BackupPolicyRegistryRecord(policy *domain.BackupPolicy, deleted bool) (gono
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      policy.ID.String(),
+		"org_id":  policy.OrgID.String(),
 	}
 	if !deleted {
 		content["name"] = policy.Name
@@ -72,6 +75,7 @@ func BackupPolicyRegistryRecord(policy *domain.BackupPolicy, deleted bool) (gono
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
+		{"org", policy.OrgID.String()},
 		{"policy", "backup-policy:" + policy.ID.String()},
 		{"policy_id", policy.ID.String()},
 		{"name", policy.Name},
@@ -87,6 +91,7 @@ func BackupRepositoryRegistryRecord(repo *domain.BackupRepository, deleted bool)
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      repo.ID.String(),
+		"org_id":  repo.OrgID.String(),
 	}
 	if !deleted {
 		content["name"] = repo.Name
@@ -99,6 +104,7 @@ func BackupRepositoryRegistryRecord(repo *domain.BackupRepository, deleted bool)
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
+		{"org", repo.OrgID.String()},
 		{"repository", "backup-repository:" + repo.ID.String()},
 		{"repository_id", repo.ID.String()},
 		{"name", repo.Name},
@@ -113,6 +119,7 @@ func BackupDefinitionRegistryRecord(def *domain.BackupDefinition, deleted bool) 
 	content := map[string]any{
 		"deleted": deleted,
 		"id":      def.ID.String(),
+		"org_id":  def.OrgID.String(),
 	}
 	if !deleted {
 		content["name"] = def.Name
@@ -145,6 +152,7 @@ func BackupDefinitionRegistryRecord(def *domain.BackupDefinition, deleted bool) 
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
+		{"org", def.OrgID.String()},
 		{"definition", "backup-definition:" + def.ID.String()},
 		{"definition_id", def.ID.String()},
 		{"name", def.Name},
@@ -166,6 +174,9 @@ func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVeri
 	content := map[string]any{
 		"deleted":                     false,
 		"id":                          run.ID.String(),
+		"org_id":                      run.OrgID.String(),
+		"definition_id":               run.DefinitionID.String(),
+		"definition_coordinate":       "backup-definition:" + run.DefinitionID.String(),
 		"recipe_id":                   run.RecipeID.String(),
 		"execution_snapshot":          run.ExecutionSnapshot,
 		"repository_id":               run.RepositoryID.String(),
@@ -211,6 +222,8 @@ func BackupRunStateRecord(run *domain.BackupRun, verification *domain.BackupVeri
 	}
 	contentJSON, _ := json.Marshal(content)
 	tags := gonostr.Tags{
+		{"org", run.OrgID.String()},
+		{"definition", "backup-definition:" + run.DefinitionID.String()},
 		{"run", run.ID.String()},
 		{"recipe_id", run.RecipeID.String()},
 		{"repository_id", run.RepositoryID.String()},

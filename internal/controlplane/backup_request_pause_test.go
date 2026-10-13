@@ -149,7 +149,7 @@ func TestBackupIntentRequestIntakePausedBeforeSQL(t *testing.T) {
 				handler := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Publisher: publisher,
 					Executors: BackupIntentExecutors{RunExecutor: runExecutor, RestoreExecutor: restoreExecutor, RetentionExecutor: retentionExecutor}, Logger: zap.NewNop()})
 				statuses := &statusCollector{}
-				proc := NewIntentProcessor(NewTrustSet([]string{actor}, zap.NewNop()), openTestStore(t),
+				proc := NewIntentProcessor(NewTrustSet([]string{actor}, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): actor})), openTestStore(t),
 					NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 					IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 				proc.RegisterHandler("backup", handler)

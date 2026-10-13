@@ -89,12 +89,16 @@ func (s *localBackupRunReceipts) GetBackupRunReceipt(ctx context.Context, id uui
 			return nil, fmt.Errorf("backup run %s has an invalid signed state envelope", id)
 		}
 		var wire struct {
-			Deleted *bool `json:"deleted"`
+			Deleted              *bool  `json:"deleted"`
+			DefinitionCoordinate string `json:"definition_coordinate"`
 		}
 		var run domain.BackupRun
 		if json.Unmarshal([]byte(ev.Content), &wire) != nil || wire.Deleted == nil || *wire.Deleted ||
 			json.Unmarshal([]byte(ev.Content), &run) != nil ||
 			run.ID != id || run.RecipeID.String() != backupReceiptTag(ev.Tags, "recipe_id") ||
+			run.OrgID == uuid.Nil || run.OrgID.String() != backupReceiptTag(ev.Tags, "org") ||
+			run.DefinitionID == uuid.Nil || "backup-definition:"+run.DefinitionID.String() != backupReceiptTag(ev.Tags, "definition") ||
+			wire.DefinitionCoordinate != "backup-definition:"+run.DefinitionID.String() ||
 			run.RepositoryID.String() != backupReceiptTag(ev.Tags, "repository_id") ||
 			string(run.Status) != backupReceiptTag(ev.Tags, "status") ||
 			run.RequestedBy == "" || run.RequestEventID == "" || run.RequestDTag == "" || run.RequestKind == 0 ||
@@ -117,6 +121,12 @@ func (s *localBackupRunReceipts) VerifyBackupExecutionConfig(ctx context.Context
 	if snapshot == nil {
 		return fmt.Errorf("execution snapshot is missing")
 	}
+	orgID := snapshot.Definition.OrgID
+	if orgID == uuid.Nil || snapshot.Definition.ID == uuid.Nil ||
+		snapshot.Recipe.OrgID != orgID || snapshot.Repository.OrgID != orgID ||
+		(snapshot.Policy != nil && snapshot.Policy.OrgID != orgID) {
+		return fmt.Errorf("backup configuration has no common canonical org; republish ownerless legacy records")
+	}
 	for _, source := range []struct {
 		id     string
 		topic  string
@@ -124,22 +134,23 @@ func (s *localBackupRunReceipts) VerifyBackupExecutionConfig(ctx context.Context
 		dtag   string
 		want   any
 	}{
+		{snapshot.DefinitionEventID, kinds.CPStateTopicBackupDefinition, kinds.BackupDefinitionRegistry, "backup-definition:" + snapshot.Definition.ID.String(), snapshot.Definition},
 		{snapshot.RecipeEventID, kinds.CPStateTopicBackupRecipe, kinds.BackupRecipeRegistry, "backup-recipe:" + snapshot.Recipe.ID.String(), snapshot.Recipe},
 		{snapshot.RepositoryEventID, kinds.CPStateTopicBackupRepository, kinds.BackupRepositoryRegistry, "backup-repository:" + snapshot.Repository.ID.String(), snapshot.Repository},
 	} {
-		if err := s.verifyBackupConfigEvent(ctx, source.id, source.topic, source.legacy, source.dtag, source.want); err != nil {
+		if err := s.verifyBackupConfigEvent(ctx, source.id, source.topic, source.legacy, source.dtag, orgID, source.want); err != nil {
 			return err
 		}
 	}
 	if snapshot.Policy != nil {
-		if err := s.verifyBackupConfigEvent(ctx, snapshot.PolicyEventID, kinds.CPStateTopicBackupPolicy, kinds.BackupPolicyRegistry, "backup-policy:"+snapshot.Policy.ID.String(), snapshot.Policy); err != nil {
+		if err := s.verifyBackupConfigEvent(ctx, snapshot.PolicyEventID, kinds.CPStateTopicBackupPolicy, kinds.BackupPolicyRegistry, "backup-policy:"+snapshot.Policy.ID.String(), orgID, snapshot.Policy); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *localBackupRunReceipts) verifyBackupConfigEvent(ctx context.Context, idHex, topic string, legacy int, dtag string, want any) error {
+func (s *localBackupRunReceipts) verifyBackupConfigEvent(ctx context.Context, idHex, topic string, legacy int, dtag string, orgID uuid.UUID, want any) error {
 	id, err := nostr.IDFromHex(idHex)
 	if err != nil {
 		return fmt.Errorf("backup config %s has invalid event id: %w", dtag, err)
@@ -156,6 +167,7 @@ func (s *localBackupRunReceipts) verifyBackupConfigEvent(ctx context.Context, id
 	}
 	ev := proof.Event
 	if ev.ID != id || ev.PubKey != s.author || ev.Kind != nostr.Kind(kinds.CASControlState) ||
+		backupReceiptTag(ev.Tags, "org") != orgID.String() ||
 		backupReceiptTag(ev.Tags, "d") != dtag || backupReceiptTag(ev.Tags, "t") != topic ||
 		backupReceiptTag(ev.Tags, "domain") != "backup" || backupReceiptTag(ev.Tags, "schema") != kinds.CASControlStateSchema ||
 		backupReceiptTag(ev.Tags, "legacy_kind") != strconv.Itoa(legacy) || backupReceiptTag(ev.Tags, "deleted") != "false" {
