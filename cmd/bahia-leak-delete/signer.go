@@ -118,7 +118,10 @@ func (f signerFlags) openSigner(ctx context.Context, oldPubkey nostr.PubKey, adm
 	}
 	keyer, err := servicesigner.Open(ctx, cfg, servicesigner.Options{
 		Admission: admission,
-		OnAuthURL: func(authURL string) { fmt.Fprintf(stderr, "%s: %s\n", servicesigner.AuthURLMessage, authURL) },
+		OnAuthURL: func(authURL string) {
+			// The callback cannot report I/O failure; signer validation remains authoritative.
+			_, _ = fmt.Fprintf(stderr, "%s: %s\n", servicesigner.AuthURLMessage, authURL)
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open signer for the leaked identity %s: %w", oldPubkey.Hex(), err)
@@ -140,7 +143,8 @@ func readSecretFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	// The secret file is read-only; close cannot change validation.
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxSecretFileBytes+1))
 	if err != nil {
 		return "", err

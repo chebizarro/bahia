@@ -29,8 +29,9 @@ func leakedBy(oldPubkey nostr.PubKey) func(nostr.Event) bool {
 	return func(ev nostr.Event) bool { return ev.PubKey == oldPubkey && isLeakedKind(ev.Kind) }
 }
 
-func printLocalEvent(w io.Writer, id nostr.ID, kind nostr.Kind, createdAt nostr.Timestamp, extra string) {
-	fmt.Fprintf(w, "  %s kind=%d created_at=%s%s\n", id.Hex(), kind, createdAt.Time().UTC().Format(time.RFC3339), extra)
+func printLocalEvent(w io.Writer, id nostr.ID, kind nostr.Kind, createdAt nostr.Timestamp, extra string) error {
+	_, err := fmt.Fprintf(w, "  %s kind=%d created_at=%s%s\n", id.Hex(), kind, createdAt.Time().UTC().Format(time.RFC3339), extra)
+	return err
 }
 
 // purgeEventStore removes the leaked identity's status events, and the
@@ -63,12 +64,18 @@ func purgeEventStore(w io.Writer, path string, oldPubkey nostr.PubKey, execute b
 			markers = append(markers, ev)
 		}
 	}
-	fmt.Fprintf(w, "event store %s: %d leaked events, %d undelivered markers\n", path, len(events), len(markers))
+	if _, err := fmt.Fprintf(w, "event store %s: %d leaked events, %d undelivered markers\n", path, len(events), len(markers)); err != nil {
+		return err
+	}
 	for _, ev := range events {
-		printLocalEvent(w, ev.ID, ev.Kind, ev.CreatedAt, "")
+		if err := printLocalEvent(w, ev.ID, ev.Kind, ev.CreatedAt, ""); err != nil {
+			return err
+		}
 	}
 	for _, ev := range markers {
-		printLocalEvent(w, ev.ID, ev.Kind, ev.CreatedAt, " (undelivered marker)")
+		if err := printLocalEvent(w, ev.ID, ev.Kind, ev.CreatedAt, " (undelivered marker)"); err != nil {
+			return err
+		}
 	}
 	if !execute {
 		return nil
@@ -90,7 +97,9 @@ func purgeEventStore(w io.Writer, path string, oldPubkey nostr.PubKey, execute b
 	if err := compactBolt(path); err != nil {
 		return fmt.Errorf("event store: %w", err)
 	}
-	fmt.Fprintf(w, "event store %s: removed %d events and %d markers; compacted\n", path, len(events), len(markers))
+	if _, err := fmt.Fprintf(w, "event store %s: removed %d events and %d markers; compacted\n", path, len(events), len(markers)); err != nil {
+		return err
+	}
 	return warnSetAside(w, path)
 }
 
@@ -145,9 +154,13 @@ func purgeOutbox(w io.Writer, path string, oldPubkey nostr.PubKey, execute bool)
 			leaked = append(leaked, entry)
 		}
 	}
-	fmt.Fprintf(w, "outbox %s: %d leaked entries\n", path, len(leaked))
+	if _, err := fmt.Fprintf(w, "outbox %s: %d leaked entries\n", path, len(leaked)); err != nil {
+		return err
+	}
 	for _, entry := range leaked {
-		printLocalEvent(w, entry.Event.ID, entry.Event.Kind, entry.Event.CreatedAt, " state="+entry.State)
+		if err := printLocalEvent(w, entry.Event.ID, entry.Event.Kind, entry.Event.CreatedAt, " state="+entry.State); err != nil {
+			return err
+		}
 	}
 	if !execute {
 		return nil
@@ -163,7 +176,9 @@ func purgeOutbox(w io.Writer, path string, oldPubkey nostr.PubKey, execute bool)
 	if err := compactBolt(abs); err != nil {
 		return fmt.Errorf("outbox: %w", err)
 	}
-	fmt.Fprintf(w, "outbox %s: removed %d entries; compacted\n", path, len(removed))
+	if _, err := fmt.Fprintf(w, "outbox %s: removed %d entries; compacted\n", path, len(removed)); err != nil {
+		return err
+	}
 	return warnSetAside(w, path)
 }
 
@@ -222,8 +237,12 @@ func compactBolt(path string) error {
 	if err != nil {
 		return err
 	}
-	defer dir.Close()
-	return dir.Sync()
+	if err := dir.Sync(); err != nil {
+		// Preserve the fsync error; closing cannot make it successful.
+		_ = dir.Close()
+		return err
+	}
+	return dir.Close()
 }
 
 // warnSetAside lists files localstore moved aside as corrupt next to path:
@@ -234,7 +253,9 @@ func warnSetAside(w io.Writer, path string) error {
 		return err
 	}
 	for _, match := range matches {
-		fmt.Fprintf(w, "WARNING: %s was set aside as corrupt and may hold leaked events; delete it\n", match)
+		if _, err := fmt.Fprintf(w, "WARNING: %s was set aside as corrupt and may hold leaked events; delete it\n", match); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -295,7 +316,7 @@ func deletePGLeaked(ctx context.Context, q pgQuerier, oldPubkey nostr.PubKey) ([
 	return collectPGRows(rows)
 }
 
-func printPGRows(w io.Writer, rows []pgLeakedRow) {
+func printPGRows(w io.Writer, rows []pgLeakedRow) error {
 	var batches []string
 	for _, row := range rows {
 		extra := ""
@@ -305,11 +326,16 @@ func printPGRows(w io.Writer, rows []pgLeakedRow) {
 				batches = append(batches, row.ArchiveBatch)
 			}
 		}
-		fmt.Fprintf(w, "  %s kind=%d created_at=%s%s\n", row.ID, row.Kind, row.CreatedAt.UTC().Format(time.RFC3339), extra)
+		if _, err := fmt.Fprintf(w, "  %s kind=%d created_at=%s%s\n", row.ID, row.Kind, row.CreatedAt.UTC().Format(time.RFC3339), extra); err != nil {
+			return err
+		}
 	}
 	for _, batch := range batches {
-		fmt.Fprintf(w, "WARNING: archive batch %s exported copies of leaked events; its archive artifacts are not purged by this tool\n", batch)
+		if _, err := fmt.Fprintf(w, "WARNING: archive batch %s exported copies of leaked events; its archive artifacts are not purged by this tool\n", batch); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // purgePostgres removes the leaked identity's status events from the optional
@@ -333,14 +359,19 @@ func purgePostgres(ctx context.Context, w io.Writer, configPath string, oldPubke
 	if err != nil {
 		return fmt.Errorf("postgres: begin: %w", cfg.DB.RedactError(err))
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	// A committed or failed transaction has a primary result; rollback is best-effort.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if !execute {
 		rows, err := listPGLeaked(ctx, tx, oldPubkey)
 		if err != nil {
 			return fmt.Errorf("postgres: list nostr_events: %w", cfg.DB.RedactError(err))
 		}
-		fmt.Fprintf(w, "postgres nostr_events: %d leaked rows\n", len(rows))
-		printPGRows(w, rows)
+		if _, err := fmt.Fprintf(w, "postgres nostr_events: %d leaked rows\n", len(rows)); err != nil {
+			return err
+		}
+		if err := printPGRows(w, rows); err != nil {
+			return err
+		}
 		return nil
 	}
 	rows, err := deletePGLeaked(ctx, tx, oldPubkey)
@@ -350,7 +381,11 @@ func purgePostgres(ctx context.Context, w io.Writer, configPath string, oldPubke
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("postgres: commit: %w", cfg.DB.RedactError(err))
 	}
-	fmt.Fprintf(w, "postgres nostr_events: deleted %d leaked rows\n", len(rows))
-	printPGRows(w, rows)
+	if _, err := fmt.Fprintf(w, "postgres nostr_events: deleted %d leaked rows\n", len(rows)); err != nil {
+		return err
+	}
+	if err := printPGRows(w, rows); err != nil {
+		return err
+	}
 	return nil
 }

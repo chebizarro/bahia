@@ -82,7 +82,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		d.newBackoff = nostradapter.DefaultBackoff
 	}
 	if len(args) == 0 {
-		fmt.Fprint(stderr, usage)
+		// Failure or progress diagnostics are best-effort; they confer no authority.
+		_, _ = fmt.Fprint(stderr, usage)
 		return exitFailure
 	}
 	switch args[0] {
@@ -93,10 +94,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 	case "purge-local":
 		return runPurge(ctx, args[1:], stdout, stderr)
 	case "help", "-h", "--help":
-		fmt.Fprint(stdout, usage)
+		if _, err := fmt.Fprint(stdout, usage); err != nil {
+			return exitFailure
+		}
 		return exitOK
 	default:
-		fmt.Fprint(stderr, usage)
+		// Failure or progress diagnostics are best-effort; they confer no authority.
+		_, _ = fmt.Fprint(stderr, usage)
 		return exitFailure
 	}
 }
@@ -115,14 +119,18 @@ func (r *relayFlags) String() string     { return strings.Join(*r, ",") }
 func (r *relayFlags) Set(v string) error { *r = append(*r, v); return nil }
 
 func fail(stderr io.Writer, format string, args ...any) int {
-	fmt.Fprintf(stderr, "bahia-leak-delete: "+format+"\n", args...)
+	// Failure or progress diagnostics are best-effort; they confer no authority.
+	_, _ = fmt.Fprintf(stderr, "bahia-leak-delete: "+format+"\n", args...)
 	return exitFailure
 }
 
 func newFlagSet(name string, stderr io.Writer) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.Usage = func() { fmt.Fprint(stderr, usage) }
+	flags.Usage = func() {
+		// Flag usage has no error return; parsing still reports failure.
+		_, _ = fmt.Fprint(stderr, usage)
+	}
 	return flags
 }
 
@@ -143,7 +151,8 @@ func openVerifiedSigner(ctx context.Context, flags signerFlags, oldPubkey nostr.
 		cancel()
 		return nil, nil, err
 	}
-	fmt.Fprintf(stderr, "signer reports the leaked identity %s\n", oldPubkey.Hex())
+	// Failure or progress diagnostics are best-effort; they confer no authority.
+	_, _ = fmt.Fprintf(stderr, "signer reports the leaked identity %s\n", oldPubkey.Hex())
 	return keyer, func() {
 		closeSigner(keyer)
 		cancel()
@@ -165,7 +174,8 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		return exitFailure
 	}
 	if *pageLimit < 1 || *pageLimit > 5000 || *pageTimeout <= 0 || *concurrency < 1 || *concurrency > 32 || *reportPath == "" || len(relayArgs) == 0 {
-		fmt.Fprint(stderr, usage)
+		// Failure or progress diagnostics are best-effort; they confer no authority.
+		_, _ = fmt.Fprint(stderr, usage)
 		return exitFailure
 	}
 	oldPubkey, err := parsePubkey(*oldFlag)
@@ -181,7 +191,8 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 		defer closeKeyer()
 		authSigner = keyer
 	} else {
-		fmt.Fprintln(stderr, "no signer: relays that require NIP-42 AUTH to read will be reported incomplete")
+		// Failure or progress diagnostics are best-effort; they confer no authority.
+		_, _ = fmt.Fprintln(stderr, "no signer: relays that require NIP-42 AUTH to read will be reported incomplete")
 	}
 	relays, err := normalizeRelays(relayArgs)
 	if err != nil {
@@ -206,7 +217,9 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 	}
 	complete := true
 	for _, scan := range scans {
-		printScan(stdout, scan, r)
+		if err := printScan(stdout, scan, r); err != nil {
+			return exitFailure
+		}
 		complete = complete && scan.Status == scanComplete && !scan.Truncated
 	}
 	if !complete {
@@ -216,7 +229,7 @@ func runScan(ctx context.Context, args []string, stdout, stderr io.Writer, d dep
 }
 
 // printScan writes one relay's result: ids, kinds and created_at only.
-func printScan(w io.Writer, scan relayScan, r *report) {
+func printScan(w io.Writer, scan relayScan, r *report) error {
 	byKind := map[int]int{}
 	for _, ev := range scan.Events {
 		byKind[ev.Kind]++
@@ -234,7 +247,9 @@ func printScan(w io.Writer, scan relayScan, r *report) {
 	if scan.Reason != "" {
 		line += ": " + scan.Reason
 	}
-	fmt.Fprintln(w, line)
+	if _, err := fmt.Fprintln(w, line); err != nil {
+		return err
+	}
 	accepted := map[string]struct{}{}
 	for _, del := range r.Deletions {
 		if outcome := del.Relays[scan.Relay]; outcome != nil && outcome.done() {
@@ -250,11 +265,16 @@ func printScan(w io.Writer, scan relayScan, r *report) {
 			extra = " (deletion accepted by this relay, still served)"
 			stillServed++
 		}
-		fmt.Fprintf(w, "  %s kind=%d created_at=%s%s\n", ev.ID, ev.Kind, time.Unix(ev.CreatedAt, 0).UTC().Format(time.RFC3339), extra)
+		if _, err := fmt.Fprintf(w, "  %s kind=%d created_at=%s%s\n", ev.ID, ev.Kind, time.Unix(ev.CreatedAt, 0).UTC().Format(time.RFC3339), extra); err != nil {
+			return err
+		}
 	}
 	if stillServed > 0 {
-		fmt.Fprintf(w, "  %d events are still served although this relay accepted their deletion\n", stillServed)
+		if _, err := fmt.Fprintf(w, "  %d events are still served although this relay accepted their deletion\n", stillServed); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func runDelete(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) int {
@@ -272,7 +292,8 @@ func runDelete(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 		return exitFailure
 	}
 	if *reportPath == "" || *batchSize < 1 || *batchSize > maxBatchSize || *maxAttempts < 1 || *maxAttempts > 20 {
-		fmt.Fprint(stderr, usage)
+		// Failure or progress diagnostics are best-effort; they confer no authority.
+		_, _ = fmt.Fprint(stderr, usage)
 		return exitFailure
 	}
 	if *execute && !signer.configured() {
@@ -306,7 +327,8 @@ func runDelete(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 	}
 	for _, scan := range r.Scans {
 		if scan.Status != scanComplete || scan.Truncated {
-			fmt.Fprintf(stderr, "WARNING: the scan of %s is incomplete; events it missed are not in this plan (re-run scan)\n", scan.Relay)
+			// Failure or progress diagnostics are best-effort; they confer no authority.
+			_, _ = fmt.Fprintf(stderr, "WARNING: the scan of %s is incomplete; events it missed are not in this plan (re-run scan)\n", scan.Relay)
 		}
 	}
 	guard, err := r.guard(oldPubkey)
@@ -325,12 +347,18 @@ func runDelete(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 		}
 	}
 	if len(r.Deletions)+len(planned) == 0 {
-		fmt.Fprintln(stdout, "nothing to delete: the scans found no leaked events")
+		if _, err := fmt.Fprintln(stdout, "nothing to delete: the scans found no leaked events"); err != nil {
+			return exitFailure
+		}
 		return exitOK
 	}
-	printPlan(stdout, r.Deletions, planned, relays)
+	if err := printPlan(stdout, r.Deletions, planned, relays); err != nil {
+		return exitFailure
+	}
 	if !*execute {
-		fmt.Fprintln(stdout, "dry run: nothing was signed or published; add --execute and the signer flags to publish")
+		if _, err := fmt.Fprintln(stdout, "dry run: nothing was signed or published; add --execute and the signer flags to publish"); err != nil {
+			return exitFailure
+		}
 		return exitOK
 	}
 
@@ -366,7 +394,10 @@ func runDelete(ctx context.Context, args []string, stdout, stderr io.Writer, d d
 		maxAttempts: *maxAttempts, wait: d.wait, newBackoff: d.newBackoff, now: time.Now, out: stdout,
 	}
 	runErr := p.run(ctx, relays)
-	complete := summarize(stdout, r, relays)
+	complete, outputErr := summarize(stdout, r, relays)
+	if outputErr != nil {
+		return exitFailure
+	}
 	if runErr != nil && !errors.Is(runErr, context.Canceled) {
 		return fail(stderr, "%v", runErr)
 	}
@@ -387,7 +418,8 @@ func runPurge(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return exitFailure
 	}
 	if *eventStore == "" && *outbox == "" && *dbConfig == "" {
-		fmt.Fprint(stderr, usage)
+		// Failure or progress diagnostics are best-effort; they confer no authority.
+		_, _ = fmt.Fprint(stderr, usage)
 		return exitFailure
 	}
 	oldPubkey, err := parsePubkey(*oldFlag)
@@ -410,7 +442,9 @@ func runPurge(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		}
 	}
 	if !*execute {
-		fmt.Fprintln(stdout, "dry run: nothing was removed; add --execute to remove")
+		if _, err := fmt.Fprintln(stdout, "dry run: nothing was removed; add --execute to remove"); err != nil {
+			return exitFailure
+		}
 	}
 	return exitOK
 }
