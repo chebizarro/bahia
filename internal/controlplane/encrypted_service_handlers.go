@@ -15,6 +15,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
 	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
@@ -29,6 +30,8 @@ type EncryptedServiceHandlersConfig struct {
 	DeploymentUnits   repository.DeploymentUnitRepository
 	RBAC              *auth.RBAC
 	ReleasePromotions *ReleasePromotionAuthorizer
+	SecretRecords     secretstore.Records
+	SecretStore       secretstore.SecretStore
 	Logger            *zap.Logger
 }
 
@@ -40,6 +43,8 @@ type encryptedServiceHandlers struct {
 	deploymentUnits   repository.DeploymentUnitRepository
 	authorizer        encryptedTenantAuthorizer
 	releasePromotions *ReleasePromotionAuthorizer
+	secretRecords     secretstore.Records
+	secretStore       secretstore.SecretStore
 	logger            *zap.Logger
 }
 
@@ -52,6 +57,8 @@ func newEncryptedServiceHandlers(cfg EncryptedServiceHandlersConfig) *encryptedS
 		deploymentUnits:   cfg.DeploymentUnits,
 		authorizer:        encryptedTenantAuthorizer{services: cfg.Services, environments: cfg.Registry, rbac: cfg.RBAC},
 		releasePromotions: cfg.ReleasePromotions,
+		secretRecords:     cfg.SecretRecords,
+		secretStore:       cfg.SecretStore,
 		logger:            cfg.Logger,
 	}
 	if h.logger == nil {
@@ -107,6 +114,11 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 		desiredState.PublicRoute = plan
 		desiredState.ComputeDesiredHash()
 		routeApprovalRequired = protected
+	}
+	if h.secretRecords != nil {
+		if err := pinDecisionSecrets(ctx, desiredState, h.secretRecords, h.secretStore); err != nil {
+			return nil, err
+		}
 	}
 	currentDesiredState, err := h.latestDeployedDesiredState(ctx, params.ServiceID, params.EnvironmentID, desiredState.DeploymentUnitID)
 	if err != nil {
@@ -268,6 +280,11 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 		}
 		desiredState.PublicRoute = plan
 		desiredState.ComputeDesiredHash()
+	}
+	if h.secretRecords != nil {
+		if err := pinDecisionSecrets(ctx, desiredState, h.secretRecords, h.secretStore); err != nil {
+			return nil, err
+		}
 	}
 	if params.ExpectedDesiredStateHash != "" && !desiredStateHashesEqual(params.ExpectedDesiredStateHash, desiredState.DesiredHash) {
 		return nil, fmt.Errorf("desired state changed after review; refresh the preview before submitting")
@@ -447,6 +464,11 @@ func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request Cont
 	}
 	desiredState.PublicRoute = plan
 	desiredState.ComputeDesiredHash()
+	if h.secretRecords != nil {
+		if err := verifyDecisionSecrets(ctx, desiredState, h.secretRecords, h.secretStore); err != nil {
+			return nil, err
+		}
+	}
 
 	evaluation, err := h.policy.Evaluate(ctx, current.ArtifactID, params.EnvironmentID)
 	if err != nil {
@@ -682,6 +704,11 @@ func (h *encryptedServiceHandlers) rollback(ctx context.Context, request Context
 		return nil, fmt.Errorf("build rollback desired state: %w", err)
 	}
 	carryForwardRollbackPublicRoute(desiredState, superseded)
+	if h.secretRecords != nil {
+		if err := pinDecisionSecrets(ctx, desiredState, h.secretRecords, h.secretStore); err != nil {
+			return nil, err
+		}
+	}
 	evaluation, err := h.policy.Evaluate(ctx, params.TargetArtifactID, params.EnvironmentID)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate rollback policy: %w", err)
@@ -870,6 +897,11 @@ func (h *encryptedServiceHandlers) decide(ctx context.Context, request ContextVM
 		return nil, err
 	}
 	if decision == "approve" {
+		if h.secretRecords != nil && intent.DesiredState != nil {
+			if err := verifyDecisionSecrets(ctx, intent.DesiredState, h.secretRecords, h.secretStore); err != nil {
+				return nil, err
+			}
+		}
 		if h.policy == nil {
 			return nil, fmt.Errorf("deployment policy service is not configured")
 		}
