@@ -7,7 +7,6 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 )
 
@@ -37,32 +36,6 @@ func (h *ContinuityRuntime) handleFailoverPolicyDefinition(event *gonostr.Event)
 	}
 	_, err = h.definitions.StoreRecipe(*definition)
 	return err
-}
-
-func (r *Reactor) handleStandbyNodeDefinition(ctx context.Context, event *gonostr.Event) {
-	if !r.authorizeContinuityDefinition(event) {
-		return
-	}
-	definition, err := nostradapter.DecodeStandbyNodeDefinitionEvent(event)
-	if err != nil {
-		r.logger.Warn("invalid standby node definition event", "event_id", event.ID, "error", err)
-		return
-	}
-	r.eventBus.Publish(ctx, events.Event{
-		Type:     events.EventStandbyNodeDefinitionObserved,
-		EntityID: definition.ServiceKey,
-		Data: events.StandbyNodeDefinitionObserved{
-			Source:       continuitySource(event),
-			WorkerPubKey: definition.WorkerPubKey,
-			Host:         definition.Host,
-			Role:         definition.Role,
-			ServiceKey:   definition.ServiceKey,
-			Tier:         definition.Tier,
-			ArtifactRef:  definition.ArtifactRef,
-			Supports:     append([]string(nil), definition.Supports...),
-			Profiles:     append([]domain.ContinuityMode(nil), definition.Profiles...),
-		},
-	})
 }
 
 func (h *ContinuityRuntime) handleReplicationPolicyDefinition(event *gonostr.Event) error {

@@ -180,32 +180,23 @@ func TestRecoveryWorkflowSerializationUsesRecoveryRecipeKind(t *testing.T) {
 	require.Equal(t, domain.RecipeActionRestoreDNSRoutes, decoded.Steps[0].Action)
 }
 
-func TestStandbyNodeDefinitionSerializationUsesHostRoleSupportAndProfileTags(t *testing.T) {
-	definition := StandbyNodeDefinition{
-		WorkerPubKey: "standbypubkey",
-		Host:         "edge-02",
-		Role:         "standby",
-		ServiceKey:   "svc.api",
-		Tier:         domain.StandbyTierWarm,
-		ArtifactRef:  "registry.example/svc-api:sha256-deadbeef",
-		Supports:     []string{"postgres", "dns"},
-		Profiles:     []domain.ContinuityMode{domain.ContinuityModeDegraded, domain.ContinuityModeEmergency},
-	}
-
-	event, err := EncodeStandbyNodeDefinitionEvent(definition)
-	require.NoError(t, err)
-	require.Equal(t, canonicalKind(KindStandbyNodeDefinition), event.Kind)
-	require.Equal(t, "edge-02", continuityTagValue(event.Tags, "host"))
-	require.Equal(t, "standby", continuityTagValue(event.Tags, "role"))
-	require.Equal(t, "registry.example/svc-api:sha256-deadbeef", continuityTagValue(event.Tags, "artifact_ref"))
-	require.ElementsMatch(t, []string{"dns", "postgres"}, continuityTagValues(event.Tags, "supports"))
-	require.ElementsMatch(t, []string{"degraded", "emergency"}, continuityTagValues(event.Tags, "profile"))
-
+func TestStandbyNodeDefinitionDecodesHostRoleSupportAndProfileTags(t *testing.T) {
+	event := gonostr.Event{Kind: canonicalKind(KindStandbyNodeDefinition), Tags: gonostr.Tags{
+		{"d", "standby-node:standbypubkey:svc.api"},
+		{"worker", "standbypubkey"}, {"host", "edge-02"}, {"role", "standby"},
+		{"service", "svc.api"}, {"tier", "warm"},
+		{"artifact_ref", "registry.example/svc-api:sha256-deadbeef"},
+		{"supports", "postgres"}, {"supports", "dns"},
+		{"profile", "degraded"}, {"profile", "emergency"},
+	}}
 	decoded, err := DecodeStandbyNodeDefinitionEvent(&event)
 	require.NoError(t, err)
 	require.Equal(t, "standbypubkey", decoded.WorkerPubKey)
+	require.Equal(t, "edge-02", decoded.Host)
+	require.Equal(t, "standby", decoded.Role)
 	require.Equal(t, domain.StandbyTierWarm, decoded.Tier)
 	require.Equal(t, "registry.example/svc-api:sha256-deadbeef", decoded.ArtifactRef)
+	require.ElementsMatch(t, []string{"dns", "postgres"}, decoded.Supports)
 	require.ElementsMatch(t, []domain.ContinuityMode{domain.ContinuityModeDegraded, domain.ContinuityModeEmergency}, decoded.Profiles)
 }
 

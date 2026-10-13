@@ -7,14 +7,13 @@ import (
 )
 
 const (
-	EventContinuityProfileObserved     EventType = "continuity.profile.observed"
-	EventFailoverPolicyObserved        EventType = "continuity.failover_policy.observed"
-	EventStandbyNodeDefinitionObserved EventType = "continuity.standby_node.observed"
-	EventReplicationPolicyObserved     EventType = "continuity.replication_policy.observed"
-	EventRecoveryWorkflowObserved      EventType = "continuity.recovery_workflow.observed"
-	EventHeartbeatObserved             EventType = "heartbeat.observed"
-	EventFailoverRequested             EventType = "failover.requested"
-	EventRecoveryRequested             EventType = "recovery.requested"
+	EventContinuityProfileObserved EventType = "continuity.profile.observed"
+	EventFailoverPolicyObserved    EventType = "continuity.failover_policy.observed"
+	EventReplicationPolicyObserved EventType = "continuity.replication_policy.observed"
+	EventRecoveryWorkflowObserved  EventType = "continuity.recovery_workflow.observed"
+	EventHeartbeatObserved         EventType = "heartbeat.observed"
+	EventFailoverRequested         EventType = "failover.requested"
+	EventRecoveryRequested         EventType = "recovery.requested"
 )
 
 // NostrSource identifies the event that produced an internal continuity event.
@@ -35,19 +34,6 @@ type ContinuityProfileObserved struct {
 type ContinuityRecipeObserved struct {
 	Source NostrSource             `json:"source"`
 	Recipe domain.ContinuityRecipe `json:"recipe"`
-}
-
-// StandbyNodeDefinitionObserved carries a decoded standby node definition.
-type StandbyNodeDefinitionObserved struct {
-	Source       NostrSource             `json:"source"`
-	WorkerPubKey string                  `json:"worker_pubkey"`
-	Host         string                  `json:"host"`
-	Role         string                  `json:"role"`
-	ServiceKey   string                  `json:"service_key"`
-	Tier         domain.StandbyTier      `json:"tier,omitempty"`
-	ArtifactRef  string                  `json:"artifact_ref,omitempty"`
-	Supports     []string                `json:"supports,omitempty"`
-	Profiles     []domain.ContinuityMode `json:"profiles"`
 }
 
 // ReplicationPolicyObserved carries a decoded replication policy.
