@@ -393,25 +393,25 @@ acceptance only after that status also reaches relay quorum; the canonical
 queued run state would be independently observable on relays. None of this is
 the response to a new production request while intake is paused.
 
-LLM release-register, deploy, rollback, approve and reject intents are also
-refused while canonical publication or execution is unavailable. Before the
-daemon signs a paused outcome, the request must be a valid operator-signed
-`30900` event observed by the local
-relay-synced event store. Its actor, UUIDv7 idempotency key, route/environment/
+The bounded canonical LLM lifecycle accepts only valid fleet-operator-signed,
+locally observed `30900` `release-register`, `deploy`, `rollback`, `approve`,
+and `reject` intents. The actor, UUIDv7 idempotency key, route/environment/
 release selection or decision target, content, and coordinate must agree with
-the signed envelope. This proves request identity for refusal only; a local
-event is not a relay ACK or an accepted provisioning receipt. Release
-registration must first publish an encrypted canonical release record,
-durably observe the relay ACK, and bind that record to the signed request
-before reporting success; a SQL release row or a route-state update alone is
-not a release receipt. The SQL-based LLM coordinator is not started by the app
-and cannot be enabled until a canonical, immutable execution snapshot and
-restart-safe effect fence exist. The snapshot must bind canonical route,
-release, and environment revisions, the required secret versions, and a
-replay-safe effect checkpoint. MCP and assistant LLM release/lifecycle tools
-refuse before dispatch rather than manufacturing an unsigned event from an
-authenticated transport principal; operators submit the signed Nostr intent
-directly.
+the signed envelope. A local request alone is neither a relay ACK nor effect
+authority: exact service-signed accepted `30315` statuses must have historical
+target/quorum relay-OK receipts. Release registration publishes an encrypted
+canonical release event and verifies its own quorum receipt before reporting
+success; a SQL row or route update is not a release receipt. The SQL-based LLM
+coordinator is not started by the app. The external-API route effect uses the
+same local-store receipt and filesystem fence as auto-apply; its snapshot binds
+canonical route/release/environment revisions, request/decision events,
+versioned Signet credential references, and the gateway admin endpoint
+revision. Approval-gated requests have no effect until an operator decision;
+denials have signed terminal statuses. Runtime-managed model provisioning and
+unversioned gateway-admin auth remain paused with `bahia-4f10q.2.2`. MCP and
+assistant LLM release/lifecycle tools still refuse before dispatch rather than
+manufacturing unsigned intents from a transport principal; operators submit
+the signed Nostr intent directly.
 
 ### 3.5 Canonical state and who signs it
 
