@@ -86,10 +86,11 @@
     {#if session?.authoritative && session.executionVersion === 2}
       <!-- Current-run controls scroll on their own so a long plan card never slides under the composer. -->
       <section class="current-execution" aria-label="Current assistant run">
-      <div class="execution-summary" aria-label="Current assistant execution" data-run-id={session.currentRunId} data-workflow={session.workflow} data-phase={session.phase} data-revision={session.executionRevision} data-submitted-effects={session.submittedEffects} data-uncertain-effects={session.uncertainEffects}>
-        <span>{session.workflow} · {session.phase}</span>
+      <div class="execution-summary" aria-label="Current assistant execution" data-run-id={session.currentRunId} data-workflow={session.workflow} data-phase={session.phase} data-revision={session.executionRevision} data-submitted-effects={session.submittedEffects} data-uncertain-effects={session.uncertainEffects} data-abandoned-effects={session.abandonedEffects || 0}>
+        <span>{session.workflow} · {session.abandonedEffects > 0 && session.phase === 'completed' ? 'outcome unknown' : session.phase}</span>
         {#if session.submittedEffects > 0}<span>{session.submittedEffects} submitted operation(s)</span>{/if}
         {#if session.uncertainEffects > 0}<span>{session.uncertainEffects} uncertain operation(s)</span>{/if}
+        {#if session.abandonedEffects > 0}<span>{session.abandonedEffects} abandoned operation(s) · outcome unknown</span>{/if}
       </div>
       {#if session.phase === 'cancelling'}
         <div class="connection-banner" role="status">Assistant stopped; submitted operations may still finish. No rollback was attempted.</div>
@@ -111,6 +112,12 @@
     {:else if session?.executionVersion === 2}
       <div class="cached-note" role="status">Cached view of this session. Controls return once the relay confirms the current run.</div>
     {/if}
+    {#if session?.executionVersion === 2 && session.abandonedEffects > 0}
+      <div class="abandoned-effects" role="alert">
+        <strong>Outcome unknown for {session.abandonedEffects} abandoned operation(s) in run {session.currentRunId}.</strong>
+        <p>Abandonment closes accounting; it does not prove the effect failed or succeeded. Check downstream state before retrying this work.{session.authoritative ? '' : ' This is a cached projection; wait for relay confirmation.'}</p>
+      </div>
+    {/if}
     <section class="transcript" aria-label="Assistant transcript" bind:this={transcriptElement}>
       {#if transcriptItems.length}
         {#each transcriptItems as item (item.id)}
@@ -130,6 +137,8 @@
 
 <style>
   .execution-summary { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0.45rem 0.75rem; border-bottom: 1px solid var(--border-color); color: var(--text-muted); font-size: 0.75rem; }
+  .abandoned-effects { margin: 0 0.75rem; padding: 0.6rem; border-left: 3px solid var(--warning); background: color-mix(in srgb, var(--warning) 10%, var(--card-bg)); font-size: 0.8rem; }
+  .abandoned-effects p { margin-top: 0.35rem; }
   .cached-note { color: var(--text-muted); font-size: 0.75rem; }
   .current-execution { flex: 0 1 auto; max-height: 60%; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem; }
   .assistant-panel {

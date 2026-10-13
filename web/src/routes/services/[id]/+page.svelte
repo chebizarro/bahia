@@ -1,5 +1,6 @@
 <script>
   import IntentGate from '$lib/components/IntentGate.svelte';
+  import { toast } from '$lib/components/toast.js';
   import { boot } from '$lib/nostr/boot.js';
   import { page } from '$app/state';
   import { goto } from '$app/navigation';
@@ -302,7 +303,7 @@
     try {
       await loadRepositories();
     } catch (repoErr) {
-      console.warn('Failed to load repositories for service editor:', repoErr);
+      toast.error(`Repository choices could not be loaded. Check relay access before editing this service. ${repoErr?.message || repoErr}`, { key: `service-repositories:${serviceId}` });
     } finally {
       if (sequence === loadSequence) {
         repositoriesLoading = false;
@@ -981,15 +982,6 @@
       secretDeleteError = err.message || 'Failed to delete secret';
     } finally {
       secretDeleting = false;
-    }
-  }
-
-  async function reloadArtifacts() {
-    try {
-      await boot();
-      artifacts = artifactStore.filter((artifact) => artifact.service_id === serviceId);
-    } catch (err) {
-      console.error('Failed to reload artifacts:', err);
     }
   }
 

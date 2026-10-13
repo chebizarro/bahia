@@ -129,7 +129,7 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
       };
     }
 
-    function publishSession(sessionId, phase, { pendingApprovals = [], submittedEffects = 0, closed = false } = {}) {
+    function publishSession(sessionId, phase, { pendingApprovals = [], submittedEffects = 0, abandonedEffects = 0, closed = false } = {}) {
       revisions[sessionId] = (revisions[sessionId] || 0) + 1;
       push(assistantEvent({
         id: `session-${sessionId}-${phase}-${revisions[sessionId]}`,
@@ -156,11 +156,14 @@ async function installAssistantAgenticHarness(page, { discovery = systemInfo } =
           pending_approvals: pendingApprovals,
           submitted_effects: submittedEffects,
           uncertain_effects: 0,
+          abandoned_effects: abandonedEffects,
           // Additive v2 field: present only once a session-scope cancel closed it.
           ...(closed ? { closed: true, closed_at: new Date().toISOString() } : {})
         }
       }));
     }
+
+    window.__BAHIA_E2E_ABANDON_CURRENT = () => publishSession(latestAssistantSessionId(), 'failed', { abandonedEffects: 1 });
 
     // Relay history left by a pre-v2 backend: readable, never actionable.
     function publishLegacySession(sessionId, state) {
@@ -450,6 +453,20 @@ test.describe('assistant agentic frontend enablement', () => {
     await expect(panel).toContainText('loop_completed');
     await expect(panel).toContainText('Read-only DNS answer: DNS records are healthy.');
     await expect(panel).not.toContainText('Action approval required');
+    await assertNoRuntimeErrors();
+  });
+
+  test('an abandoned effect remains outcome unknown in the session view', async ({ page }) => {
+    const assertNoRuntimeErrors = await attachRuntimeErrorGuards(page);
+    const panel = await openAssistant(page);
+    await submitAssistantPrompt(page, 'read-only DNS question');
+    await expect(panel.getByLabel('Current assistant execution')).toHaveAttribute('data-phase', 'completed');
+
+    await page.evaluate(() => window.__BAHIA_E2E_ABANDON_CURRENT());
+    const execution = panel.getByLabel('Current assistant execution');
+    await expect(execution).toHaveAttribute('data-abandoned-effects', '1');
+    await expect(panel.locator('.abandoned-effects[role="alert"]')).toContainText('Outcome unknown for 1 abandoned operation(s)');
+    await expect(panel.locator('nav[aria-label="Assistant sessions"] small')).toContainText('outcome unknown');
     await assertNoRuntimeErrors();
   });
 

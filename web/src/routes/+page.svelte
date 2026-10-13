@@ -439,8 +439,7 @@
       cachePendingCount(pendingDeployments.length);
 
     } catch (err) {
-      console.error('Failed to load pending deployments:', err);
-      pendingError = err.message;
+      pendingError = `Pending approvals could not be loaded. Check relay access and open the approvals page to retry. ${err?.message || err}`;
       pendingDeployments = [];
     } finally {
       pendingLoading = false;
@@ -592,6 +591,7 @@
         <span class="card-action">Review approvals</span>
       </Card>
     </a>
+    {#if pendingError}<p role="alert" class="pending-error">{pendingError}</p>{/if}
     <a href="/payments" class="card-link">
       <Card
         title="Recent Spend"
@@ -782,6 +782,7 @@
 <CreateServiceDialog bind:open={createServiceOpen} />
 
 <style>
+  .pending-error { color: var(--error); grid-column: 1 / -1; }
   .dashboard h1 {
     margin-bottom: 1rem;
   }

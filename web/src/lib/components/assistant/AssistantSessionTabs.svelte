@@ -25,7 +25,7 @@
         onclick={() => selectSession(session.sessionId)}
       >
         <span>{session.transcriptSummary || session.sessionId}</span>
-        <small>{session.closed ? 'closed' : session.state}</small>
+        <small>{session.abandonedEffects > 0 ? 'outcome unknown' : session.closed ? 'closed' : session.state}</small>
       </button>
     {/each}
   {/if}

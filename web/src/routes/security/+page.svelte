@@ -146,7 +146,9 @@
     void untrack(() => subscribeToSecurityUpdates({ findingsScope: scope.params }).catch((err) => {
       securityState.findingsError = err?.message || 'Failed to subscribe to scoped security findings';
     }));
-    void untrack(() => loadFindingsForScope(scope).catch((err) => console.error('Failed to load scoped security findings:', err)));
+    void untrack(() => loadFindingsForScope(scope).catch((err) => {
+      securityState.findingsError = `Scoped security findings could not be loaded. Check the organization key and relay access, then reselect this scope. ${err?.message || err}`;
+    }));
   });
 
   async function loadFindingsForScope(scope = selectedFindingScope) {

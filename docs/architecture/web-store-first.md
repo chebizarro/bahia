@@ -62,6 +62,11 @@ A signed-in session whose protected read REQ closes before EOSE sees the relay
 reason in an operator-facing alert. Public cached state still renders; protected
 state may be incomplete until the relay admits the read and reaches EOSE.
 
+Bootstrap failures appear as persistent, dismissible operator toasts keyed by
+failure source, so repeated connection attempts do not stack duplicate alerts.
+Route-local read and form failures appear beside the affected content with
+retry or recovery guidance; empty collections are not used to hide failed reads.
+
 There is no backend auth probe and no `backendAuthenticated` flag. Roles come
 from decrypted membership records (see [confidential state](confidential-state.md#what-readers-do));
 they gate mutation affordances, not rendering. An unauthenticated or

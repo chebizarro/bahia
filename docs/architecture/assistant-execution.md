@@ -16,6 +16,9 @@ only component that dispatches assistant work. Transport is ContextVM
   `d = bahia.assistant-session.v2:<session_id>` with `execution_version=2`,
   workflow, run, revision, phase, public approval state and checkpoint
   reference.
+  The public projection includes an `abandoned_effects` count for the current
+  run. Work identities, tools and abandonment attestations remain in the
+  encrypted checkpoint; the count alone cannot establish an effect's outcome.
 - Workflow selection for a new turn: explicit request `workflow`, then the
   persisted session workflow, then `assistant.default_workflow`
   (`assistant.agentic.enabled` maps `true` → iterative, `false` → batch when

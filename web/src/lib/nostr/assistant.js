@@ -358,6 +358,7 @@ export function parseAssistantSessionEvent(event) {
     pendingApprovals: v2 && Array.isArray(content.pending_approvals) ? content.pending_approvals : [],
     submittedEffects: v2 ? Number(content.submitted_effects || 0) : 0,
     uncertainEffects: v2 ? Number(content.uncertain_effects || 0) : 0,
+    abandonedEffects: v2 ? Number(content.abandoned_effects || 0) : 0,
     checkpointEventId: v2 ? content.checkpoint_event_id || '' : '',
     // Additive v2 fields; absent (open) on backends that predate them.
     closed: v2 ? content.closed === true : false,

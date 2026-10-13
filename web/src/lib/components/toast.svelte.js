@@ -1,13 +1,18 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 
 let nextId = 1;
 
 export const toasts = writable([]);
 
 export function addToast(toast) {
+  if (toast.key) {
+    const existing = get(toasts).find((item) => item.key === toast.key);
+    if (existing) return existing.id;
+  }
   const id = nextId++;
   const newToast = {
     id,
+    key: toast.key,
     type: toast.type || 'info',
     title: toast.title,
     message: toast.message,

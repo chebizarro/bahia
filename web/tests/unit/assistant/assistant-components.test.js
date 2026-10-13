@@ -716,6 +716,7 @@ describe('assistant panel: controls come only from eligible v2 state', () => {
 
   beforeEach(() => {
     assistantStoreMock.activeAssistantSession.mockReset();
+    assistantStoreMock.assistantSessions.length = 0;
     assistantStoreMock.assistantConnection.status = 'live';
     for (const key of Object.keys(assistantStoreMock.pendingAssistantRequests)) delete assistantStoreMock.pendingAssistantRequests[key];
   });
@@ -724,6 +725,27 @@ describe('assistant panel: controls come only from eligible v2 state', () => {
     const target = renderPanel(batchSession());
     expect(target.querySelector('.plan-card')?.getAttribute('data-revision')).toBe('1');
     expect(target.querySelector('[aria-label="Current assistant execution"]').getAttribute('data-run-id')).toBe('r1');
+  });
+
+  it('shows an abandoned run as outcome unknown, not completed', () => {
+    const session = batchSession({ phase: 'completed', pendingApprovals: [], proposal: null,
+      submittedEffects: 0, uncertainEffects: 0, abandonedEffects: 1 });
+    assistantStoreMock.assistantSessions.push(session);
+    const target = renderPanel(session);
+    const summary = target.querySelector('[aria-label="Current assistant execution"]');
+    expect(summary.getAttribute('data-abandoned-effects')).toBe('1');
+    expect(summary.textContent).toContain('outcome unknown');
+    expect(summary.textContent).not.toContain('completed');
+    expect(target.querySelector('.abandoned-effects[role="alert"]')?.textContent).toContain('run r1');
+    expect(target.querySelector('.abandoned-effects[role="alert"]')?.textContent).toContain('Check downstream state');
+    expect(target.querySelector('[data-session-id="s1"] small')?.textContent).toBe('outcome unknown');
+  });
+
+  it('shows the unknown outcome from a cached projection without enabling controls', () => {
+    const target = renderPanel(batchSession({ authoritative: false, phase: 'failed',
+      abandonedEffects: 1, pendingApprovals: [] }));
+    expect(target.querySelector('.abandoned-effects[role="alert"]')?.textContent).toContain('cached projection');
+    expect(target.querySelector('.plan-card')).toBeNull();
   });
 
   it('never reactivates approval cards from historical planned or approval rows after completion or cancellation', () => {

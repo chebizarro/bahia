@@ -106,7 +106,7 @@ describe('assistant store', () => {
 
   function v2Event({ sessionId = 'v2-session', id = 'v2-projection', createdAt = 100,
     workflow = 'batch', phase = 'awaiting_approval', revision = 1, proposal = null,
-    pendingApprovals = [], uncertainEffects = 0, submittedEffects = 0, runId = 'run-1', scope = { allowed_tools: null },
+    pendingApprovals = [], uncertainEffects = 0, submittedEffects = 0, abandonedEffects = 0, runId = 'run-1', scope = { allowed_tools: null },
     closed = undefined, closedAt = undefined } = {}) {
     return event({ id, kind: ASSISTANT_KINDS.SESSION,
       pubkey: controlplaneMock.controlplaneConnection.servicePubkey, created_at: createdAt,
@@ -115,6 +115,7 @@ describe('assistant store', () => {
       content: { execution_version: 2, session_id: sessionId, state: phase, workflow,
         current_run_id: runId, execution_revision: revision, phase, scope, proposal,
         pending_approvals: pendingApprovals, submitted_effects: submittedEffects, uncertain_effects: uncertainEffects,
+        abandoned_effects: abandonedEffects,
         ...(closed === undefined ? {} : { closed }), ...(closedAt === undefined ? {} : { closed_at: closedAt }) } });
   }
 
@@ -285,6 +286,13 @@ describe('assistant store', () => {
     await store.publishAssistantPrompt({ prompt: 'switch', sessionId: 'overlap-1', workflow: 'iterative' });
     expect(encryptedControlplaneMock.requestEncryptedResult.mock.calls.at(-1)[0]).toMatchObject({
       operation: 'assistant/prompt', payload: { contract_version: 2, session_id: 'overlap-1', workflow: 'iterative', prompt: 'switch' } });
+  });
+
+  it('projects abandonment as a current-run unknown outcome and clears it with the next run', async () => {
+    await emitV2({ sessionId: 'abandoned-1', id: 'abandoned-projection', phase: 'failed', abandonedEffects: 2 });
+    expect(sessionById('abandoned-1')).toMatchObject({ currentRunId: 'run-1', phase: 'failed', abandonedEffects: 2 });
+    await emitV2({ sessionId: 'abandoned-1', id: 'next-projection', createdAt: 200, runId: 'run-2', phase: 'executing' });
+    expect(sessionById('abandoned-1')).toMatchObject({ currentRunId: 'run-2', abandonedEffects: 0 });
   });
 
   it('records a service-refused prompt as a request rejection, never as an execution failure', async () => {

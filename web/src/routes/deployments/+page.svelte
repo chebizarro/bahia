@@ -240,7 +240,6 @@
       await boot();
     } catch (err) {
       error = err.message || 'Failed to load deployment history';
-      console.error('Error loading deployment history:', err);
     } finally {
       loading = false;
     }
