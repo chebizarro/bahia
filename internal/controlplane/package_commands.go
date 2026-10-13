@@ -78,20 +78,6 @@ type PackageDriftDetectCommand struct {
 	IncludeArtifacts bool      `json:"include_artifacts,omitempty"`
 }
 
-func packageArtifactTags(operation domain.PackageOperation, repositoryID uuid.UUID, repositoryName, namespace, packageName, version, filename, sha256 string) nostr.Tags {
-	tags := nostr.Tags{{"operation", string(operation)}, {"repository_name", repositoryName}, {"package", packageName}, {"version", version}, {"filename", filename}}
-	if repositoryID != uuid.Nil {
-		tags = append(tags, nostr.Tag{"repository", repositoryID.String()})
-	}
-	if namespace != "" {
-		tags = append(tags, nostr.Tag{"namespace", namespace})
-	}
-	if sha256 != "" {
-		tags = append(tags, nostr.Tag{"sha256", sha256})
-	}
-	return compactTags(tags)
-}
-
 func compactTags(tags nostr.Tags) nostr.Tags {
 	out := make(nostr.Tags, 0, len(tags))
 	for _, tag := range tags {

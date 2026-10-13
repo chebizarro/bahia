@@ -23,12 +23,6 @@ type memSecretRepo struct {
 	secrets map[uuid.UUID]*domain.ServiceSecret
 }
 
-type rejectingSecretUpdateRepo struct{ *memSecretRepo }
-
-func (*rejectingSecretUpdateRepo) Update(context.Context, *domain.ServiceSecret) error {
-	return errors.New("simulated transaction conflict")
-}
-
 func newMemSecretRepo() *memSecretRepo {
 	return &memSecretRepo{secrets: make(map[uuid.UUID]*domain.ServiceSecret)}
 }

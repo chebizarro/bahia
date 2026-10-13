@@ -8,16 +8,11 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
 type BackupRetentionControlPlaneExecutor interface {
 	ProcessBackupRetentionRun(ctx context.Context, runID uuid.UUID) error
-}
-
-type backupRetentionRegistry interface {
-	CreateBackupRetentionRunIfAbsent(ctx context.Context, run *domain.BackupRetentionRun) (*domain.BackupRetentionRun, bool, error)
 }
 
 type backupRetentionRequest struct {

@@ -16,10 +16,6 @@ type BackupRestoreControlPlaneExecutor interface {
 	ProcessBackupRestore(ctx context.Context, restoreID uuid.UUID) error
 }
 
-type backupRestoreRegistry interface {
-	CreateBackupRestoreIfAbsent(ctx context.Context, restore *domain.BackupRestoreRun) (*domain.BackupRestoreRun, bool, error)
-}
-
 type backupRestoreRequest struct {
 	BackupRunID      string         `json:"backup_run_id,omitempty"`
 	RestoreTargetRef string         `json:"restore_target_ref,omitempty"`

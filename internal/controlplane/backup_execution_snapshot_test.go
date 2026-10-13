@@ -175,10 +175,18 @@ func TestBackupExecutionSnapshotRefusesQueuedPartialAndPrunedRejection(t *testin
 			path := t.TempDir()
 			events, err := localstore.Open(filepath.Join(path, "events.db"))
 			require.NoError(t, err)
-			defer events.Close()
+			t.Cleanup(func() {
+				if err := events.Close(); err != nil {
+					t.Errorf("close events: %v", err)
+				}
+			})
 			outbox, err := localstore.OpenOutbox(filepath.Join(path, "outbox.db"))
 			require.NoError(t, err)
-			defer outbox.Close()
+			t.Cleanup(func() {
+				if err := outbox.Close(); err != nil {
+					t.Errorf("close outbox: %v", err)
+				}
+			})
 			key := nostr.Generate()
 			orgID := testOrgID()
 			recipe := domain.BackupRecipe{ID: uuid.New(), OrgID: orgID, Name: "recipe", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/data", VerificationMode: domain.BackupVerificationNone}

@@ -195,9 +195,10 @@ func TestBackupRunAcceptedExecutedTerminalAndKillWindows(t *testing.T) {
 			} else {
 				err = r.ReconcileOnce(t.Context())
 			}
-			if kill == "none" {
+			switch kill {
+			case "none":
 				require.NoError(t, err)
-			} else if kill == "before-checkpoint-publish" {
+			case "before-checkpoint-publish":
 				require.Error(t, err)
 			}
 			if kill == "after-effect" {

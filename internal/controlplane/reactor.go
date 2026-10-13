@@ -435,15 +435,6 @@ func NewReactor(config Config, registry *service.RegistryService, pool *nostrpoo
 	return r
 }
 
-func (r *Reactor) logPublishError(err error) {
-	if err == nil {
-		return
-	}
-	if r != nil && r.logger != nil {
-		r.logger.Warn("control-plane response publish failed", zap.Error(err))
-	}
-}
-
 // Run starts the reactor and blocks until context is cancelled.
 func (r *Reactor) Run(ctx context.Context) error {
 	r.logger.Info("starting bahia control plane reactor", zap.Strings("relays", r.config.Relays), zap.Strings("additional_relays", r.config.AdditionalRelays))
@@ -682,19 +673,6 @@ func tagValueNostr(tags nostr.Tags, key string) string {
 	return ""
 }
 
-func stringFromAny(v any) string {
-	switch x := v.(type) {
-	case string:
-		return x
-	case fmt.Stringer:
-		return x.String()
-	case nil:
-		return ""
-	default:
-		return fmt.Sprint(x)
-	}
-}
-
 type operatorScope string
 
 const (
@@ -702,19 +680,6 @@ const (
 	operatorScopeAdoption      operatorScope = "adoption"
 	operatorScopeDirectRuntime operatorScope = "direct_runtime"
 )
-
-func acceptedWorkerReadModelKinds() []int {
-	return []int{KindCASControlState}
-}
-
-func isAcceptedWorkerReadModelKind(kind int) bool {
-	for _, accepted := range acceptedWorkerReadModelKinds() {
-		if kind == accepted {
-			return true
-		}
-	}
-	return false
-}
 
 func (r *Reactor) buildRequestSubscriptionFiltersForCurrentCursor(ctx context.Context) []nostr.Filter {
 	return r.buildRequestSubscriptionFilters(r.requestSubscriptionSince(ctx))
@@ -840,10 +805,6 @@ func (r *Reactor) buildRequestSubscriptionFilters(since nostr.Timestamp) []nostr
 }
 
 func requestSubscriptionKinds() []int {
-	return canonicalReactorSubscriptionKinds()
-}
-
-func defaultRequestSubscriptionKinds() []int {
 	return canonicalReactorSubscriptionKinds()
 }
 
@@ -1053,37 +1014,6 @@ func (r *Reactor) appendRequestResourceTags(ctx context.Context, tags nostr.Tags
 		}
 	}
 	return tags
-}
-
-// publishStatus publishes canonical deployment progress for retained direct handler paths.
-func (r *Reactor) publishStatus(ctx context.Context, requestEvent *nostr.Event, step, message string) {
-	tags := nostr.Tags{
-		{"status", "processing"},
-		{"step", step},
-		{"category", "deployment"},
-	}
-	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	if err := r.publishCanonicalStatus(ctx, requestEvent, tags, map[string]any{
-		"status":  "processing",
-		"step":    step,
-		"message": message,
-	}); err != nil {
-		r.zapLog.Warn("control-plane status publish failed",
-			zap.String("category", "deployment"),
-			zap.String("step", step),
-			zap.Error(err))
-	}
-}
-
-// publishDeploymentResult publishes a ContextVM deployment result for retained direct handler paths.
-func (r *Reactor) publishError(ctx context.Context, requestEvent *nostr.Event, step, message string) error {
-	tags := nostr.Tags{
-		{"status", "error"},
-		{"step", step},
-		{"error", message},
-	}
-	tags = r.appendRequestResourceTags(ctx, tags, requestEvent)
-	return r.publishContextVMResult(ctx, requestEvent, nil, tags, &JSONRPCError{Code: -32000, Message: message})
 }
 
 func (r *Reactor) publishCanonicalStatus(ctx context.Context, requestEvent *nostr.Event, tags nostr.Tags, content map[string]any) error {
@@ -1337,34 +1267,6 @@ func (r *Reactor) cleanupRuns(ctx context.Context) {
 				r.logger.Info("cleaned up completed runs", zap.Int("deleted", deleted))
 			}
 		}
-	}
-}
-
-// appendDesiredStateMeta adds renderer and target metadata from a DesiredServiceSpec
-// to a result/status payload and tags. This is additive — old decoders ignore
-// unknown content fields and tags.
-func appendDesiredStateMeta(spec *domain.DesiredServiceSpec, payload map[string]interface{}, tags *nostr.Tags) {
-	if spec == nil {
-		return
-	}
-	renderer := ""
-	switch {
-	case spec.ComposeExtension != nil:
-		renderer = "compose"
-	case spec.DockerExtension != nil:
-		renderer = "docker"
-	case spec.KubernetesExtension != nil:
-		renderer = "kubernetes"
-	case spec.PodmanExtension != nil:
-		renderer = "podman"
-	}
-	if renderer != "" {
-		payload["renderer"] = renderer
-		*tags = append(*tags, nostr.Tag{"renderer", renderer})
-	}
-	if spec.StableServiceKey != "" {
-		payload["target"] = spec.StableServiceKey
-		*tags = append(*tags, nostr.Tag{"target", spec.StableServiceKey})
 	}
 }
 

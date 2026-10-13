@@ -20,7 +20,11 @@ import (
 func TestBackupRejectionReservesTimestampBeforePublisherRelayCall(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	service := nostr.Generate()
 	signer, err := NewPrivateKeySigner(service.Hex())
 	require.NoError(t, err)
@@ -265,7 +269,11 @@ func TestBackupRunRefusalStatusIsOneSignedEventUntilOperatorQuorum(t *testing.T)
 	require.NoError(t, outbox.Close())
 	outbox, err = localstore.OpenOutbox(path)
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	reconciler, err = NewBackupRunStatusReconciler(outbox, status, "operator-relays", func() { wakes++ }, nil, zap.NewNop())
 	require.NoError(t, err)
 	require.NoError(t, reconciler.ReconcileOnce(t.Context()))
@@ -313,7 +321,11 @@ func TestBackupRunRefusalStatusIsOneSignedEventUntilOperatorQuorum(t *testing.T)
 func TestBackupRunOutboxRefusalNeverSignsFalseStatusAndPinsSameEvent(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	service := nostr.Generate()
 	record, state := stageStatusTestRun(t, outbox, service)
 	wakes := 0
@@ -370,7 +382,11 @@ func TestBackupAcceptedStatusUsesOperatorRelaysAndBeatsSameSecondRejection(t *te
 	require.NoError(t, outbox.Close())
 	outbox, err = localstore.OpenOutbox(path)
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	floor, err := outbox.BackupRunStatusTimestampFloor(record.ServicePubkey, record.Actor, record.Coordinate)
 	require.NoError(t, err)
 	require.Equal(t, rejectedAt, floor, "pruning and restart cannot forget a relay-visible rejection")
@@ -414,7 +430,11 @@ func TestBackupAcceptedStatusUsesOperatorRelaysAndBeatsSameSecondRejection(t *te
 func TestAdmittedBackupCoordinateCannotPublishLaterGenericStatus(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	service := nostr.Generate()
 	record, _ := stageStatusTestRun(t, outbox, service)
 	signer, err := NewPrivateKeySigner(service.Hex())
@@ -436,7 +456,11 @@ func TestAdmittedBackupCoordinateCannotPublishLaterGenericStatus(t *testing.T) {
 func TestBackupStatusReconciliationContinuesAfterEarlierBadAdmission(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	wrongSigner, service := nostr.Generate(), nostr.Generate()
 	bad, badEvent := stageStatusTestRunWithID(t, outbox, wrongSigner, "intent-a")
 	good, goodEvent := stageStatusTestRunWithID(t, outbox, service, "intent-z")

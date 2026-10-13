@@ -15,10 +15,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// sidecarRelayMaxMessageBytes is the relay sidecar's websocket frame limit
-// (khatru MaxMessageSize, NIP-11 max_message_length).
-const sidecarRelayMaxMessageBytes = 512000
-
 type relayPublisher struct{ relay *nostr.Relay }
 
 func (p relayPublisher) Publish(ctx context.Context, event nostr.Event) (int, error) {

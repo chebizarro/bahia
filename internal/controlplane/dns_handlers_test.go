@@ -386,20 +386,6 @@ func dnsResultPayload(t *testing.T, event nostr.Event) map[string]any {
 	return response.Result
 }
 
-func assertParityEqual(t *testing.T, label string, legacy, ctxvm int) {
-	t.Helper()
-	if legacy != ctxvm {
-		t.Fatalf("%s: legacy=%d ctxvm=%d", label, legacy, ctxvm)
-	}
-}
-
-func assertParityEqualStr(t *testing.T, label string, legacy, ctxvm string) {
-	t.Helper()
-	if legacy != ctxvm {
-		t.Fatalf("%s: legacy=%q ctxvm=%q", label, legacy, ctxvm)
-	}
-}
-
 type parityRecorder struct {
 	*recordingDNSOperator
 	zonesCreated     []domain.DNSZone
@@ -448,15 +434,4 @@ func (o *parityRetirementRecorder) ExpireOverride(_ context.Context, id uuid.UUI
 		Reason string
 	}{ID: id, At: at, Reason: reason})
 	return nil
-}
-
-func ptrTime(t time.Time) *time.Time { return &t }
-
-func mustMarshal(t *testing.T, v any) []byte {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
 }

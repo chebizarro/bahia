@@ -630,7 +630,7 @@ func (h *BackupIntentHandler) verifyRunInputs(ctx context.Context, requested *do
 		return fmt.Errorf("read canonical Signet credential: %w", err)
 	}
 	if currentRef != *requested.ExecutionSnapshot.CredentialRef {
-		return fmt.Errorf("Signet credential version moved; fresh signed run required")
+		return fmt.Errorf("signet credential version moved; fresh signed run required")
 	}
 	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
 	if err != nil {
@@ -1036,18 +1036,6 @@ func backupRunFromIntentContent(intent *Intent) (*domain.BackupRun, error) {
 	return &run, nil
 }
 
-func backupRestoreFromIntentContent(intent *Intent) (*domain.BackupRestoreRun, error) {
-	data, err := json.Marshal(intent.Content)
-	if err != nil {
-		return nil, err
-	}
-	var restore domain.BackupRestoreRun
-	if err := json.Unmarshal(data, &restore); err != nil {
-		return nil, fmt.Errorf("unmarshal backup restore: %w", err)
-	}
-	return &restore, nil
-}
-
 func backupVerificationFromIntentContent(intent *Intent) (*domain.BackupVerificationRecord, error) {
 	data, err := json.Marshal(intent.Content)
 	if err != nil {
@@ -1058,18 +1046,6 @@ func backupVerificationFromIntentContent(intent *Intent) (*domain.BackupVerifica
 		return nil, fmt.Errorf("unmarshal backup verification: %w", err)
 	}
 	return &record, nil
-}
-
-func backupRetentionFromIntentContent(intent *Intent) (*domain.BackupRetentionRun, error) {
-	data, err := json.Marshal(intent.Content)
-	if err != nil {
-		return nil, err
-	}
-	var run domain.BackupRetentionRun
-	if err := json.Unmarshal(data, &run); err != nil {
-		return nil, fmt.Errorf("unmarshal backup retention: %w", err)
-	}
-	return &run, nil
 }
 
 func backupParseDeleteCoordinate(intent *Intent) (entityType string, entityID uuid.UUID, err error) {
