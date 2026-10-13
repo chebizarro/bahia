@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
+
+var ErrLLMRepositoryUnavailable = errors.New("LLM repository unavailable")
 
 // LLMRouteCRUD is the read/write contract the LLM intent handler uses for
 // level-triggered reconciliation. service.LLMRegistryService satisfies it.
@@ -117,7 +120,7 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		return fmt.Errorf("LLM release registration paused (bahia-4f10q.2.2): canonical-first encrypted release publication and local relay receipt are unavailable")
 	}
 	if h.routes == nil {
-		return fmt.Errorf("bahia-4f10q.2.2: canonical LLM route registry mutation is unavailable without a SQL read model")
+		return fmt.Errorf("%w: canonical route registry mutation requires a SQL read model", ErrLLMRepositoryUnavailable)
 	}
 	switch intent.Op {
 	case "deploy":

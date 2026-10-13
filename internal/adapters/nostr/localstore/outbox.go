@@ -792,7 +792,30 @@ func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Ti
 
 func isProofEligibleEvent(ev nostr.Event) bool {
 	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev) ||
-		isVirtualizationStateEvent(ev) || isToolAcceptedStatusEvent(ev) || isLLMAcceptedStatusEvent(ev) || isLLMReleaseEvent(ev)
+		isVirtualizationStateEvent(ev) || isToolAcceptedStatusEvent(ev) || isLLMAcceptedStatusEvent(ev) || isLLMReleaseEvent(ev) ||
+		isBackupRunLifecycleStatusEvent(ev)
+}
+
+// Checkpoint and terminal 30315 events need the same retained publisher-quorum
+// receipt as the admitted state. Their authority is still constrained by the
+// executor's exact intent/coordinate/step receipt in the local control store.
+func isBackupRunLifecycleStatusEvent(ev nostr.Event) bool {
+	if ev.Kind != 30315 || outboxTag(ev.Tags, "domain") != "intent" || outboxTag(ev.Tags, "t") != "intent-status" ||
+		outboxTag(ev.Tags, "intent_id") == "" || outboxTag(ev.Tags, "p") == "" || outboxTag(ev.Tags, "e") == "" {
+		return false
+	}
+	if _, err := nostr.IDFromHex(outboxTag(ev.Tags, "e")); err != nil {
+		return false
+	}
+	if !strings.HasPrefix(outboxTag(ev.Tags, "d"), "intent-status:"+outboxTag(ev.Tags, "p")+":backup-run:") {
+		return false
+	}
+	switch outboxTag(ev.Tags, "status") {
+	case "pending", "success", "error":
+		return true
+	default:
+		return false
+	}
 }
 
 func isLLMAcceptedStatusEvent(ev nostr.Event) bool {

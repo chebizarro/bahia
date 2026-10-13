@@ -24,6 +24,7 @@ type BackupRunHistoryRunner struct {
 	now        func() time.Time
 	inspect    func(context.Context, BackupRunHistoryStore, nostr.PubKey, string) (*BackupRunHistoryProof, error)
 	statusWake func()
+	admit      func(context.Context, localstore.BackupRunPending, *BackupRunHistoryProof) error
 	mu         sync.Mutex
 	lastError  string
 }
@@ -42,6 +43,12 @@ func NewBackupRunHistoryRunner(outbox *localstore.Outbox, pool *RelayPool, store
 func (r *BackupRunHistoryRunner) Name() string { return "backup-run-history" }
 
 func (r *BackupRunHistoryRunner) SetStatusWake(wake func()) { r.statusWake = wake }
+
+// SetAdmission installs the fenced stage operation. The proof remains open
+// through the callback and must be checked immediately before the bbolt write.
+func (r *BackupRunHistoryRunner) SetAdmission(admit func(context.Context, localstore.BackupRunPending, *BackupRunHistoryProof) error) {
+	r.admit = admit
+}
 
 func (r *BackupRunHistoryRunner) Wake() {
 	select {
@@ -84,6 +91,13 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 			if err := ctx.Err(); err != nil {
 				return time.Time{}, err
 			}
+			admission, err := r.outbox.GetBackupRunAdmission(record.IntentID, record.Coordinate, record.RequestEvent.ID.Hex())
+			if err != nil {
+				return time.Time{}, err
+			}
+			if admission != nil {
+				continue
+			}
 			now := r.now().UTC()
 			if !now.Before(record.ExpiresAt) {
 				if err := r.outbox.RecordBackupRunPendingAttempt(record.IntentID, record.RequestEvent.ID.Hex(), now, time.Time{}, "signed request expired before backup-run admission"); err != nil {
@@ -108,16 +122,23 @@ func (r *BackupRunHistoryRunner) ReconcileOnce(ctx context.Context) (time.Time, 
 				}
 				attemptCtx, cancel := context.WithDeadline(ctx, deadline)
 				proof, err = r.inspect(attemptCtx, r.store, service, record.Coordinate)
-				if proof != nil {
-					if currentErr := proof.StillCurrent(); currentErr != nil {
-						err = currentErr
+				if err == nil && proof == nil {
+					err = fmt.Errorf("backup run history returned no live proof")
+				}
+				if err == nil && proof != nil {
+					if r.admit == nil {
+						err = fmt.Errorf("backup run admission is paused")
+					} else {
+						err = r.admit(attemptCtx, record, proof)
 					}
+				}
+				if proof != nil {
 					proof.Close()
 				}
 				cancel()
 			}
 			if err == nil {
-				err = fmt.Errorf("backup run admission is paused")
+				continue
 			}
 			if errors.Is(err, ErrBackupRunCoordinateExists) {
 				if writeErr := r.outbox.RefuseBackupRunPending(record.IntentID, record.RequestEvent.ID.Hex(), err.Error()); writeErr != nil {

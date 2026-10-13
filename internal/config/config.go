@@ -66,6 +66,12 @@ type Config struct {
 	FIPS            FIPSConfig                `koanf:"fips"`
 	SoulFactory     SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
 	SecretStore     SecretStoreConfig         `koanf:"secret_store" yaml:"secret_store"`
+	BackupRun       BackupRunConfig           `koanf:"backup_run" yaml:"backup_run"`
+}
+
+// BackupRunConfig is an explicit opt-in; canonical async admission is off by default.
+type BackupRunConfig struct {
+	AsyncIntakeEnabled bool `koanf:"async_intake_enabled" yaml:"async_intake_enabled" secret:"false"`
 }
 
 // SBOMConfig controls SBOM generation adapters.

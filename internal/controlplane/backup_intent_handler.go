@@ -11,9 +11,11 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -43,9 +45,11 @@ type BackupRunPendingWriter interface {
 	StagePendingRun(context.Context, string, string, gonostr.Event, string, time.Time) (*localstore.BackupRunPending, error)
 }
 
-// New async intake remains paused until canonical credential recovery and
-// exactly-once execution are available.
-const backupRunAsyncIntakeEnabled = false
+// BackupRunCredentialRecords reads the current canonical Signet binding.
+// Admission never accepts a pin inferred from PostgreSQL or a stale request.
+type BackupRunCredentialRecords interface {
+	CurrentReference(context.Context, string) (domain.SecretCredentialRef, error)
+}
 
 // ErrBackupRunPending means the operator-signed request is durably queued but
 // no service-signed run state or accepted outcome exists yet.
@@ -54,6 +58,10 @@ var ErrBackupRunPending = errors.New("backup run state is pending relay acceptan
 // ErrBackupRunAdmissionConflict preserves the existing request's final status
 // when another signed request attempts to claim its immutable run identity.
 var ErrBackupRunAdmissionConflict = errors.New("backup run admission conflict")
+
+// ErrBackupRepositoryUnavailable refuses SQL-backed backup mutations when
+// the daemon is serving canonical state without a database.
+var ErrBackupRepositoryUnavailable = errors.New("backup repository unavailable")
 
 // BackupIntentCRUD is the read/write contract the backup intent handler uses
 // for level-triggered reconciliation. service.BackupRegistryService satisfies
@@ -126,28 +134,34 @@ type BackupIntentExecutors struct {
 //
 // See docs/architecture/intents-and-authority.md.
 type BackupIntentHandler struct {
-	registry     BackupIntentCRUD
-	definitions  BackupIntentDefinitionCRUD
-	publisher    BackupIntentPublisher
-	runReceipts  BackupRunReceiptReader
-	runAdmission BackupRunAdmissionWriter
-	runPending   BackupRunPendingWriter
-	executors    BackupIntentExecutors
-	status       *IntentStatusPublisher
-	logger       *zap.Logger
+	registry                 BackupIntentCRUD
+	sqlRepositoryUnavailable bool
+	definitions              BackupIntentDefinitionCRUD
+	publisher                BackupIntentPublisher
+	runReceipts              BackupRunReceiptReader
+	runAdmission             BackupRunAdmissionWriter
+	runPending               BackupRunPendingWriter
+	runCredentialRecords     BackupRunCredentialRecords
+	runAsyncIntakeEnabled    bool
+	executors                BackupIntentExecutors
+	status                   *IntentStatusPublisher
+	logger                   *zap.Logger
 }
 
 // BackupIntentHandlerConfig configures the backup intent handler.
 type BackupIntentHandlerConfig struct {
-	Registry     BackupIntentCRUD
-	Definitions  BackupIntentDefinitionCRUD
-	Publisher    BackupIntentPublisher
-	RunReceipts  BackupRunReceiptReader
-	RunAdmission BackupRunAdmissionWriter
-	RunPending   BackupRunPendingWriter
-	Executors    BackupIntentExecutors
-	Status       *IntentStatusPublisher
-	Logger       *zap.Logger
+	Registry                 BackupIntentCRUD
+	SQLRepositoryUnavailable bool
+	Definitions              BackupIntentDefinitionCRUD
+	Publisher                BackupIntentPublisher
+	RunReceipts              BackupRunReceiptReader
+	RunAdmission             BackupRunAdmissionWriter
+	RunPending               BackupRunPendingWriter
+	RunCredentialRecords     BackupRunCredentialRecords
+	RunAsyncIntakeEnabled    bool
+	Executors                BackupIntentExecutors
+	Status                   *IntentStatusPublisher
+	Logger                   *zap.Logger
 }
 
 // NewBackupIntentHandler constructs the handler.
@@ -157,21 +171,30 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &BackupIntentHandler{
-		registry:     cfg.Registry,
-		definitions:  cfg.Definitions,
-		publisher:    cfg.Publisher,
-		runReceipts:  cfg.RunReceipts,
-		runAdmission: cfg.RunAdmission,
-		runPending:   cfg.RunPending,
-		executors:    cfg.Executors,
-		status:       cfg.Status,
-		logger:       logger.Named("backup-intent"),
+		registry:                 cfg.Registry,
+		sqlRepositoryUnavailable: cfg.SQLRepositoryUnavailable,
+		definitions:              cfg.Definitions,
+		publisher:                cfg.Publisher,
+		runReceipts:              cfg.RunReceipts,
+		runAdmission:             cfg.RunAdmission,
+		runPending:               cfg.RunPending,
+		runCredentialRecords:     cfg.RunCredentialRecords,
+		runAsyncIntakeEnabled:    cfg.RunAsyncIntakeEnabled,
+		executors:                cfg.Executors,
+		status:                   cfg.Status,
+		logger:                   logger.Named("backup-intent"),
 	}
 }
 
 // HandleIntent processes a single backup intent. The processor has already
 // deduplicated, validated, and authorized the intent.
 func (h *BackupIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	if intent == nil {
+		return fmt.Errorf("backup intent is missing")
+	}
+	if intent.Op != "run" && (h.registry == nil || h.sqlRepositoryUnavailable) {
+		return fmt.Errorf("%w: %s requires a SQL-backed registry", ErrBackupRepositoryUnavailable, intent.Op)
+	}
 	switch intent.Op {
 	case "recipe-apply":
 		return h.handleRecipeApply(ctx, intent)
@@ -368,6 +391,9 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		!backupRunContentEqual(signed.Content, intent.Content) {
 		return fmt.Errorf("backup run request fields do not match the signed intent")
 	}
+	if err := rejectLegacyBackupCredentialVersion(signed.Content); err != nil {
+		return err
+	}
 	requested, err := backupRunFromIntentContent(signed)
 	if err != nil || requested.ID == uuid.Nil || intent.Coordinate != "backup-run:"+requested.ID.String() {
 		return fmt.Errorf("backup run request requires an author-minted run coordinate")
@@ -378,7 +404,7 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		return fmt.Errorf("%w: %v", ErrBackupRunAdmissionConflict, err)
 	}
 	if found {
-		intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "paused"}
+		intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "queued"}
 		if !delivered {
 			return ErrBackupRunPending
 		}
@@ -395,34 +421,20 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 			}
 			return fmt.Errorf("%w: signed request expired or refused; terminal status awaits operator-relay quorum", ErrBackupRunAdmissionConflict)
 		}
-		if !backupRunAsyncIntakeEnabled {
+		if !h.runAsyncIntakeEnabled {
 			return fmt.Errorf("%w: backup run request intake paused: credential recovery and exactly-once execution are unavailable", ErrBackupRunAdmissionConflict)
 		}
-		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
+		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "queued"}
 		return ErrBackupRunPending
 	}
-	if !backupRunAsyncIntakeEnabled {
+	if !h.runAsyncIntakeEnabled {
 		return fmt.Errorf("backup run request intake paused: credential recovery and exactly-once execution are unavailable")
 	}
 	if _, err := ValidateSignedBackupRunRequest(intent.Event, intent.Actor); err != nil {
 		return fmt.Errorf("backup run request is invalid: %w", err)
 	}
-	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
+	if err := h.verifyRunInputs(ctx, requested); err != nil {
 		return fmt.Errorf("backup run request intake paused: %w", err)
-	}
-	proof, ok := h.runReceipts.(backupExecutionConfigProof)
-	if !ok {
-		return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
-	}
-	if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
-		return fmt.Errorf("backup run request intake paused: %w", err)
-	}
-	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
-	if err != nil {
-		return fmt.Errorf("backup run request intake paused: %w", err)
-	}
-	if prior != nil {
-		return fmt.Errorf("backup run request intake paused: run id already has an ACKed canonical state without an admission record")
 	}
 	expiresAt, err := signedBackupRunExpiration(intent.Event)
 	if err != nil {
@@ -431,8 +443,86 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	if _, err := h.runPending.StagePendingRun(ctx, intent.IntentID, intent.Coordinate, *intent.Event, intent.Actor, expiresAt); err != nil {
 		return fmt.Errorf("stage signed backup run pending request: %w", err)
 	}
-	intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
+	intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "queued"}
 	return ErrBackupRunPending
+}
+
+// AdmitPendingRun revalidates the original signed request immediately before
+// staging, while the history worker holds its live relay observation.
+func (h *BackupIntentHandler) AdmitPendingRun(ctx context.Context, pending localstore.BackupRunPending, history *nostradapter.BackupRunHistoryProof) error {
+	if h == nil || !h.runAsyncIntakeEnabled || h.runAdmission == nil || history == nil {
+		return fmt.Errorf("backup run admission is paused")
+	}
+	intent, err := ValidateSignedBackupRunRequest(&pending.RequestEvent, pending.Actor)
+	if err != nil {
+		return err
+	}
+	if intent.IntentID != pending.IntentID || intent.Coordinate != pending.Coordinate || pending.ServicePubkey != history.ServicePubkey.Hex() {
+		return fmt.Errorf("backup run pending request identity changed")
+	}
+	if err := rejectLegacyBackupCredentialVersion(intent.Content); err != nil {
+		return err
+	}
+	run, err := backupRunFromIntentContent(intent)
+	if err != nil {
+		return err
+	}
+	if run.ID == uuid.Nil || intent.Coordinate != "backup-run:"+run.ID.String() {
+		return fmt.Errorf("backup run coordinate is invalid")
+	}
+	if err := h.verifyRunInputs(ctx, run); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag = pending.Actor, pending.RequestEvent.ID.Hex(), int(pending.RequestEvent.Kind), pending.Coordinate
+	run.Status, run.CreatedAt, run.UpdatedAt = domain.RunStatusQueued, now, now
+	stager, ok := h.runAdmission.(interface {
+		StageRunAdmissionWithHistory(context.Context, string, string, *domain.BackupRun, *nostradapter.BackupRunHistoryProof) (string, error)
+	})
+	if !ok {
+		return fmt.Errorf("backup run fenced admission writer is unavailable")
+	}
+	_, err = stager.StageRunAdmissionWithHistory(ctx, pending.IntentID, pending.RequestEvent.ID.Hex(), run, history)
+	return err
+}
+
+func (h *BackupIntentHandler) verifyRunInputs(ctx context.Context, requested *domain.BackupRun) error {
+	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
+		return err
+	}
+	if requested.Backend != domain.BackupBackendKopia || requested.VerificationMode != domain.BackupVerificationNone ||
+		requested.ExecutionSnapshot.Policy != nil || len(requested.ExecutionSnapshot.Recipe.Include) != 0 ||
+		len(requested.ExecutionSnapshot.Recipe.Exclude) != 0 {
+		return fmt.Errorf("bahia-cd0wr: only a single unfiltered Kopia snapshot without verification or policy is enabled")
+	}
+	if _, err := backupAdapter.CanonicalSnapshotEffectArgs(&requested.ExecutionSnapshot.Recipe, requested.ID); err != nil {
+		return fmt.Errorf("bahia-cd0wr: unsupported Kopia snapshot input: %w", err)
+	}
+	proof, ok := h.runReceipts.(backupExecutionConfigProof)
+	if !ok {
+		return fmt.Errorf("canonical configuration proof is unavailable")
+	}
+	if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
+		return err
+	}
+	if requested.ExecutionSnapshot.CredentialRef == nil || h.runCredentialRecords == nil {
+		return fmt.Errorf("pinned Signet credential proof is unavailable")
+	}
+	currentRef, err := h.runCredentialRecords.CurrentReference(ctx, requested.ExecutionSnapshot.Repository.CredentialProfile)
+	if err != nil {
+		return fmt.Errorf("read canonical Signet credential: %w", err)
+	}
+	if currentRef != *requested.ExecutionSnapshot.CredentialRef {
+		return fmt.Errorf("Signet credential version moved; fresh signed run required")
+	}
+	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
+	if err != nil {
+		return err
+	}
+	if prior != nil {
+		return fmt.Errorf("run id already has an ACKed canonical state without an admission record")
+	}
+	return nil
 }
 
 // validateBackupExecutionSnapshot rejects any drift between the operator's
@@ -466,12 +556,18 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 		snapshot.RecipeEventID == "" || snapshot.RepositoryEventID == "" {
 		return fmt.Errorf("execution snapshot conflicts with signed run inputs")
 	}
-	if strings.TrimSpace(snapshot.Repository.CredentialProfile) != "" {
-		if snapshot.CredentialVersionID == nil || *snapshot.CredentialVersionID == uuid.Nil {
-			return fmt.Errorf("execution snapshot requires an immutable credential version for the repository profile")
+	if profile := strings.TrimSpace(snapshot.Repository.CredentialProfile); profile != "" {
+		if id, err := uuid.Parse(profile); err != nil || id == uuid.Nil {
+			return fmt.Errorf("execution snapshot repository credential_profile must be a canonical secret UUID")
 		}
-	} else if snapshot.CredentialVersionID != nil {
-		return fmt.Errorf("execution snapshot credential version has no repository profile")
+		if snapshot.CredentialRef == nil {
+			return fmt.Errorf("execution snapshot requires a pinned Signet credential reference")
+		}
+		if err := secretstore.ValidateRef(*snapshot.CredentialRef); err != nil {
+			return fmt.Errorf("execution snapshot credential reference: %w", err)
+		}
+	} else if snapshot.CredentialRef != nil {
+		return fmt.Errorf("execution snapshot credential reference has no repository secret")
 	}
 	if snapshot.Policy == nil {
 		if requested.PolicyID != nil || snapshot.PolicyEventID != "" {
@@ -484,6 +580,17 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 	right, rightErr := json.Marshal(receipt.ExecutionSnapshot)
 	if leftErr != nil || rightErr != nil || !bytes.Equal(left, right) {
 		return fmt.Errorf("execution snapshot conflicts with the ACKed run receipt")
+	}
+	return nil
+}
+
+func rejectLegacyBackupCredentialVersion(content map[string]any) error {
+	raw, ok := content["execution_snapshot"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, legacy := raw["credential_version_id"]; legacy {
+		return fmt.Errorf("legacy credential_version_id is unsupported: use a pinned Signet credential_ref and a canonical secret UUID in credential_profile")
 	}
 	return nil
 }

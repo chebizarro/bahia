@@ -202,7 +202,7 @@ func (r *BackupRunStatusReconciler) reconcileRecord(ctx context.Context, record 
 	}
 	intent := &Intent{IntentID: current.IntentID, Actor: current.Actor, Coordinate: current.Coordinate,
 		Event: &nostr.Event{ID: requestID}, StatusData: map[string]any{
-			"run_id": strings.TrimPrefix(current.Coordinate, "backup-run:"), "state_event_id": current.StateEventID, "execution": "paused",
+			"run_id": strings.TrimPrefix(current.Coordinate, "backup-run:"), "state_event_id": current.StateEventID, "execution": "queued",
 		}}
 	floor, err := r.outbox.BackupRunStatusTimestampFloor(current.ServicePubkey, current.Actor, current.Coordinate)
 	if err != nil {

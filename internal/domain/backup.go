@@ -228,13 +228,12 @@ type BackupExecutionSnapshot struct {
 	RecipeEventID     string `json:"recipe_event_id"`
 	RepositoryEventID string `json:"repository_event_id"`
 	PolicyEventID     string `json:"policy_event_id,omitempty"`
-	// CredentialVersionID pins the immutable secret version behind a repository
-	// credential profile. A profile name alone may resolve to a different secret
-	// after restart and cannot authorize execution.
-	CredentialVersionID *uuid.UUID       `json:"credential_version_id,omitempty"`
-	Recipe              BackupRecipe     `json:"recipe"`
-	Repository          BackupRepository `json:"repository"`
-	Policy              *BackupPolicy    `json:"policy,omitempty"`
+	// CredentialRef pins the Signet version behind CredentialProfile, which
+	// names a canonical service secret by UUID for new backup runs.
+	CredentialRef *SecretCredentialRef `json:"credential_ref,omitempty"`
+	Recipe        BackupRecipe         `json:"recipe"`
+	Repository    BackupRepository     `json:"repository"`
+	Policy        *BackupPolicy        `json:"policy,omitempty"`
 }
 
 // BackupRun is the durable control-plane record for a backup request.
