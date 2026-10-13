@@ -351,3 +351,30 @@ func TestReloadThatChangesOutboundAdmissionIsRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNewSidecarWiresExternalMirrorTransport(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.Sidecar.Enabled = true
+	cfg.Sidecar.MirrorExternal = true
+	cfg.Sidecar.DataDir = t.TempDir()
+	cfg.Sidecar.PublicURL = "ws://localhost:3334/relay"
+	cfg.Sidecar.BackendURL = cfg.Sidecar.PublicURL
+	cfg.ServiceRelays = []string{cfg.Sidecar.PublicURL, "ws://127.0.0.1:45678"}
+	cfg.ControlledRelays = []string{"ws://127.0.0.1:45678"}
+	cfg.PrivateKey = nostr.Generate().Hex()
+	signer, err := openServiceSigner(t.Context(), cfg, nil, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer signer.Close()
+	runtime, err := newSidecar(t.Context(), cfg, signer.keyer, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime == nil {
+		t.Fatal("mirror runtime missing")
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

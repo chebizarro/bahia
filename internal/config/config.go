@@ -745,6 +745,11 @@ type NostrConfig struct {
 	// the attempt budget). Only then is the row marked published (quorum
 	// reached) or abandoned (quorum not reached).
 	PublishQuorum int `koanf:"publish_quorum" yaml:"publish_quorum" secret:"false"`
+	// ControlPlanePublishQuorum overrides the read-model outbox publisher's
+	// quorum. Nil inherits PublishQuorum, capped at its own relay count with
+	// a startup warning and WARN health check when that cap is necessary.
+	// An explicit value must fit the control-plane relay set.
+	ControlPlanePublishQuorum *int `koanf:"control_plane_publish_quorum" yaml:"control_plane_publish_quorum" secret:"false"`
 	// ClosedRetryBudget is how many times in a row the relay pool reissues a
 	// REQ that a relay CLOSED with a retryable reason ("error:",
 	// "rate-limited:" or an unknown prefix) before it gives up on that relay
@@ -2638,6 +2643,88 @@ func (c NostrConfig) ServiceWriteRelays(serviceRelays []string) []string {
 	return relays
 }
 
+// MirrorExternalRelays is the sidecar's external replication set. Every
+// destination must be explicitly controlled; the sidecar's own public and
+// backend URLs are excluded so it can never publish back to itself.
+func (c NostrConfig) MirrorExternalRelays() ([]string, error) {
+	return c.mirrorExternalRelaysFrom(c.ServiceRelayPolicyRelays())
+}
+
+func (c NostrConfig) mirrorExternalRelaysFrom(serviceRelays []string) ([]string, error) {
+	if !c.Sidecar.Enabled {
+		return nil, fmt.Errorf("nostr.sidecar.mirror_external requires nostr.sidecar.enabled")
+	}
+	self := make(map[string]struct{}, 2)
+	for _, relay := range c.sidecarRelayURLs() {
+		self[relay] = struct{}{}
+	}
+	controlled := make(map[string]struct{}, len(c.ControlledRelays))
+	for _, relay := range c.ControlledRelays {
+		url := relayguard.Normalize(relay)
+		if relayguard.IsWellKnownPublic(url) {
+			return nil, fmt.Errorf("nostr.controlled_relays lists public relay %s", url)
+		}
+		controlled[url] = struct{}{}
+	}
+	var targets []string
+	for _, relay := range serviceRelays {
+		url := relayguard.Normalize(relay)
+		if _, local := self[url]; local || url == "" {
+			continue
+		}
+		if relayguard.IsWellKnownPublic(url) {
+			return nil, fmt.Errorf("nostr.sidecar.mirror_external refuses public service relay %s", url)
+		}
+		if _, allowed := controlled[url]; !allowed {
+			return nil, fmt.Errorf("nostr.sidecar.mirror_external target %s is not in nostr.controlled_relays", url)
+		}
+		targets = appendUniqueRelayURL(targets, url)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("nostr.sidecar.mirror_external requires at least one external nostr.service_relays target")
+	}
+	return targets, nil
+}
+
+// ControlPlaneWriteRelays is the read-model publisher's relay set for the
+// effective control-plane policy. The sidecar is its sole direct destination
+// when enabled; otherwise ContextVM relays fall back to browser relays.
+func (c NostrConfig) ControlPlaneWriteRelays(lists ControlPlaneRelays) []string {
+	if c.Sidecar.Enabled {
+		if c.Sidecar.BackendURL != "" {
+			return appendUniqueRelayURL(nil, relayguard.Normalize(c.Sidecar.BackendURL))
+		}
+		return appendUniqueRelayURL(nil, relayguard.Normalize(c.Sidecar.PublicURL))
+	}
+	relays := lists.ContextVM
+	if len(relays) == 0 {
+		relays = lists.Browser
+	}
+	var result []string
+	for _, relay := range relays {
+		result = appendUniqueRelayURL(result, relayguard.Normalize(relay))
+	}
+	return result
+}
+
+// ResolveControlPlanePublishQuorum reports the requested and effective
+// acceptances for the current control-plane pool. Only an inherited default
+// can be capped; explicit values are validated at config/policy admission.
+func (c NostrConfig) ResolveControlPlanePublishQuorum(poolSize int) (requested, effective int, cappedDefault bool) {
+	requested = c.PublishQuorum
+	if c.ControlPlanePublishQuorum != nil {
+		requested = *c.ControlPlanePublishQuorum
+	}
+	switch {
+	case requested == PublishQuorumAllRelays:
+		requested = poolSize
+	case requested <= 0:
+		requested = PublishQuorumDefault
+	}
+	effective = min(requested, poolSize)
+	return requested, effective, c.ControlPlanePublishQuorum == nil && requested > poolSize
+}
+
 // ControlledRelaySet is nostr.controlled_relays plus the sidecar's backend
 // and public URLs; with controlled_relays unset, the sidecar alone. Relays
 // are normalized as the relay pool normalizes them.
@@ -2727,6 +2814,37 @@ func (c NostrConfig) ValidateControlPlaneRelays(source string, lists ControlPlan
 			if _, ok := controlled[normalized]; controlled != nil && !ok {
 				return fmt.Errorf("%s %s lists %s, which is not in nostr.controlled_relays", source, list.name, normalized)
 			}
+		}
+	}
+	if c.Sidecar.MirrorExternal {
+		configured, err := c.MirrorExternalRelays()
+		if err != nil {
+			return fmt.Errorf("%s %w", source, err)
+		}
+		effective, err := c.mirrorExternalRelaysFrom(lists.Service)
+		if err != nil {
+			return fmt.Errorf("%s %w", source, err)
+		}
+		if len(configured) != len(effective) {
+			return fmt.Errorf("%s service_relays change the fixed sidecar mirror targets; reload the sidecar and daemon configuration first", source)
+		}
+		set := make(map[string]struct{}, len(configured))
+		for _, relay := range configured {
+			set[relay] = struct{}{}
+		}
+		for _, relay := range effective {
+			if _, ok := set[relay]; !ok {
+				return fmt.Errorf("%s service_relays change the fixed sidecar mirror targets; reload the sidecar and daemon configuration first", source)
+			}
+		}
+	}
+	if c.ControlPlanePublishQuorum != nil {
+		quorum := *c.ControlPlanePublishQuorum
+		if quorum == 0 || quorum < PublishQuorumAllRelays {
+			return fmt.Errorf("%s nostr.control_plane_publish_quorum must be >= 1 or -1 for every control-plane relay", source)
+		}
+		if count := len(c.ControlPlaneWriteRelays(lists)); count == 0 || quorum > count {
+			return fmt.Errorf("%s control-plane relays give %d write relays, fewer than nostr.control_plane_publish_quorum %d", source, count, quorum)
 		}
 	}
 	if quorum := c.PublishQuorum; quorum > 1 {
@@ -4096,6 +4214,11 @@ func (c *Config) validateNostrRelayPolicy() error {
 	}
 	if c.Nostr.PublishQuorum < PublishQuorumAllRelays {
 		return fmt.Errorf("config validation failed: nostr.publish_quorum must be >= 1, or -1 for every write relay (0/unset means 1)")
+	}
+	if c.Nostr.Sidecar.MirrorExternal {
+		if _, err := c.Nostr.MirrorExternalRelays(); err != nil {
+			return fmt.Errorf("config validation failed: %w", err)
+		}
 	}
 	for _, relay := range c.Nostr.ControlledRelays {
 		if relayguard.IsWellKnownPublic(relay) {

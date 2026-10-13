@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -30,8 +31,11 @@ const eventStoreFile = "events.bolt"
 
 // Buckets Bahia keeps next to the eventstore's own in the same bbolt file.
 var (
-	sidecarMetaBucket   = []byte("bahiaSidecarMeta")
-	sidecarExpiryBucket = []byte("bahiaSidecarExpiry")
+	sidecarMetaBucket         = []byte("bahiaSidecarMeta")
+	sidecarExpiryBucket       = []byte("bahiaSidecarExpiry")
+	sidecarMirrorQueueBucket  = []byte("bahiaSidecarMirrorQueue")
+	sidecarMirrorIDsBucket    = []byte("bahiaSidecarMirrorIDs")
+	sidecarMirrorCursorBucket = []byte("bahiaSidecarMirrorCursor")
 )
 
 const (
@@ -62,9 +66,10 @@ type eventStore struct {
 }
 
 type sharedEventStore struct {
-	path    string
-	backend *boltdb.BoltBackend
-	refs    int
+	path               string
+	backend            *boltdb.BoltBackend
+	refs               int
+	mirrorIndexEnabled atomic.Bool
 	// replaceMu serialises Replace so that its read of the current version
 	// and the write that supersedes it are not interleaved with another
 	// replace of the same coordinate.
@@ -109,7 +114,7 @@ func openEventStore(ctx context.Context, dataDir string, logger *zap.Logger) (*e
 		return nil, fmt.Errorf("open relay sidecar event store %s (is another relay process using this data_dir?): %w", path, err)
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket, sidecarDeletionBucket, sidecarTagBucket} {
+		for _, name := range [][]byte{sidecarMetaBucket, sidecarExpiryBucket, sidecarDeletionBucket, sidecarTagBucket, sidecarMirrorQueueBucket, sidecarMirrorIDsBucket, sidecarMirrorCursorBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -191,7 +196,13 @@ func (s *eventStore) Save(ctx context.Context, event nostr.Event) error {
 		}
 		return err
 	}
-	return s.afterWrite(ctx, event)
+	if err := s.afterWrite(ctx, event); err != nil {
+		return err
+	}
+	if s.shared.mirrorIndexEnabled.Load() {
+		return s.indexMirrorEvent(event)
+	}
+	return nil
 }
 
 // Replace stores a replaceable or addressable event if it is newer than the
@@ -211,7 +222,13 @@ func (s *eventStore) Replace(ctx context.Context, event nostr.Event) error {
 	if err := s.replace(event); err != nil {
 		return err
 	}
-	return s.afterWrite(ctx, event)
+	if err := s.afterWrite(ctx, event); err != nil {
+		return err
+	}
+	if s.shared.mirrorIndexEnabled.Load() {
+		return s.indexMirrorEvent(event)
+	}
+	return nil
 }
 
 func (s *eventStore) replace(event nostr.Event) error {

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -65,7 +67,9 @@ func TestControlPlaneRelaysMustBeControlled(t *testing.T) {
 	// Unset means the sidecar alone: a sidecar-only topology needs no list.
 	cfg = Defaults()
 	cfg.Nostr.PrivateKey = "test-secret-key"
-	cfg.Nostr.Sidecar = RelaySidecarConfig{Enabled: true, PublicURL: testSidecarPublicURL, BackendURL: "ws://relay:3334/relay"}
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = testSidecarPublicURL
+	cfg.Nostr.Sidecar.BackendURL = "ws://relay:3334/relay"
 	cfg.Nostr.ContextVMRelays = []string{"ws://relay:3334/relay"}
 	cfg.Nostr.BrowserRelays = []string{testSidecarPublicURL}
 	if got := cfg.Nostr.ControlledRelaySet(); len(got) != 2 {
@@ -139,4 +143,106 @@ func TestNonControlPlaneListsNeedExplicitPublicRelayAllowance(t *testing.T) {
 	if err := cfg.validate(); err != nil {
 		t.Fatalf("validate() error with explicitly allowed public relays: %v", err)
 	}
+}
+
+func TestControlPlanePublishQuorumValidationAndResolution(t *testing.T) {
+	cfg := Defaults()
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.PublicURL = testSidecarPublicURL
+	cfg.Nostr.Sidecar.BackendURL = "ws://localhost:3334/relay"
+	cfg.Nostr.ServiceRelays = []string{testSidecarPublicURL, testSharedRelay}
+	cfg.Nostr.ControlledRelays = []string{testSharedRelay}
+	cfg.Nostr.PublishQuorum = 2
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("inherited capped quorum must load with warning, not fail: %v", err)
+	}
+	if requested, effective, capped := cfg.Nostr.ResolveControlPlanePublishQuorum(1); requested != 2 || effective != 1 || !capped {
+		t.Fatalf("default resolution = %d/%d capped=%t, want 2/1 true", requested, effective, capped)
+	}
+	one := 1
+	cfg.Nostr.ControlPlanePublishQuorum = &one
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("explicit quorum one: %v", err)
+	}
+	if requested, effective, capped := cfg.Nostr.ResolveControlPlanePublishQuorum(1); requested != 1 || effective != 1 || capped {
+		t.Fatalf("explicit resolution = %d/%d capped=%t, want 1/1 false", requested, effective, capped)
+	}
+	two := 2
+	cfg.Nostr.ControlPlanePublishQuorum = &two
+	requireValidationError(t, cfg, "fewer than nostr.control_plane_publish_quorum 2")
+	zero := 0
+	cfg.Nostr.ControlPlanePublishQuorum = &zero
+	requireValidationError(t, cfg, "nostr.control_plane_publish_quorum must be >= 1")
+	all := PublishQuorumAllRelays
+	cfg.Nostr.ControlPlanePublishQuorum = &all
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("explicit all-relays quorum: %v", err)
+	}
+}
+
+func TestCanonicalControlPlanePolicyCannotShrinkExplicitQuorum(t *testing.T) {
+	cfg := Defaults().Nostr
+	cfg.Sidecar.Enabled = false
+	cfg.ControlledRelays = []string{"wss://first.example", "wss://second.example"}
+	two := 2
+	cfg.ControlPlanePublishQuorum = &two
+	lists := ControlPlaneRelays{ContextVM: []string{"wss://first.example", "wss://second.example"}}
+	if err := cfg.ValidateControlPlaneRelays("canonical relay settings", lists); err != nil {
+		t.Fatalf("two-relay policy: %v", err)
+	}
+	lists.ContextVM = []string{"wss://first.example"}
+	if err := cfg.ValidateControlPlaneRelays("canonical relay settings", lists); err == nil || !strings.Contains(err.Error(), "fewer than nostr.control_plane_publish_quorum 2") {
+		t.Fatalf("shrunken policy must fail closed: %v", err)
+	}
+}
+
+func TestControlPlanePublishQuorumLoadsFromYAML(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("nostr:\n  contextvm_relays: [wss://controlled.example]\n  control_plane_publish_quorum: 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Nostr.ControlPlanePublishQuorum == nil || *cfg.Nostr.ControlPlanePublishQuorum != 1 {
+		t.Fatalf("loaded control-plane quorum = %v, want 1", cfg.Nostr.ControlPlanePublishQuorum)
+	}
+}
+
+func TestMirrorExternalFailsClosedOnTargetsAndDaemonQuorum(t *testing.T) {
+	cfg := Defaults()
+	cfg.Nostr.Sidecar.Enabled = true
+	cfg.Nostr.Sidecar.MirrorExternal = true
+	cfg.Nostr.Sidecar.BackendURL = "ws://localhost:3334/relay"
+	cfg.Nostr.Sidecar.PublicURL = testSidecarPublicURL
+	cfg.Nostr.ServiceRelays = []string{testSidecarPublicURL, testSharedRelay}
+	cfg.Nostr.ControlledRelays = []string{testSharedRelay}
+	cfg.Nostr.PublishQuorum = 2
+	requireValidationError(t, cfg, "fewer than nostr.publish_quorum 2")
+	cfg.Nostr.PublishQuorum = 1
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("controlled mirror with daemon quorum one: %v", err)
+	}
+	assertStringSlice(t, cfg.Nostr.ServiceWriteRelays(cfg.Nostr.ServiceRelays), []string{"ws://localhost:3334/relay"})
+	assertStringSlice(t, mustMirrorTargets(t, cfg.Nostr), []string{testSharedRelay})
+	if err := cfg.Nostr.ValidateControlPlaneRelays("canonical relay settings", ControlPlaneRelays{
+		Service: []string{testSidecarPublicURL, "wss://different.example"},
+	}); err == nil {
+		t.Fatal("canonical mirror target change accepted")
+	}
+	cfg.Nostr.ControlledRelays = nil
+	requireValidationError(t, cfg, "not in nostr.controlled_relays")
+	cfg.Nostr.ControlledRelays = []string{testSharedRelay}
+	cfg.Nostr.ServiceRelays = []string{testSidecarPublicURL, testPublicRelay}
+	requireValidationError(t, cfg, "refuses public service relay")
+}
+
+func mustMirrorTargets(t *testing.T, cfg NostrConfig) []string {
+	t.Helper()
+	targets, err := cfg.MirrorExternalRelays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return targets
 }

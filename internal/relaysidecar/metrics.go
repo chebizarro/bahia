@@ -29,6 +29,34 @@ func (s *Server) WritePrometheus(w io.Writer) error {
 		s.swept.expired.Load(), s.swept.request.Load(), s.swept.regular.Load()); err != nil {
 		return fmt.Errorf("write relay sidecar metrics: %w", err)
 	}
+	if s.mirror != nil {
+		status, err := s.mirror.Status()
+		if err != nil {
+			return fmt.Errorf("read relay sidecar mirror metrics: %w", err)
+		}
+		if _, err := fmt.Fprint(w,
+			"# HELP bahia_relay_sidecar_mirror_backlog_events Accepted events not yet acknowledged by an external relay\n"+
+				"# TYPE bahia_relay_sidecar_mirror_backlog_events gauge\n"+
+				"# HELP bahia_relay_sidecar_mirror_skipped_events_total Stored events unavailable or refused by current posting policy\n"+
+				"# TYPE bahia_relay_sidecar_mirror_skipped_events_total counter\n"+
+				"# HELP bahia_relay_sidecar_mirror_failure Mirror destination currently failing (1) or healthy (0)\n"+
+				"# TYPE bahia_relay_sidecar_mirror_failure gauge\n"); err != nil {
+			return err
+		}
+		for _, relay := range status {
+			failed := 0
+			if relay.Failure != "" {
+				failed = 1
+			}
+			if _, err := fmt.Fprintf(w,
+				"bahia_relay_sidecar_mirror_backlog_events{relay=%q} %d\n"+
+					"bahia_relay_sidecar_mirror_skipped_events_total{relay=%q} %d\n"+
+					"bahia_relay_sidecar_mirror_failure{relay=%q} %d\n",
+				relay.RelayURL, relay.Backlog, relay.RelayURL, relay.Skipped, relay.RelayURL, failed); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

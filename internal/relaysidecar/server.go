@@ -2,6 +2,7 @@ package relaysidecar
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -55,6 +56,7 @@ type Server struct {
 	consumer    *ConfigConsumer
 	fanout      *liveFanout
 	configDirty *configDirtySet
+	mirror      *mirrorForwarder
 	// configAfter schedules a re-read of a desired coordinate at its NIP-40
 	// expiration; tests replace it.
 	configAfter func(time.Duration, func())
@@ -66,12 +68,31 @@ type sweepCounters struct {
 	expired, request, regular atomic.Uint64
 }
 
+// ServerOption configures an optional sidecar integration.
+type ServerOption func(*serverOptions)
+
+type serverOptions struct {
+	mirrorTransport MirrorTransport
+}
+
+// WithMirrorTransport supplies the NIP-aware external relay pool when
+// mirror_external is enabled. A missing transport fails sidecar startup.
+func WithMirrorTransport(transport MirrorTransport) ServerOption {
+	return func(options *serverOptions) { options.mirrorTransport = transport }
+}
+
 // New creates a Khatru sidecar relay backed by durable storage. signer is the
 // service identity (servicesigner.Open in cmd/relay): its pubkey is the NIP-11
 // pubkey and is always admitted to write and read, and it signs config-consumer
 // acknowledgements. The caller owns the signer and closes it after the server
 // stops.
-func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, logger *zap.Logger) (*Server, error) {
+func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, logger *zap.Logger, opts ...ServerOption) (*Server, error) {
+	var options serverOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&options)
+		}
+	}
 	if signer == nil {
 		return nil, errors.New("relay sidecar requires the service signer (nostr.signer or nostr.private_key)")
 	}
@@ -111,6 +132,14 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	if err != nil {
 		return nil, err
 	}
+	var mirror *mirrorForwarder
+	if nostrCfg.Sidecar.MirrorExternal {
+		mirror, err = newMirrorForwarder(ctx, nostrCfg, signer, store, pol, logger, options.mirrorTransport)
+		if err != nil {
+			_ = store.Close()
+			return nil, fmt.Errorf("configure relay sidecar mirror: %w", err)
+		}
+	}
 	relay := khatru.NewRelay()
 	relay.Log = log.New(os.Stderr, "[bahia-relay-sidecar] ", log.LstdFlags)
 	relay.ServiceURL = nostrCfg.Sidecar.PublicURL
@@ -118,7 +147,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	relay.Info.Name = state.Metadata.Name
 	relay.Info.Description = state.Metadata.Description
 	relay.Info.Icon = state.Metadata.Icon
-	relay.Info.PostingPolicy = "Accepts every valid signed Nostr event kind. Event authorization belongs to protocol consumers, not relay kind allowlists. Regular and ephemeral events created more than one year ago are refused; replaceable and addressable events and deletion requests are accepted at any age. If mirror_external is enabled, this relay is the upstream boundary and Bahia will not also connect directly to mirrored public upstream relays."
+	relay.Info.PostingPolicy = "Accepts every valid signed Nostr event kind. Event authorization belongs to protocol consumers, not relay kind allowlists. Regular and ephemeral events created more than one year ago are refused; replaceable and addressable events and deletion requests are accepted at any age. If mirror_external is enabled, this relay asynchronously forwards stored accepted events only to configured Bahia-controlled external service relays; public relays are never mirror targets."
 	// 9: kind-5 deletions are applied and kept as tombstones (store.go).
 	// 40: expired events are refused, hidden and swept. 45: COUNT from the
 	// indexes. 77: negentropy.
@@ -210,6 +239,9 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 			},
 		})
 		if err != nil {
+			if mirror != nil {
+				mirror.transport.Close()
+			}
 			_ = store.Close()
 			return nil, err
 		}
@@ -227,6 +259,9 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	relay.OnEventSaved = func(_ context.Context, event nostr.Event) {
 		logger.Debug("sidecar event accepted", zap.String("event_id", event.ID.Hex()), zap.Uint16("kind", uint16(event.Kind)))
 		fanout.dispatch(event)
+		if mirror != nil {
+			mirror.Notify()
+		}
 		if configDirty != nil && (event.Kind == configListKind || event.Kind == configPolicyKind) {
 			configDirty.mark(replaceableKey(event))
 		}
@@ -255,6 +290,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		consumer:    consumer,
 		fanout:      fanout,
 		configDirty: configDirty,
+		mirror:      mirror,
 		configAfter: func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 	}, nil
 }
@@ -272,6 +308,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+metricsPath, s.serveMetrics)
+	mux.HandleFunc("GET /ready", s.serveReady)
 	if publicPath == "/" {
 		mux.Handle("/", dispatch)
 		return mux
@@ -291,6 +328,33 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle(publicPath, dispatch)
 	mux.Handle(publicPath+"/", dispatch)
 	return mux
+}
+
+func (s *Server) serveReady(w http.ResponseWriter, _ *http.Request) {
+	response := struct {
+		Status string              `json:"status"`
+		Mirror []MirrorRelayStatus `json:"mirror,omitempty"`
+	}{Status: "pass"}
+	if err := s.store.ping(); err != nil {
+		http.Error(w, "sidecar event store unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if s.mirror != nil {
+		status, err := s.mirror.Status()
+		if err != nil {
+			http.Error(w, "sidecar mirror progress unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		response.Mirror = status
+		for _, relay := range status {
+			if relay.Backlog > 0 || relay.Failure != "" {
+				response.Status = "warn"
+				break
+			}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func sidecarPublicPath(rawURL string) string {
@@ -329,6 +393,9 @@ func (s *Server) Close() error {
 	if s == nil || s.store == nil {
 		return nil
 	}
+	if s.mirror != nil {
+		s.mirror.transport.Close()
+	}
 	return s.store.Close()
 }
 
@@ -352,6 +419,13 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 
+	if s.mirror != nil {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.mirror.Run(workerCtx)
+		}()
+	}
 	s.startConfigWorker(workerCtx)
 	if s.consumer != nil {
 		s.consumer.Start(workerCtx)

@@ -13,8 +13,10 @@ import (
 	"syscall"
 
 	"fiatjaf.com/nostr"
+	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrout"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/servicesigner"
 	"go.uber.org/zap"
@@ -272,8 +274,51 @@ func run(configPath string) error {
 	}
 }
 
+type mirrorPoolTransport struct{ pool *nostrAdapter.RelayPool }
+
+func (m *mirrorPoolTransport) Connect(ctx context.Context) { m.pool.Connect(ctx) }
+func (m *mirrorPoolTransport) PublishToRelaysWithResults(ctx context.Context, event nostr.Event, relays []string) ([]nostrout.Result, error) {
+	return m.pool.PublishToRelaysWithResults(ctx, event, relays)
+}
+func (m *mirrorPoolTransport) ConnectionStatus() []relaysidecar.MirrorConnectionStatus {
+	snapshot := m.pool.HealthSnapshot()
+	status := make([]relaysidecar.MirrorConnectionStatus, 0, len(snapshot.Relays))
+	for _, relay := range snapshot.Relays {
+		status = append(status, relaysidecar.MirrorConnectionStatus{
+			RelayURL: relay.URL, Connected: relay.Connected, LastError: relay.LastError,
+		})
+	}
+	return status
+}
+func (m *mirrorPoolTransport) Close() { m.pool.Close() }
+
 func newSidecar(ctx context.Context, cfg config.NostrConfig, signer nostr.Signer, logger *zap.Logger) (sidecarRuntime, error) {
-	return relaysidecar.New(ctx, cfg, signer, logger)
+	if !cfg.Sidecar.MirrorExternal {
+		return relaysidecar.New(ctx, cfg, signer, logger)
+	}
+	targets, err := cfg.MirrorExternalRelays()
+	if err != nil {
+		return nil, err
+	}
+	service, err := signer.GetPublicKey(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read sidecar mirror service pubkey: %w", err)
+	}
+	guard, err := relayguard.New(service, cfg.ControlledRelaySet())
+	if err != nil {
+		return nil, err
+	}
+	pool := nostrAdapter.NewRelayPool(targets, logger,
+		nostrAdapter.WithAuthSigner(signer),
+		nostrAdapter.WithControlPlaneRelayGuard(guard),
+		nostrAdapter.WithControlPlanePurpose(),
+		nostrAdapter.WithRetryableClosedBudget(cfg.ClosedRetryBudget))
+	runtime, err := relaysidecar.New(ctx, cfg, signer, logger,
+		relaysidecar.WithMirrorTransport(&mirrorPoolTransport{pool: pool}))
+	if err != nil {
+		pool.Close()
+	}
+	return runtime, err
 }
 
 func newLogger(cfg config.LogConfig) (*zap.Logger, error) {

@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -480,7 +481,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// SBOM and config-fabric. Its entries carry the control-plane publish
 	// target and its own runner retries them, so they are never redelivered to
 	// the interop relays.
-	controlPlanePub := nostrAdapter.NewPublisher(cfg.Nostr, controlPlanePool, pgNostrEventRepo, logger,
+	controlPlanePublisherConfig := controlPlanePublisherNostrConfig(cfg.Nostr)
+	controlPlanePub := nostrAdapter.NewPublisher(controlPlanePublisherConfig, controlPlanePool, pgNostrEventRepo, logger,
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
 		nostrAdapter.WithPublisherSigner(serviceKeyer),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
@@ -824,6 +826,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Info("deployment-run stale health awaits durable Loom kind-30100 catch-up on every configured relay")
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
+	if requested, effective, capped := cfg.Nostr.ResolveControlPlanePublishQuorum(len(controlPlanePool.URLs())); capped {
+		logger.Warn("control-plane publish quorum capped by its relay pool",
+			zap.Int("requested_quorum", requested), zap.Int("effective_quorum", effective),
+			zap.Int("relay_count", len(controlPlanePool.URLs())))
+	}
+	healthProvider.RegisterCheck("control_plane_publish_quorum", func() HealthCheck {
+		return controlPlanePublishQuorumHealth(cfg.Nostr, len(controlPlanePool.URLs()))
+	})
 
 	if secretStore != nil {
 		healthProvider.RegisterCheck("secret_store", secretStoreHealthCheck(secretStore))
@@ -4743,6 +4753,31 @@ func subscribeAgentHealth(ctx context.Context, pool *nostrAdapter.RelayPool, age
 
 func shouldRegisterHiveCIRunners(cfg config.HiveCIConfig) bool {
 	return cfg.Enabled
+}
+
+func controlPlanePublisherNostrConfig(cfg config.NostrConfig) config.NostrConfig {
+	if cfg.ControlPlanePublishQuorum != nil {
+		cfg.PublishQuorum = *cfg.ControlPlanePublishQuorum
+	}
+	return cfg
+}
+
+func controlPlanePublishQuorumHealth(cfg config.NostrConfig, poolSize int) HealthCheck {
+	requested, effective, capped := cfg.ResolveControlPlanePublishQuorum(poolSize)
+	check := HealthCheck{
+		Name: "control_plane_publish_quorum", Status: HealthStatusPass,
+		Message: "control-plane publish quorum fits its relay pool",
+		Details: map[string]string{
+			"requested_quorum": strconv.Itoa(requested),
+			"effective_quorum": strconv.Itoa(effective),
+			"relay_count":      strconv.Itoa(poolSize),
+		},
+	}
+	if capped {
+		check.Status = HealthStatusWarn
+		check.Message = "inherited publish quorum is capped by the control-plane relay pool"
+	}
+	return check
 }
 
 // ControlPlaneRelayURLs is the control-plane pool's relay set: the sidecar
