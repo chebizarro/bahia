@@ -212,6 +212,46 @@ func TestCLIConfidentialNostrGolden(t *testing.T) {
 	}
 }
 
+func TestCLISecretsListAcceptsTaglessAndLegacyTaggedRecords(t *testing.T) {
+	f := newConfidentialFixture(t)
+	keyFile := t.TempDir() + "/member.key"
+	if err := os.WriteFile(keyFile, []byte(f.memberKey.Hex()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var ock controlplane.OrgContentKey
+	ock.OrgID, ock.Version = f.org.ID.String(), 1
+	for i := range ock.Key {
+		ock.Key[i] = 0xaa
+	}
+	otherService := uuid.New()
+	other := cliSecretRef{ID: uuid.New().String(), ServiceID: otherService.String(), Name: "OTHER_SERVICE_KEY", Version: 1}
+	f.events = append(f.events, fixtureConfidentialEvent(t, f.serviceKey, ock, kinds.SecretRegistry, other.ID, other, f.timestamp))
+	pool := &cliReadPool{events: f.events}
+	installConfidentialPool(t, pool)
+	args := append([]string{"--nostr-key-file", keyFile}, confidentialArgs(f)...)
+	args = append(args, "secrets", "list", f.secret.ServiceID)
+
+	for _, legacyTags := range []bool{true, false} {
+		t.Run(fmt.Sprintf("legacy-tags-%t", legacyTags), func(t *testing.T) {
+			t.Setenv("BAHIA_DATA_DIR", t.TempDir())
+			if !legacyTags {
+				f.events[4].Tags = f.events[4].Tags[:len(f.events[4].Tags)-2]
+				if err := f.events[4].Sign(f.serviceKey); err != nil {
+					t.Fatal(err)
+				}
+				pool.events = f.events
+			}
+			out, stderr, err := runReadCLI(t, args...)
+			if err != nil || stderr != "" {
+				t.Fatalf("list: err=%v stderr=%q", err, stderr)
+			}
+			if !strings.Contains(out, f.secret.Name) || strings.Contains(out, other.Name) {
+				t.Fatalf("service filter used tags or returned another service: %s", out)
+			}
+		})
+	}
+}
+
 func TestCLIConfidentialNIP46Signer(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	t.Setenv("BAHIA_NOSTR_NSEC", "")

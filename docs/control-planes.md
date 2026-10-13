@@ -126,7 +126,10 @@ the fleet OCK, so relays and non-members hold only ciphertext. With a
 [secret store](architecture/secret-store.md) configured, secret intents and
 records carry only a credential reference; values stay in Signet. Secret
 plaintext leaves the daemon only through the `services/secrets-reveal`
-ContextVM reply, which is encrypted to the requester.
+ContextVM reply, which is encrypted to the requester. Secret record names,
+service IDs and environment IDs are inside the OCK ciphertext,
+not relay-visible tags; readers subscribe by service author and `#t` and
+filter after decryption. Older tagged records remain readable.
 
 ## Interop boundaries
 

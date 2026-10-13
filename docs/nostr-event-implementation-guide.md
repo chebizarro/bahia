@@ -62,7 +62,9 @@ A new kind number requires a written justification that its relay behaviour
 4. **Encryption where the content is confidential.** Org-scoped records use
    the org content key; fleet-scoped records use the fleet OCK. Public tags
    of an encrypted record carry no identifying material (no `p`, no pubkey
-   in `d`).
+   in `d`). Secret registry records keep their opaque UUID `d` and
+   `#t=secret-registry`; name, service and environment are OCK payload fields,
+   not tags. Readers filter those fields only after decryption.
 5. **Sanitized content.** No secret plaintext, generated env files, raw Docker
    transport material, TLS material, bearer or NIP-98 credentials, or
    free-form error text in relay content.

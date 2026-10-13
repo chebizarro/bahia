@@ -78,7 +78,8 @@ func TestCanonicalSecretViewReadsOwnRecordsWithoutPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, absent)
 
-	ref := domain.SecretRef{ID: secretID, ServiceID: service.ID, Name: "DB_PASSWORD", Version: 1, CreatedBy: "operator",
+	environmentID := uuid.New()
+	ref := domain.SecretRef{ID: secretID, ServiceID: service.ID, EnvironmentID: &environmentID, Name: "STRIPE_SECRET_KEY", Version: 1, CreatedBy: "operator",
 		CreatedAt: time.Now().UTC().Truncate(time.Second), UpdatedAt: time.Now().UTC().Truncate(time.Second),
 		CredentialRef: &domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("cd", 32), Version: 4}}
 	require.NoError(t, secrets.PublishSecretRef(ctx, ref))
@@ -99,13 +100,30 @@ func TestCanonicalSecretViewReadsOwnRecordsWithoutPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, orgID.String(), secretOrg)
 
-	// The record on the wire is OCK ciphertext: the credential reference is
-	// not readable to relays.
-	for ev := range store.QueryEvents(gonostr.Filter{Tags: gonostr.TagMap{"d": {secretID.String()}}}) {
+	// The signed event has only the stable opaque coordinate and envelope
+	// tags. All secret metadata and the credential reference stay inside OCK.
+	secretRecords := 0
+	for ev := range store.QueryEvents(gonostr.Filter{Tags: gonostr.TagMap{"t": {"secret-registry"}}}) {
+		dTag := ""
+		for _, tag := range ev.Tags {
+			if len(tag) >= 2 && tag[0] == "d" {
+				dTag = tag[1]
+			}
+		}
+		if dTag != secretID.String() {
+			continue
+		}
+		secretRecords++
+		_, wantTags := nostradapter.ControlStateEnvelope(nostradapter.KindSecretRegistry, secretID.String(), false)
+		require.Equal(t, wantTags, ev.Tags)
 		raw, err := json.Marshal(ev)
 		require.NoError(t, err)
+		require.NotContains(t, string(raw), ref.Name)
+		require.NotContains(t, string(raw), ref.ServiceID.String())
+		require.NotContains(t, string(raw), environmentID.String())
 		require.NotContains(t, string(raw), ref.CredentialRef.CredentialID)
 	}
+	require.Equal(t, 1, secretRecords)
 
 	// Another author's record on the coordinate is not the daemon's state.
 	foreign := gonostr.Generate()

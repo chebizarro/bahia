@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
@@ -59,9 +58,9 @@ func (p *SecretCanonicalPublisher) PublishSecretRef(ctx context.Context, ref dom
 	}
 
 	dTag := SecretDTag(ref.ID)
-	tags, content := SecretRegistryRecord(&ref, false)
+	content := SecretRegistryRecord(&ref, false)
 
-	return p.publishConfidential(ctx, KindSecretRegistry, dTag, false, tags, content, "secret.projection", &ref.ID, orgID)
+	return p.publishConfidential(ctx, KindSecretRegistry, dTag, false, content, "secret.projection", &ref.ID, orgID)
 }
 
 // PublishSecretDeleted publishes a tombstone for a deleted secret.
@@ -78,10 +77,10 @@ func (p *SecretCanonicalPublisher) PublishSecretDeleted(ctx context.Context, sec
 	contentJSON, _ := json.Marshal(map[string]any{"id": secretID.String(), "deleted": true})
 	content := string(contentJSON)
 
-	return p.publishConfidential(ctx, KindSecretRegistry, dTag, true, nil, content, "secret.projection", &secretID, orgID)
+	return p.publishConfidential(ctx, KindSecretRegistry, dTag, true, content, "secret.projection", &secretID, orgID)
 }
 
-func (p *SecretCanonicalPublisher) publishConfidential(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content, entityType string, entityID *uuid.UUID, orgID string) error {
+func (p *SecretCanonicalPublisher) publishConfidential(ctx context.Context, legacyKind int, dTag string, deleted bool, content, entityType string, entityID *uuid.UUID, orgID string) error {
 	topic := ""
 	if fam, ok := cpStateFamilies[legacyKind]; ok {
 		topic = fam.topic
@@ -96,7 +95,7 @@ func (p *SecretCanonicalPublisher) publishConfidential(ctx context.Context, lega
 		return fmt.Errorf("encrypt secret state: %w", err)
 	}
 
-	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, extraTags, encrypted, entityType, entityID)
+	return p.projector.publishControlState(ctx, legacyKind, dTag, deleted, nil, encrypted, entityType, entityID)
 }
 
 func (p *SecretCanonicalPublisher) resolveOrgID(ctx context.Context, serviceID uuid.UUID) (string, error) {
@@ -111,19 +110,11 @@ func SecretDTag(id uuid.UUID) string {
 	return id.String()
 }
 
-// SecretRegistryRecord builds the tags and content for a secret registry
+// SecretRegistryRecord builds the content for a secret registry
 // canonical state record. The content contains ONLY ref metadata — never
 // the encrypted value — and, for a value held by the external secret store,
 // its credential reference.
-func SecretRegistryRecord(ref *domain.SecretRef, deleted bool) (gonostr.Tags, string) {
-	tags := gonostr.Tags{
-		{"service_id", ref.ServiceID.String()},
-		{"name", ref.Name},
-	}
-	if ref.EnvironmentID != nil {
-		tags = append(tags, gonostr.Tag{"environment_id", ref.EnvironmentID.String()})
-	}
-
+func SecretRegistryRecord(ref *domain.SecretRef, deleted bool) string {
 	payload := map[string]any{
 		"id":         ref.ID.String(),
 		"service_id": ref.ServiceID.String(),
@@ -150,5 +141,5 @@ func SecretRegistryRecord(ref *domain.SecretRef, deleted bool) (gonostr.Tags, st
 	}
 
 	contentJSON, _ := json.Marshal(payload)
-	return tags, string(contentJSON)
+	return string(contentJSON)
 }

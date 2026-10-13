@@ -332,7 +332,7 @@ service pubkey:
 | Security (details) | `security-findings`, `security-audit` | per run | protected (NIP-42) |
 | Runtime | `runtime-instance-health`, `route-canary`, `runtime-observation` | `runtime:recovery:…`, `runtime:maintenance:…`, `route:<svc>:<env>:<unit>:<host>` | health and canary public; observations protected |
 | Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, `org:member:<org>:<pubkey>`, `org:invite:<org>:<id>` | OCK ciphertext |
-| Secrets, notifications | `secret-registry`, `notification-channel`, `notification-log` | `<prefix>:<id>`; log is one latest-50 window per channel | OCK ciphertext |
+| Secrets, notifications | `secret-registry`, `notification-channel`, `notification-log` | secret: bare opaque UUID; other families: `<prefix>:<id>`; log is one latest-50 window per channel | OCK ciphertext |
 | Payments | `payment-record` | per record | fleet-OCK ciphertext |
 | Adoption, Hive-CI | `adoption-binding`; `hiveci-policy`, `hiveci-result`, `hiveci-initiation`, `hiveci-release` | `adoption:binding:<svc>:<env>`; `hiveci:policy:<uuidv7>`, `hiveci:result:<event>`, `hiveci:initiation:<event>` | binding public; Hive-CI records fleet-OCK ciphertext |
 | Tools | `tool-provision-intent`, `tool-denylist`, `tool-profile` | `<prefix>:<id>` | fleet-OCK ciphertext |
@@ -385,7 +385,13 @@ in the secret store. A record with `encryption_method` and no
 `credential_ref` names a legacy value Bahia once sealed itself; consumers
 refuse it until the secret is re-pointed. No record ever carries a value.
 `version` is the record's revision; `credential_ref.version` pins the
-credential version.
+credential version. The signed event has only the cp-state envelope tags
+(`d`, `domain`, `schema`, `legacy_kind`, `deleted`, `t`) and the confidential
+`state_hash`; it has no `name`, `service_id`, or `environment_id` tags.
+Readers query the service author and `#t=secret-registry`, decrypt before
+filtering by service or environment, and also accept older records carrying
+those plaintext tags. The `d` remains the same opaque secret UUID across
+revisions and tombstones, preserving NIP-01 replacement and replay identity.
 
 ### Config Fabric status
 

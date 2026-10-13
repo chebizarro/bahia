@@ -54,6 +54,11 @@ layer. Members decrypt the AEAD layer (metadata) only; secret value reveal
 remains a ContextVM request (`services/secrets-reveal`) with permission
 checks.
 
+Secret record names, service IDs and environment IDs are AEAD metadata, never
+relay-visible tags. The `secret-registry` event retains its opaque secret UUID
+`d` coordinate and indexed `t` topic; readers decrypt before filtering by
+service or environment and accept older tagged records from retained history.
+
 ## Deduplication digest
 
 OCK ciphertext is randomized, so every confidential record also carries a

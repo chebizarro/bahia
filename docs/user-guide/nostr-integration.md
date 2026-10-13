@@ -61,6 +61,10 @@ canonical operation executor is unavailable; a relay `OK` does not start a VM.
 The daemon attempts a rejected status, but its delivery is not guaranteed.
 
 Organization, secret, and notification intents are gift-wrapped so relays do not see confidential content.
+Secret registry state keeps an opaque secret UUID as its stable `d` coordinate;
+the name, service and environment are encrypted with the organization content
+key. Subscribe by service author and `#t=secret-registry`, then decrypt before
+filtering secrets by service.
 
 ## Canonical state
 
