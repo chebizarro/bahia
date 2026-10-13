@@ -7,16 +7,28 @@ import (
 	"fmt"
 	"strings"
 
+	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/service"
 )
 
 // SecurityScanIntentHandler submits one scan. Scan status and findings are
 // published by SecurityScanner, not by the intent handler.
-type SecurityScanIntentHandler struct{ scanner SecurityScannerControlPlane }
+type SecurityAttributionPublisher interface {
+	PublishAttribution(context.Context, *domain.SecurityAttribution) error
+}
 
-func NewSecurityScanIntentHandler(scanner SecurityScannerControlPlane) *SecurityScanIntentHandler {
-	return &SecurityScanIntentHandler{scanner: scanner}
+type SecurityScanIntentHandler struct {
+	scanner      SecurityScannerControlPlane
+	attributions SecurityAttributionPublisher
+}
+
+func NewSecurityScanIntentHandler(scanner SecurityScannerControlPlane, attributions ...SecurityAttributionPublisher) *SecurityScanIntentHandler {
+	h := &SecurityScanIntentHandler{scanner: scanner}
+	if len(attributions) != 0 {
+		h.attributions = attributions[0]
+	}
+	return h
 }
 func (*SecurityScanIntentHandler) PermissionFor(string) domain.Permission {
 	return domain.PermWriteServices
@@ -24,6 +36,22 @@ func (*SecurityScanIntentHandler) PermissionFor(string) domain.Permission {
 func (*SecurityScanIntentHandler) IsFleetScoped() bool { return true }
 
 func (h *SecurityScanIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	if intent.Op == "attribution-apply" {
+		if h.attributions == nil {
+			return fmt.Errorf("security attribution publisher is unavailable")
+		}
+		var a domain.SecurityAttribution
+		if err := decodeIntentContent(intent.Content, &a); err != nil {
+			return err
+		}
+		if err := domain.ValidateSecurityAttribution(&a); err != nil {
+			return err
+		}
+		if intent.OrgID != a.OrgID || intent.Coordinate != nostradapter.SecurityAttributionDTag(a) {
+			return fmt.Errorf("security attribution org and coordinate must match the signed intent")
+		}
+		return h.attributions.PublishAttribution(ctx, &a)
+	}
 	if intent.Op != "scan-run" || intent.Coordinate != "security-scan:"+intent.IntentID {
 		return fmt.Errorf("security scan-run requires a security-scan:<intent_id> coordinate")
 	}

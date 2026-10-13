@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,45 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+type testSBOMAttributions struct{ org uuid.UUID }
+
+func (a testSBOMAttributions) HasAttribution(_ context.Context, edge domain.SecurityAttribution) (bool, error) {
+	return edge.OrgID == a.org && edge.SubjectType == "sbom" && edge.SubjectDigest == strings.Repeat("b", 64), nil
+}
+
+func TestF74aSBOMOrgReadRequiresCanonicalAttribution(t *testing.T) {
+	ctx := context.Background()
+	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
+	fixture := attachCanonicalMCPFixture(t, server)
+	signer, err := keyer.New(ctx, nil, fixture.privateKey, nil)
+	require.NoError(t, err)
+	manager := controlplane.NewOCKManager(controlplane.OCKManagerConfig{Signer: signer, ServicePubkey: server.servicePubkey, Publisher: mcpKeyEnvelopeSink{}})
+	encryptor := controlplane.NewConfidentialEncryptor(manager, zap.NewNop())
+	server.confidentialReader = encryptor
+	publisher := nostrpool.NewF74aCanonicalPublisher(fixture.projector, encryptor)
+	org, other := uuid.New(), uuid.New()
+	artifact := uuid.New()
+	sbom := &domain.ArtifactSBOM{ID: uuid.New(), ArtifactID: artifact, Format: domain.SBOMFormatSPDX, RawHash: strings.Repeat("b", 64), CreatedAt: time.Now().UTC()}
+	require.NoError(t, publisher.PublishArtifactSBOM(ctx, sbom))
+	require.NoError(t, publisher.PublishSBOMPackage(ctx, &domain.SBOMPackage{ID: uuid.New(), SBOMID: sbom.ID, Name: "alpha"}))
+	args := map[string]any{"artifact_id": artifact.String(), "org_id": org.String()}
+	denied, err := server.CallTool(authorizedMCPContext(), "bahia_get_sbom", args)
+	require.NoError(t, err)
+	require.True(t, denied.IsError, "missing reader must fail closed")
+	server.securityAttributions = testSBOMAttributions{org: org}
+	allowed, err := server.CallTool(authorizedMCPContext(), "bahia_get_sbom", args)
+	require.NoError(t, err)
+	require.False(t, allowed.IsError)
+	args["org_id"] = other.String()
+	denied, err = server.CallTool(authorizedMCPContext(), "bahia_get_sbom_packages", args)
+	require.NoError(t, err)
+	require.True(t, denied.IsError, "another org must not read packages")
+	search, err := server.CallTool(authorizedMCPContext(), "bahia_search_sbom_packages", map[string]any{"query": "alpha", "org_id": other.String()})
+	require.NoError(t, err)
+	require.False(t, search.IsError)
+	require.JSONEq(t, `{"query":"alpha","packages":[],"total":0}`, search.Content[0].Text)
+}
 
 // Goldens are the MCP response contract, not a second repository implementation.
 func assertF74aGolden(t *testing.T, server *Server, name string, args map[string]any, want any) {

@@ -235,6 +235,7 @@ export const TOOL_PROVISION_INTENT_STATE = 32031;
 export const TOOL_DENYLIST_STATE = 32032;
 export const TOOL_PROFILE_STATE = 32033;
 export const NOTIFICATION_LOG_STATE = 32034;
+export const SECURITY_ATTRIBUTION_RECORD = 32035;
 export const LEGACY_WORKER_STATE = 31974;
 export const LEGACY_WORKER_ASSIGNMENT_STATE = 31991;
 export const LEGACY_WORKER_DRAIN_STATUS = 31992;
@@ -517,6 +518,7 @@ export const CP_STATE_TOPICS = Object.freeze({
   SECURITY_FINDING_DETAIL: 'security-finding-detail',
   SECURITY_TARGET: 'security-target',
   SECURITY_RUN: 'security-run',
+  SECURITY_ATTRIBUTION: 'security-attribution',
   LLM_RELEASE: 'llm-release',
   ARTIFACT_SIGNATURE: 'artifact-signature',
   ARTIFACT_SBOM: 'artifact-sbom',

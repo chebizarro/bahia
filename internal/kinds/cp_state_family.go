@@ -113,6 +113,9 @@ const (
 const (
 	CPStateFamilySecurityTarget CPStateFamily = 32020
 	CPStateFamilySecurityRun    CPStateFamily = 32021
+	// CPStateFamilySecurityAttribution is an org-scoped visibility edge from a
+	// content-addressed SBOM or security target to one organization.
+	CPStateFamilySecurityAttribution CPStateFamily = 32035
 )
 
 // Adoption binding family. One record per adopted workload binds

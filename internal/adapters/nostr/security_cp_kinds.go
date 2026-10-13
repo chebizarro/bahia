@@ -8,8 +8,9 @@ const (
 	KindSecurityScheduleRecord      = kinds.SecurityScheduleRecord
 	KindSecurityFindingDetailRecord = kinds.SecurityFindingDetailRecord
 	// Target and run are 30900-only families with no catalog kind.
-	KindSecurityTargetRecord = int(kinds.CPStateFamilySecurityTarget)
-	KindSecurityRunRecord    = int(kinds.CPStateFamilySecurityRun)
+	KindSecurityTargetRecord      = int(kinds.CPStateFamilySecurityTarget)
+	KindSecurityRunRecord         = int(kinds.CPStateFamilySecurityRun)
+	KindSecurityAttributionRecord = int(kinds.CPStateFamilySecurityAttribution)
 )
 
 // KindAdoptionBindingRecord is the adoption binding family: a 30900-only

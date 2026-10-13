@@ -170,7 +170,7 @@ outcome is a bounded `30315` intent status. PostgreSQL is only an index.
 
 | `build` | `request` |
 | `tool` | `approval-response` |
-| `security` | `scan-run` |
+| `security` | `scan-run`, `attribution-apply` (operator-approved org visibility edge) |
 | `sbom` | `generate`, `import` |
 | `relay` | `policy-set` |
 
@@ -338,6 +338,7 @@ service pubkey:
 | Supply chain | `sbom-reference`, `sbom-availability`, `artifact-signature`, `artifact-sbom`, `artifact-sbom-package` | content-addressed (`sbom:…:<sha256>`) | public |
 | Security | `security-scan-status`, `security-summary` | `security:scan-summary:<run>`, `security:target:<hash>` | public |
 | Security (execution) | `security-target`, `security-run`, `security-schedule`, `security-finding`, `security-finding-detail` | `security:target:<hash>`, `security:run:<id>` | fleet-OCK ciphertext |
+| Security attribution | `security-attribution` | `security:attribution:<org-id>:<security-target\|sbom>:<sha256>` | org-OCK ciphertext; signed `org`, `subject_type`, `subject_digest` tags |
 | Security (details) | `security-findings`, `security-audit` | per run | protected (NIP-42) |
 | Runtime | `runtime-instance-health`, `route-canary`, `runtime-observation` | `runtime:recovery:…`, `runtime:maintenance:…`, `route:<svc>:<env>:<unit>:<host>` | health and canary public; observations protected |
 | Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, `org:member:<org>:<pubkey>`, `org:invite:<org>:<id>` | OCK ciphertext |

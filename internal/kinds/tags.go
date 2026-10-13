@@ -196,6 +196,7 @@ const (
 	CPStateTopicSecurityFindingDetail = "security-finding-detail"
 	CPStateTopicSecurityTarget        = "security-target"
 	CPStateTopicSecurityRun           = "security-run"
+	CPStateTopicSecurityAttribution   = "security-attribution"
 	// CPStateTopicAdoptionBinding is the adoption binding family.
 	CPStateTopicAdoptionBinding = "adoption-binding"
 

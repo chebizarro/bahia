@@ -158,6 +158,30 @@ func lodashSecurityTarget(t *testing.T) domain.SecurityTarget {
 	return target
 }
 
+func TestSecurityAttributionDBLessVisibilityAndRevocation(t *testing.T) {
+	ctx := context.Background()
+	d := startLocalHistoryDaemon(t, t.TempDir(), newRelayScript())
+	p := NewSecurityCanonicalPublisher(d.projector, &nonceConfidentialEncryptor{}, zap.NewNop())
+	a := domain.SecurityAttribution{OrgID: uuid.New(), SubjectType: "security-target", SubjectDigest: strings.Repeat("a", 64), Visible: true}
+	visible, err := p.HasAttribution(ctx, a)
+	require.NoError(t, err)
+	require.False(t, visible, "missing signed edge grants no visibility")
+	require.NoError(t, p.PublishAttribution(ctx, &a))
+	visible, err = p.HasAttribution(ctx, a)
+	require.NoError(t, err)
+	require.True(t, visible)
+	other := a
+	other.OrgID = uuid.New()
+	visible, err = p.HasAttribution(ctx, other)
+	require.NoError(t, err)
+	require.False(t, visible, "content address alone grants no cross-org visibility")
+	a.Visible = false
+	require.NoError(t, p.PublishAttribution(ctx, &a))
+	visible, err = p.HasAttribution(ctx, a)
+	require.NoError(t, err)
+	require.False(t, visible)
+}
+
 // The whole scheduled-scan path with no SQL repository: schedules are derived
 // from retained policy and target cp-state, two concurrent wakeups claim one
 // signed run, and a restart reproduces schedules, runs and findings from the

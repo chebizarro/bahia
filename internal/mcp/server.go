@@ -27,20 +27,23 @@ import (
 // Server provides an MCP-compatible interface for Bahia operations.
 // It exposes deployment registry functionality as MCP tools.
 type Server struct {
-	stateStore         StateEventStore
-	intentProc         *controlplane.IntentProcessor
-	servicePubkey      string
-	confidentialReader ConfidentialStateReader
-	registry           *service.RegistryService
-	llmRegistry        *service.LLMRegistryService
-	logger             *zap.Logger
-	notificationRepo   repository.NotificationRepository // optional: for notification tools
-	notificationDisp   *notifications.Dispatcher         // optional: for notification testing
-	logService         *adapterruntime.LogService        // optional: for deployment run log tools
-	toolProvisioning   repository.ToolProvisioningRepository
-	authorizedPubkeys  []string
-	rbac               *auth.RBAC
-	outbox             OutboxReader // optional: for outbox inspection tool
+	stateStore           StateEventStore
+	intentProc           *controlplane.IntentProcessor
+	servicePubkey        string
+	confidentialReader   ConfidentialStateReader
+	registry             *service.RegistryService
+	llmRegistry          *service.LLMRegistryService
+	logger               *zap.Logger
+	notificationRepo     repository.NotificationRepository // optional: for notification tools
+	notificationDisp     *notifications.Dispatcher         // optional: for notification testing
+	logService           *adapterruntime.LogService        // optional: for deployment run log tools
+	toolProvisioning     repository.ToolProvisioningRepository
+	authorizedPubkeys    []string
+	rbac                 *auth.RBAC
+	securityAttributions interface {
+		HasAttribution(context.Context, domain.SecurityAttribution) (bool, error)
+	}
+	outbox OutboxReader // optional: for outbox inspection tool
 }
 
 // Config holds MCP server configuration.
@@ -65,7 +68,10 @@ type ServerDeps struct {
 	// An empty allowlist denies all non-system callers.
 	AuthorizedPubkeys []string
 	// RBAC is required for tenant-scoped authorization such as secret access.
-	RBAC *auth.RBAC
+	RBAC                 *auth.RBAC
+	SecurityAttributions interface {
+		HasAttribution(context.Context, domain.SecurityAttribution) (bool, error)
+	}
 	// Outbox is optional: exposes daemon outbox counts and failed entries to MCP callers.
 	Outbox OutboxReader
 }
@@ -79,20 +85,21 @@ func NewServerWithOptionsChecked(registry *service.RegistryService, logger *zap.
 		return nil, fmt.Errorf("MCP service pubkey is required for state reads")
 	}
 	return &Server{
-		stateStore:         deps.StateStore,
-		intentProc:         deps.IntentProcessor,
-		servicePubkey:      deps.ServicePubkey,
-		confidentialReader: deps.ConfidentialReader,
-		registry:           registry,
-		llmRegistry:        deps.LLMRegistry,
-		logger:             logger,
-		notificationRepo:   deps.NotificationRepo,
-		notificationDisp:   deps.NotificationDispatcher,
-		logService:         deps.LogService,
-		toolProvisioning:   deps.ToolProvisioning,
-		authorizedPubkeys:  normalizePubkeys(deps.AuthorizedPubkeys),
-		rbac:               deps.RBAC,
-		outbox:             deps.Outbox,
+		stateStore:           deps.StateStore,
+		intentProc:           deps.IntentProcessor,
+		servicePubkey:        deps.ServicePubkey,
+		confidentialReader:   deps.ConfidentialReader,
+		registry:             registry,
+		llmRegistry:          deps.LLMRegistry,
+		logger:               logger,
+		notificationRepo:     deps.NotificationRepo,
+		notificationDisp:     deps.NotificationDispatcher,
+		logService:           deps.LogService,
+		toolProvisioning:     deps.ToolProvisioning,
+		authorizedPubkeys:    normalizePubkeys(deps.AuthorizedPubkeys),
+		rbac:                 deps.RBAC,
+		securityAttributions: deps.SecurityAttributions,
+		outbox:               deps.Outbox,
 	}, nil
 }
 

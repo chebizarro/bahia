@@ -22,6 +22,11 @@ files in `internal/adapters/nostr`, and `web/src/lib/nostr/confidential.js` plus
   resources with no org: payments, security findings/schedules/targets/runs,
   fleet-scoped notification channels, the Soul Factory ledger and the operator
   allowlists.
+- Security/SBOM subjects remain shareable and content-addressed. Their
+  visibility edge is a separate service-signed `security-attribution` cp-state
+  record encrypted with the subject organization's key. The org tag, subject
+  type, and SHA-256 digest identify its coordinate; a missing or revoked edge
+  grants no org-scoped read. SQL may index these edges but is not authority.
 - Content is encrypted with XChaCha20-Poly1305. The AEAD associated data binds
   the ciphertext to the record's coordinate identity
   `{schema, key_org, key_ref, key_version, legacy_kind, d, t}`, so a ciphertext

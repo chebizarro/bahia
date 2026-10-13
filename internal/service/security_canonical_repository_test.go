@@ -26,6 +26,15 @@ type securityOpLog struct {
 	ops []string
 }
 
+type testSecurityAttributionVisibility struct {
+	org    uuid.UUID
+	digest string
+}
+
+func (a testSecurityAttributionVisibility) HasAttribution(_ context.Context, edge domain.SecurityAttribution) (bool, error) {
+	return edge.OrgID == a.org && edge.SubjectType == "security-target" && edge.SubjectDigest == a.digest, nil
+}
+
 func (l *securityOpLog) add(op string) {
 	if l == nil {
 		return
@@ -459,6 +468,15 @@ func TestSecurityScanRunsEndToEndWithoutSQLRepository(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, findings.Findings, 1)
 	require.Equal(t, "GHSA-1", findings.Findings[0].OSVID)
+	org := uuid.New()
+	_, err = scanner.ListFindings(ctx, SecurityFindingsListRequest{OrgID: org, RunID: &first.ID})
+	require.ErrorContains(t, err, "unavailable", "org reads fail closed without a canonical attribution reader")
+	scanner.attributions = testSecurityAttributionVisibility{org: org, digest: first.TargetKeyHash}
+	orgFindings, err := scanner.ListFindings(ctx, SecurityFindingsListRequest{OrgID: org, RunID: &first.ID})
+	require.NoError(t, err)
+	require.Len(t, orgFindings.Findings, 1)
+	_, err = scanner.ListFindings(ctx, SecurityFindingsListRequest{OrgID: uuid.New(), RunID: &first.ID})
+	require.ErrorContains(t, err, "not attributed", "another org cannot read the same content-addressed target")
 	latest, err := repo.GetSecurityTargetLatestByHash(ctx, first.TargetKeyHash)
 	require.NoError(t, err)
 	require.Equal(t, first.ID, latest.RunID)

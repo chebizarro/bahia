@@ -129,6 +129,13 @@ func (s *Server) storeF74aRead(ctx context.Context, name string, args map[string
 		if latest == nil {
 			return errorResult("SBOM not found for artifact"), nil
 		}
+		if orgID, scoped, err := sbomReadOrg(args); err != nil {
+			return errorResult(err.Error()), nil
+		} else if scoped {
+			if err := s.requireSBOMAttribution(ctx, orgID, latest); err != nil {
+				return errorResult(err.Error()), nil
+			}
+		}
 		if name == "bahia_get_sbom" {
 			return jsonResult(sbomToMap(latest))
 		}
@@ -157,9 +164,33 @@ func (s *Server) storeF74aRead(ctx context.Context, name string, args map[string
 		if err != nil {
 			return nil, err
 		}
+		orgID, scoped, err := sbomReadOrg(args)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		visibleSBOMs := map[uuid.UUID]bool{}
+		if scoped {
+			if s.securityAttributions == nil {
+				return errorResult("SBOM canonical org attribution reader is unavailable"), nil
+			}
+			sboms, err := decodeFamily[domain.ArtifactSBOM](ctx, s, nostrpool.KindArtifactSBOMRegistry)
+			if err != nil {
+				return nil, err
+			}
+			for i := range sboms {
+				if sboms[i].RawHash == "" {
+					continue
+				}
+				visible, err := s.securityAttributions.HasAttribution(ctx, domain.SecurityAttribution{OrgID: orgID, SubjectType: "sbom", SubjectDigest: sboms[i].RawHash})
+				if err != nil {
+					return errorResult(err.Error()), nil
+				}
+				visibleSBOMs[sboms[i].ID] = visible
+			}
+		}
 		filtered := make([]domain.SBOMPackage, 0)
 		for _, pkg := range packages {
-			if strings.Contains(strings.ToLower(pkg.Name), strings.ToLower(query)) {
+			if (!scoped || visibleSBOMs[pkg.SBOMID]) && strings.Contains(strings.ToLower(pkg.Name), strings.ToLower(query)) {
 				filtered = append(filtered, pkg)
 			}
 		}
@@ -200,4 +231,34 @@ func (s *Server) storeF74aRead(ctx context.Context, name string, args map[string
 		return errorResult("no observation found"), nil
 	}
 	return nil, fmt.Errorf("unsupported F74a read %s", name)
+}
+
+func sbomReadOrg(args map[string]any) (uuid.UUID, bool, error) {
+	raw, exists := args["org_id"]
+	if !exists {
+		return uuid.Nil, false, nil // Existing operator-only MCP reads remain operator-scoped.
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return uuid.Nil, false, fmt.Errorf("org_id must be a UUID")
+	}
+	id, err := uuid.Parse(value)
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, false, fmt.Errorf("org_id must be a nonzero UUID")
+	}
+	return id, true, nil
+}
+
+func (s *Server) requireSBOMAttribution(ctx context.Context, orgID uuid.UUID, sbom *domain.ArtifactSBOM) error {
+	if s.securityAttributions == nil || sbom == nil || sbom.RawHash == "" {
+		return fmt.Errorf("SBOM has no canonical org attribution; operator must republish attribution state")
+	}
+	visible, err := s.securityAttributions.HasAttribution(ctx, domain.SecurityAttribution{OrgID: orgID, SubjectType: "sbom", SubjectDigest: sbom.RawHash})
+	if err != nil {
+		return err
+	}
+	if !visible {
+		return fmt.Errorf("SBOM is not attributed to this org")
+	}
+	return nil
 }
