@@ -13,6 +13,7 @@
 
   let expanded = $state(false);
   let submitting = $state(false);
+  let orgID = $state('');
   let repoForm = $state({ name: '', backend: 'kopia', repository_uri: '', credential_profile: '' });
   let policyForm = $state({ name: '', require_verification: true, verification_mode: 'kopia_snapshot_verify', retention: '' });
   let recipeForm = $state({ name: '', version: 'v1', backend: 'kopia', repository_id: '', policy_id: '', target_ref: '', verification_mode: 'none' });
@@ -39,15 +40,16 @@
     try {
       let result;
       if (section === 'repositories') {
-        result = await registerBackupRepository(repoForm);
+        result = await registerBackupRepository({ ...repoForm, org_id: orgID });
       } else if (section === 'policies') {
         const metadata = policyForm.retention ? { retention: policyForm.retention } : {};
-        result = await applyBackupPolicy({ ...policyForm, metadata });
+        result = await applyBackupPolicy({ ...policyForm, org_id: orgID, metadata });
       } else if (section === 'recipes') {
-        result = await applyBackupRecipe({ ...recipeForm, policy_id: recipeForm.policy_id || undefined });
+        result = await applyBackupRecipe({ ...recipeForm, org_id: orgID, policy_id: recipeForm.policy_id || undefined });
       } else if (section === 'definitions') {
         result = await applyBackupDefinition({
           ...definitionForm,
+          org_id: orgID,
           schedule_expression: definitionForm.schedule_enabled ? definitionForm.schedule_expression : '',
           approval_policy: definitionForm.requires_approval ? definitionForm.approval_policy : ''
         });
@@ -76,6 +78,7 @@
 
     {#if expanded}
       <form onsubmit={submitMutation}>
+        <label class="wide"><span>Organization UUID</span><input bind:value={orgID} required placeholder="Owning organization UUID" /></label>
         {#if section === 'repositories'}
           <label><span>Name</span><input bind:value={repoForm.name} required placeholder="primary-kopia" /></label>
           <label><span>Backend</span><select bind:value={repoForm.backend}><option value="kopia">Kopia</option><option value="velero">Velero</option></select></label>
@@ -105,7 +108,7 @@
           <label><span>Approval policy</span><input bind:value={definitionForm.approval_policy} disabled={!definitionForm.requires_approval} placeholder="operator" /></label>
         {/if}
         <div class="form-actions">
-          <IntentGate domain="backup">
+          <IntentGate domain="backup" orgId={orgID} orgField>
           <button type="submit" disabled={submitting}>{submitting ? 'Publishing…' : actionLabel}</button>
           </IntentGate>
           <button type="button" class="secondary" disabled={submitting} onclick={resetForm}>Reset</button>

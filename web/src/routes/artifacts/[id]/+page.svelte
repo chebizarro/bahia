@@ -13,6 +13,7 @@ import Table from '$lib/components/Table.svelte';
   import SBOMDetails from '$lib/components/SBOMDetails.svelte';
   import { artifacts, services,  operations, operationsForEntity } from '$lib/stores';
   import { sbomRefs, sbomAvailability } from '$lib/stores/collections/sbom.svelte.js';
+  import { visibleSecuritySubjects } from '$lib/stores/collections/security-attribution.js';
   import { onStoreRefresh } from '$lib/nostr/boot.js';
   import { toast } from '$lib/components/toast.js';
   import { verifyArtifactSignatures } from '$lib/stores/artifact-signatures.svelte.js';
@@ -180,6 +181,13 @@ import Table from '$lib/components/Table.svelte';
   function resetSBOMFromArtifact(source) {
     const embeddedSBOM = source?.sbom || source?.sbom_data || null;
     const embeddedAttestation = source?.sbom_attestation || source?.attestation || null;
+    const payloadHash = String(embeddedSBOM?.raw_hash || embeddedSBOM?.payload_sha256 || source?.sbom_hash || '').replace(/^sha256:/i, '').toLowerCase();
+    if (!visibleSecuritySubjects('sbom').has(payloadHash)) {
+      sbomData = null;
+      sbomAttestation = null;
+      sbomPackages = [];
+      return;
+    }
     sbomData = embeddedSBOM || artifactSBOMSummary(source);
     sbomAttestation = embeddedAttestation;
     sbomPackages = Array.isArray(source?.sbom_packages)
@@ -212,8 +220,11 @@ import Table from '$lib/components/Table.svelte';
   }
 
   function refreshSBOMReferenceEvents() {
-    const events = [...sbomRefs, ...sbomAvailability].map((row) => row.nostr_event);
-    return applySBOMReferenceEvents(events);
+    const rows = [
+      ...sbomRefs.map((row) => ({ event: row.nostr_event, content: parseJsonContent(row.nostr_event, {}) })),
+      ...sbomAvailability.map((row) => ({ event: row.nostr_event, content: row.content }))
+    ];
+    return applySBOMReferenceEvents(rows);
   }
 
   $effect(() => {
@@ -222,12 +233,12 @@ import Table from '$lib/components/Table.svelte';
     return onStoreRefresh(refreshSBOMReferenceEvents);
   });
 
-  function applySBOMReferenceEvents(events) {
+  function applySBOMReferenceEvents(rows) {
     const refs = [];
     const availability = [];
     const expectedArtifactId = String(artifact?.id || '');
     const expectedDigest = artifactSBOMDigest(artifact);
-    for (const event of Array.isArray(events) ? events : []) {
+    for (const { event, content } of Array.isArray(rows) ? rows : []) {
       if (!event || !Array.isArray(event.tags)) continue;
       // Match by artifact tag (30078 + 30004) or by subject/digest tag (fallback)
       const eventArtifact = String(getTagValue(event, 'artifact') || '');
@@ -236,7 +247,6 @@ import Table from '$lib/components/Table.svelte';
       const matchesSubject = expectedDigest && eventSubject && eventSubject === expectedDigest;
       if (!matchesArtifact && !matchesSubject) continue;
       if (!event.id) continue;
-      const content = parseJsonContent(event, {});
       if (Number(event.kind) === SBOM_REFERENCE) refs.push({ event, content });
       if (Number(event.kind) === SBOM_AVAILABILITY_LIST) availability.push({ event, content });
     }

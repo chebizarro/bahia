@@ -328,19 +328,19 @@ describe('public controlplane command helpers', () => {
   });
 
   it('publishes backup mutations and operations as handler-compatible intents', async () => {
-    await api.registerBackupRepository({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' });
+    await api.registerBackupRepository({ org_id: ORG_ID, name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive', idempotency_key: 'repo-1' });
     expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({
-      domain: 'backup', op: 'repository-register', coordinate: expect.stringMatching(/^backup-repository:/),
-      content: expect.objectContaining({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' })
+      domain: 'backup', op: 'repository-register', coordinate: expect.stringMatching(/^backup-repository:/), orgId: ORG_ID,
+      content: expect.objectContaining({ org_id: ORG_ID, name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' })
     }));
 
-    await api.applyBackupPolicy({ name: 'verified', require_verification: true, verification_mode: 'kopia_snapshot_verify', idempotency_key: 'policy-1' });
+    await api.applyBackupPolicy({ org_id: ORG_ID, name: 'verified', require_verification: true, verification_mode: 'kopia_snapshot_verify', idempotency_key: 'policy-1' });
     expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'policy-apply' }));
 
-    await api.applyBackupRecipe({ name: 'daily', version: 'v1', backend: 'kopia', repository_id: 'repo-id', target_ref: 'fs:/srv/app', idempotency_key: 'recipe-1' });
+    await api.applyBackupRecipe({ org_id: ORG_ID, name: 'daily', version: 'v1', backend: 'kopia', repository_id: 'repo-id', target_ref: 'fs:/srv/app', idempotency_key: 'recipe-1' });
     expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'recipe-apply' }));
 
-    await api.applyBackupDefinition({ name: 'daily-app', repository_id: 'repo-id', policy_id: 'policy-id', recipe_id: 'recipe-id', idempotency_key: 'definition-1' });
+    await api.applyBackupDefinition({ org_id: ORG_ID, name: 'daily-app', repository_id: 'repo-id', policy_id: 'policy-id', recipe_id: 'recipe-id', idempotency_key: 'definition-1' });
     expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'definition-apply' }));
 
     await api.requestBackupRun({ id: 'recipe-id', repository_id: 'repo-id', backend: 'kopia', target_ref: 'fs:/srv/app' });
@@ -357,6 +357,12 @@ describe('public controlplane command helpers', () => {
     expect(publishIntentMock).toHaveBeenLastCalledWith(expect.objectContaining({ op: 'retention',
       content: expect.objectContaining({ repository_id: 'repo-id', backend: 'kopia', dry_run: true }) }));
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects a backup configuration mutation without an explicit owner', () => {
+    expect(() => api.registerBackupRepository({ name: 'archive', backend: 'kopia', repository_uri: 'kopia://archive' }))
+      .toThrow('Backup organization UUID is required');
+    expect(publishIntentMock).not.toHaveBeenCalled();
   });
 
   it('evaluates deployment policy from accepted 30315 evaluation', async () => {

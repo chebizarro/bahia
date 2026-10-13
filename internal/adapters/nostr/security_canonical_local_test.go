@@ -182,6 +182,44 @@ func TestSecurityAttributionDBLessVisibilityAndRevocation(t *testing.T) {
 	require.False(t, visible)
 }
 
+type capturedAttributionIndex struct {
+	edges map[string]domain.SecurityAttribution
+}
+
+func (i *capturedAttributionIndex) ResetAttributionIndex(context.Context) error {
+	i.edges = make(map[string]domain.SecurityAttribution)
+	return nil
+}
+
+func (i *capturedAttributionIndex) UpsertAttribution(_ context.Context, edge domain.SecurityAttribution, eventID string, createdAt int64) error {
+	if eventID == "" || createdAt <= 0 {
+		return errors.New("missing canonical source")
+	}
+	if i.edges == nil {
+		i.edges = make(map[string]domain.SecurityAttribution)
+	}
+	i.edges[SecurityAttributionDTag(edge)] = edge
+	return nil
+}
+
+func TestSecurityAttributionDerivedIndexReplaysSignedRevocation(t *testing.T) {
+	ctx := t.Context()
+	d := startLocalHistoryDaemon(t, t.TempDir(), newRelayScript())
+	p := NewSecurityCanonicalPublisher(d.projector, &nonceConfidentialEncryptor{}, zap.NewNop())
+	index := &capturedAttributionIndex{}
+	p.SetAttributionIndex(index)
+	a := domain.SecurityAttribution{OrgID: uuid.New(), SubjectType: "sbom", SubjectDigest: strings.Repeat("a", 64), Visible: true}
+	require.NoError(t, p.PublishAttribution(ctx, &a))
+	require.True(t, index.edges[SecurityAttributionDTag(a)].Visible)
+	a.Visible = false
+	require.NoError(t, p.PublishAttribution(ctx, &a))
+	require.False(t, index.edges[SecurityAttributionDTag(a)].Visible)
+	index.edges["SQL-only"] = domain.SecurityAttribution{Visible: true}
+	require.NoError(t, p.RebuildAttributionIndex(ctx))
+	require.False(t, index.edges[SecurityAttributionDTag(a)].Visible)
+	require.Len(t, index.edges, 1)
+}
+
 // The whole scheduled-scan path with no SQL repository: schedules are derived
 // from retained policy and target cp-state, two concurrent wakeups claim one
 // signed run, and a restart reproduces schedules, runs and findings from the

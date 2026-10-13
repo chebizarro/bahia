@@ -33,7 +33,7 @@ export function readConfidentialTopic(topic, legacyKind, { includeDeleted = fals
         tombstones.push({ dTag: getDTag(event), created_at: event.created_at });
         if (!includeDeleted) continue;
       }
-      rows.push({ ...content, nostr_event_id: event.id, nostr_created_at: event.created_at,
+      rows.push({ ...content, envelope_org_id: orgID, nostr_event_id: event.id, nostr_created_at: event.created_at,
         dTag: getDTag(event), event });
     } catch (error) {
       // A present but wrong key is not an application failure for this operator.

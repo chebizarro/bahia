@@ -31,6 +31,17 @@ type BackupIntentPublisher interface {
 	PublishDeleted(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content string, entityType string, entityID *uuid.UUID) error
 }
 
+// BackupConfigIndex mirrors canonical records; errors cannot veto a signed
+// mutation and the index is never read for authorization or references.
+type BackupConfigIndex interface {
+	ResetBackupConfigIndex(context.Context) error
+	UpsertBackupRecipe(context.Context, *domain.BackupRecipe) error
+	UpsertBackupPolicy(context.Context, *domain.BackupPolicy) error
+	UpsertBackupRepository(context.Context, *domain.BackupRepository) error
+	UpsertBackupDefinition(context.Context, *domain.BackupDefinition) error
+	MarkBackupConfigDeleted(context.Context, int, uuid.UUID) error
+}
+
 // BackupRunAdmissionWriter persists the initial service-signed run state and
 // request identity in one local outbox transaction. It never starts a backup.
 type BackupRunAdmissionWriter interface {
@@ -143,6 +154,8 @@ type BackupIntentHandler struct {
 	runPending               BackupRunPendingWriter
 	runCredentialRecords     BackupRunCredentialRecords
 	ownerReader              BackupOwnershipReader
+	configReader             BackupConfigReader
+	configIndex              BackupConfigIndex
 	runAsyncIntakeEnabled    bool
 	executors                BackupIntentExecutors
 	status                   *IntentStatusPublisher
@@ -160,6 +173,8 @@ type BackupIntentHandlerConfig struct {
 	RunPending               BackupRunPendingWriter
 	RunCredentialRecords     BackupRunCredentialRecords
 	OwnerReader              BackupOwnershipReader
+	ConfigReader             BackupConfigReader
+	ConfigIndex              BackupConfigIndex
 	RunAsyncIntakeEnabled    bool
 	Executors                BackupIntentExecutors
 	Status                   *IntentStatusPublisher
@@ -182,6 +197,8 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		runPending:               cfg.RunPending,
 		runCredentialRecords:     cfg.RunCredentialRecords,
 		ownerReader:              cfg.OwnerReader,
+		configReader:             cfg.ConfigReader,
+		configIndex:              cfg.ConfigIndex,
 		runAsyncIntakeEnabled:    cfg.RunAsyncIntakeEnabled,
 		executors:                cfg.Executors,
 		status:                   cfg.Status,
@@ -195,13 +212,18 @@ func (h *BackupIntentHandler) HandleIntent(ctx context.Context, intent *Intent) 
 	if intent == nil {
 		return fmt.Errorf("backup intent is missing")
 	}
-	if intent.Op != "run" && (h.registry == nil || h.sqlRepositoryUnavailable) {
+	if intent.Op != "run" && intent.Op != "recipe-apply" && intent.Op != "policy-apply" &&
+		intent.Op != "repository-register" && intent.Op != "definition-apply" && intent.Op != "delete" &&
+		(h.registry == nil || h.sqlRepositoryUnavailable) {
 		return fmt.Errorf("%w: %s requires a SQL-backed registry", ErrBackupRepositoryUnavailable, intent.Op)
 	}
 	switch intent.Op {
 	case "recipe-apply", "policy-apply", "repository-register", "definition-apply", "delete":
 		if h.publisher == nil {
 			return fmt.Errorf("canonical backup publisher is unavailable")
+		}
+		if h.configReader == nil || h.ownerReader == nil {
+			return fmt.Errorf("canonical backup configuration reader is unavailable")
 		}
 	}
 	switch intent.Op {
@@ -230,6 +252,64 @@ func (h *BackupIntentHandler) HandleIntent(ctx context.Context, intent *Intent) 
 	default:
 		return fmt.Errorf("unknown backup operation %q", intent.Op)
 	}
+}
+
+func readBackupConfig[T any](ctx context.Context, reader BackupConfigReader, family int, id uuid.UUID) (*T, error) {
+	raw, found, err := reader.ConfigOf(ctx, family, id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("backup reference %s has no canonical state", id)
+	}
+	var value T
+	if err := decodeBackupConfig(raw, &value); err != nil {
+		return nil, fmt.Errorf("decode canonical backup %s: %w", id, err)
+	}
+	return &value, nil
+}
+
+func decodeBackupConfig(raw json.RawMessage, value any) error {
+	var content map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &content); err != nil {
+		return err
+	}
+	for _, field := range []string{"created_at", "updated_at"} {
+		if string(content[field]) == `""` {
+			delete(content, field)
+		}
+	}
+	clean, err := json.Marshal(content)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(clean, value)
+}
+
+func (h *BackupIntentHandler) configTimes(ctx context.Context, family int, id uuid.UUID, created, updated *time.Time) error {
+	raw, found, err := h.configReader.ConfigOf(ctx, family, id)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	*created = now
+	if found {
+		var prior struct {
+			CreatedAt string `json:"created_at"`
+		}
+		if err := json.Unmarshal(raw, &prior); err != nil {
+			return err
+		}
+		if prior.CreatedAt != "" {
+			date, err := time.Parse(time.RFC3339, prior.CreatedAt)
+			if err != nil {
+				return err
+			}
+			*created = date
+		}
+	}
+	*updated = now
+	return nil
 }
 
 // PermissionFor returns the permission required for backup operations.
@@ -293,23 +373,11 @@ func (h *BackupIntentHandler) handleRecipeApply(ctx context.Context, intent *Int
 		}
 	}
 
-	// Level-triggered: look up by ID for upsert.
-	if recipe.ID != uuid.Nil {
-		if existing, err := h.registry.GetRecipe(ctx, recipe.ID); err == nil && existing != nil {
-			// Merge: intent content is full desired state, just keep the ID.
-			_ = existing
-		}
-	}
-	if recipe.ID == uuid.Nil {
-		recipe.ID = domain.NewEntityID()
-	}
-
-	// Validate references exist.
-	if _, err := h.registry.GetRepository(ctx, recipe.RepositoryID); err != nil {
+	if _, err := readBackupConfig[domain.BackupRepository](ctx, h.configReader, kinds.BackupRepositoryRegistry, recipe.RepositoryID); err != nil {
 		return fmt.Errorf("repository %s not found: %w", recipe.RepositoryID, err)
 	}
 	if recipe.PolicyID != nil {
-		if _, err := h.registry.GetPolicy(ctx, *recipe.PolicyID); err != nil {
+		if _, err := readBackupConfig[domain.BackupPolicy](ctx, h.configReader, kinds.BackupPolicyRegistry, *recipe.PolicyID); err != nil {
 			return fmt.Errorf("policy %s not found: %w", *recipe.PolicyID, err)
 		}
 	}
@@ -317,12 +385,13 @@ func (h *BackupIntentHandler) handleRecipeApply(ctx context.Context, intent *Int
 	if err := domain.ValidateBackupRecipe(recipe); err != nil {
 		return fmt.Errorf("validate recipe: %w", err)
 	}
+	if err := h.configTimes(ctx, kinds.BackupRecipeRegistry, recipe.ID, &recipe.CreatedAt, &recipe.UpdatedAt); err != nil {
+		return err
+	}
 	if err := h.publishRecipe(ctx, recipe, false); err != nil {
 		return err
 	}
-	if err := h.registry.CreateOrUpdateRecipe(ctx, recipe); err != nil {
-		return fmt.Errorf("index canonical recipe: %w", err)
-	}
+	h.mirrorPublishedConfig(ctx, kinds.BackupRecipeRegistry, recipe.ID, false)
 	return nil
 }
 
@@ -335,24 +404,16 @@ func (h *BackupIntentHandler) handlePolicyApply(ctx context.Context, intent *Int
 		return err
 	}
 
-	if policy.ID == uuid.Nil {
-		if existing, err := h.registry.GetPolicyByName(ctx, policy.Name); err == nil && existing != nil {
-			policy.ID = existing.ID
-		}
-	}
-	if policy.ID == uuid.Nil {
-		policy.ID = domain.NewEntityID()
-	}
-
 	if err := domain.ValidateBackupPolicy(policy); err != nil {
 		return fmt.Errorf("validate policy: %w", err)
+	}
+	if err := h.configTimes(ctx, kinds.BackupPolicyRegistry, policy.ID, &policy.CreatedAt, &policy.UpdatedAt); err != nil {
+		return err
 	}
 	if err := h.publishPolicy(ctx, policy, false); err != nil {
 		return err
 	}
-	if err := h.registry.CreateOrUpdatePolicy(ctx, policy); err != nil {
-		return fmt.Errorf("index canonical policy: %w", err)
-	}
+	h.mirrorPublishedConfig(ctx, kinds.BackupPolicyRegistry, policy.ID, false)
 	return nil
 }
 
@@ -365,32 +426,20 @@ func (h *BackupIntentHandler) handleRepositoryRegister(ctx context.Context, inte
 		return err
 	}
 
-	if repo.ID == uuid.Nil {
-		if existing, err := h.registry.GetRepositoryByName(ctx, repo.Name); err == nil && existing != nil {
-			repo.ID = existing.ID
-		}
-	}
-	if repo.ID == uuid.Nil {
-		repo.ID = domain.NewEntityID()
-	}
-
 	if err := domain.ValidateBackupRepository(repo); err != nil {
 		return fmt.Errorf("validate repository: %w", err)
+	}
+	if err := h.configTimes(ctx, kinds.BackupRepositoryRegistry, repo.ID, &repo.CreatedAt, &repo.UpdatedAt); err != nil {
+		return err
 	}
 	if err := h.publishRepository(ctx, repo, false); err != nil {
 		return err
 	}
-	if err := h.registry.CreateOrUpdateRepository(ctx, repo); err != nil {
-		return fmt.Errorf("index canonical repository: %w", err)
-	}
+	h.mirrorPublishedConfig(ctx, kinds.BackupRepositoryRegistry, repo.ID, false)
 	return nil
 }
 
 func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent *Intent) error {
-	if h.definitions == nil {
-		return fmt.Errorf("backup definition registry is not configured")
-	}
-
 	def, err := backupDefinitionFromIntentContent(intent)
 	if err != nil {
 		return fmt.Errorf("parse definition from intent: %w", err)
@@ -407,27 +456,17 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 		}
 	}
 
-	if def.ID == uuid.Nil {
-		if existing, err := h.definitions.GetBackupDefinitionByName(ctx, def.Name); err == nil && existing != nil {
-			def.ID = existing.ID
-		}
+	repo, err := readBackupConfig[domain.BackupRepository](ctx, h.configReader, kinds.BackupRepositoryRegistry, def.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("repository %s not found: %w", def.RepositoryID, err)
 	}
-	if def.ID == uuid.Nil {
-		def.ID = domain.NewEntityID()
+	policy, err := readBackupConfig[domain.BackupPolicy](ctx, h.configReader, kinds.BackupPolicyRegistry, def.PolicyID)
+	if err != nil {
+		return fmt.Errorf("policy %s not found: %w", def.PolicyID, err)
 	}
-
-	// Resolve references to get display names.
-	repo, err := h.registry.GetRepository(ctx, def.RepositoryID)
-	if err != nil || repo == nil {
-		return fmt.Errorf("repository %s not found", def.RepositoryID)
-	}
-	policy, err := h.registry.GetPolicy(ctx, def.PolicyID)
-	if err != nil || policy == nil {
-		return fmt.Errorf("policy %s not found", def.PolicyID)
-	}
-	recipe, err := h.registry.GetRecipe(ctx, def.RecipeID)
-	if err != nil || recipe == nil {
-		return fmt.Errorf("recipe %s not found", def.RecipeID)
+	recipe, err := readBackupConfig[domain.BackupRecipe](ctx, h.configReader, kinds.BackupRecipeRegistry, def.RecipeID)
+	if err != nil {
+		return fmt.Errorf("recipe %s not found: %w", def.RecipeID, err)
 	}
 	def.RepositoryName = repo.Name
 	def.PolicyName = policy.Name
@@ -441,12 +480,13 @@ func (h *BackupIntentHandler) handleDefinitionApply(ctx context.Context, intent 
 	if err := domain.ValidateBackupDefinition(def); err != nil {
 		return fmt.Errorf("validate definition: %w", err)
 	}
+	if err := h.configTimes(ctx, kinds.BackupDefinitionRegistry, def.ID, &def.CreatedAt, &def.UpdatedAt); err != nil {
+		return err
+	}
 	if err := h.publishDefinition(ctx, def, false); err != nil {
 		return err
 	}
-	if err := h.definitions.UpsertBackupDefinition(ctx, def); err != nil {
-		return fmt.Errorf("index canonical definition: %w", err)
-	}
+	h.mirrorPublishedConfig(ctx, kinds.BackupDefinitionRegistry, def.ID, false)
 	return nil
 }
 
@@ -805,37 +845,86 @@ func (h *BackupIntentHandler) handleDelete(ctx context.Context, intent *Intent) 
 	if err := h.requireReferenceOwner(ctx, family, entityID, intent.OrgID); err != nil {
 		return err
 	}
-
+	var publishErr error
 	switch entityType {
 	case "recipe":
-		recipe, err := h.registry.GetRecipe(ctx, entityID)
+		recipe, err := readBackupConfig[domain.BackupRecipe](ctx, h.configReader, family, entityID)
 		if err != nil {
 			return fmt.Errorf("recipe %s not found: %w", entityID, err)
 		}
-		return h.publishRecipe(ctx, recipe, true)
+		publishErr = h.publishRecipe(ctx, recipe, true)
 	case "policy":
-		policy, err := h.registry.GetPolicy(ctx, entityID)
+		policy, err := readBackupConfig[domain.BackupPolicy](ctx, h.configReader, family, entityID)
 		if err != nil {
 			return fmt.Errorf("policy %s not found: %w", entityID, err)
 		}
-		return h.publishPolicy(ctx, policy, true)
+		publishErr = h.publishPolicy(ctx, policy, true)
 	case "repository":
-		repo, err := h.registry.GetRepository(ctx, entityID)
+		repo, err := readBackupConfig[domain.BackupRepository](ctx, h.configReader, family, entityID)
 		if err != nil {
 			return fmt.Errorf("repository %s not found: %w", entityID, err)
 		}
-		return h.publishRepository(ctx, repo, true)
+		publishErr = h.publishRepository(ctx, repo, true)
 	case "definition":
-		if h.definitions == nil {
-			return fmt.Errorf("definition registry not configured")
-		}
-		def, err := h.definitions.GetBackupDefinitionByName(ctx, entityID.String())
+		def, err := readBackupConfig[domain.BackupDefinition](ctx, h.configReader, family, entityID)
 		if err != nil {
 			return fmt.Errorf("definition %s not found: %w", entityID, err)
 		}
-		return h.publishDefinition(ctx, def, true)
+		publishErr = h.publishDefinition(ctx, def, true)
 	default:
 		return fmt.Errorf("unknown backup entity type for delete: %q", entityType)
+	}
+	if publishErr != nil {
+		return publishErr
+	}
+	h.mirrorPublishedConfig(ctx, family, entityID, true)
+	return nil
+}
+
+// mirrorPublishedConfig reads back the signed local head. A queued projection
+// that could not be retained locally must not make its unsigned input visible
+// in SQL; the post-warm canonical replay can repair the disposable index.
+func (h *BackupIntentHandler) mirrorPublishedConfig(ctx context.Context, family int, id uuid.UUID, deleted bool) {
+	if h.configIndex == nil {
+		return
+	}
+	raw, found, err := h.configReader.ConfigOf(ctx, family, id)
+	if deleted && errors.Is(err, ErrBackupConfigDeleted) {
+		err = h.configIndex.MarkBackupConfigDeleted(ctx, family, id)
+	} else if err == nil && found && !deleted {
+		switch family {
+		case kinds.BackupRecipeRegistry:
+			var value domain.BackupRecipe
+			err = decodeBackupConfig(raw, &value)
+			if err == nil {
+				err = h.configIndex.UpsertBackupRecipe(ctx, &value)
+			}
+		case kinds.BackupPolicyRegistry:
+			var value domain.BackupPolicy
+			err = decodeBackupConfig(raw, &value)
+			if err == nil {
+				err = h.configIndex.UpsertBackupPolicy(ctx, &value)
+			}
+		case kinds.BackupRepositoryRegistry:
+			var value domain.BackupRepository
+			err = decodeBackupConfig(raw, &value)
+			if err == nil {
+				err = h.configIndex.UpsertBackupRepository(ctx, &value)
+			}
+		case kinds.BackupDefinitionRegistry:
+			var value domain.BackupDefinition
+			err = decodeBackupConfig(raw, &value)
+			if err == nil {
+				err = h.configIndex.UpsertBackupDefinition(ctx, &value)
+			}
+		default:
+			err = fmt.Errorf("unknown backup family %d", family)
+		}
+	} else if err == nil {
+		err = fmt.Errorf("published backup %s has no matching retained canonical head", id)
+	}
+	if err != nil {
+		h.logger.Warn("backup SQL index delayed", zap.String("id", id.String()), zap.Error(err))
 	}
 }
 

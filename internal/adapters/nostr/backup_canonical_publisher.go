@@ -85,8 +85,11 @@ func (p *BackupCanonicalPublisher) SetRuntimeObservationSource(src BackupRuntime
 
 // PublishRecipe publishes a canonical backup recipe registry record.
 func (p *BackupCanonicalPublisher) PublishRecipe(ctx context.Context, recipe *domain.BackupRecipe) error {
-	if p.projector == nil || !p.projector.Enabled() || recipe == nil {
+	if recipe == nil {
 		return nil
+	}
+	if p == nil || p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("canonical backup recipe publisher is unavailable")
 	}
 	if recipe.OrgID == uuid.Nil {
 		return fmt.Errorf("backup recipe requires canonical org ownership")
@@ -98,8 +101,11 @@ func (p *BackupCanonicalPublisher) PublishRecipe(ctx context.Context, recipe *do
 
 // PublishPolicy publishes a canonical backup policy registry record.
 func (p *BackupCanonicalPublisher) PublishPolicy(ctx context.Context, policy *domain.BackupPolicy) error {
-	if p.projector == nil || !p.projector.Enabled() || policy == nil {
+	if policy == nil {
 		return nil
+	}
+	if p == nil || p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("canonical backup policy publisher is unavailable")
 	}
 	if policy.OrgID == uuid.Nil {
 		return fmt.Errorf("backup policy requires canonical org ownership")
@@ -111,8 +117,11 @@ func (p *BackupCanonicalPublisher) PublishPolicy(ctx context.Context, policy *do
 
 // PublishRepository publishes a canonical backup repository registry record.
 func (p *BackupCanonicalPublisher) PublishRepository(ctx context.Context, repo *domain.BackupRepository) error {
-	if p.projector == nil || !p.projector.Enabled() || repo == nil {
+	if repo == nil {
 		return nil
+	}
+	if p == nil || p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("canonical backup repository publisher is unavailable")
 	}
 	if repo.OrgID == uuid.Nil {
 		return fmt.Errorf("backup repository requires canonical org ownership")
@@ -124,8 +133,11 @@ func (p *BackupCanonicalPublisher) PublishRepository(ctx context.Context, repo *
 
 // PublishDefinition publishes a canonical backup definition registry record.
 func (p *BackupCanonicalPublisher) PublishDefinition(ctx context.Context, def *domain.BackupDefinition) error {
-	if p.projector == nil || !p.projector.Enabled() || def == nil {
+	if def == nil {
 		return nil
+	}
+	if p == nil || p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("canonical backup definition publisher is unavailable")
 	}
 	if def.OrgID == uuid.Nil {
 		return fmt.Errorf("backup definition requires canonical org ownership")
@@ -203,8 +215,8 @@ func (p *BackupCanonicalPublisher) PublishRetention(ctx context.Context, run *do
 
 // PublishDeleted publishes a tombstone for the given backup entity.
 func (p *BackupCanonicalPublisher) PublishDeleted(ctx context.Context, legacyKind int, dTag string, tags gonostr.Tags, content string, entityType string, entityID *uuid.UUID) error {
-	if p.projector == nil || !p.projector.Enabled() {
-		return nil
+	if p == nil || p.projector == nil || !p.projector.Enabled() {
+		return fmt.Errorf("canonical backup deletion publisher is unavailable")
 	}
 	return p.projector.publishControlState(ctx, legacyKind, dTag, true, tags, content, entityType, entityID)
 }

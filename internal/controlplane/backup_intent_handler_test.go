@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -30,6 +32,35 @@ type fakeBackupOwnerReader struct{ owned map[uuid.UUID]uuid.UUID }
 func (f fakeBackupOwnerReader) OwnerOf(_ context.Context, _ int, id uuid.UUID) (uuid.UUID, bool, error) {
 	owner, found := f.owned[id]
 	return owner, found, nil
+}
+
+type fakeBackupConfigReader struct{ registry *fakeBackupIntentRegistry }
+
+func (f fakeBackupConfigReader) ConfigOf(_ context.Context, family int, id uuid.UUID) (json.RawMessage, bool, error) {
+	var value any
+	switch family {
+	case kinds.BackupRecipeRegistry:
+		if v := f.registry.recipes[id]; v != nil {
+			value = v
+		}
+	case kinds.BackupPolicyRegistry:
+		if v := f.registry.policies[id]; v != nil {
+			value = v
+		}
+	case kinds.BackupRepositoryRegistry:
+		if v := f.registry.repositories[id]; v != nil {
+			value = v
+		}
+	case kinds.BackupDefinitionRegistry:
+		if v := f.registry.definitions[id]; v != nil {
+			value = v
+		}
+	}
+	if value == nil {
+		return nil, false, nil
+	}
+	raw, err := json.Marshal(value)
+	return raw, true, err
 }
 
 func TestBackupIntentHandler_PermissionForManageBackups(t *testing.T) {
@@ -63,7 +94,8 @@ func TestBackupIntentHandler_RecipeApply(t *testing.T) {
 	publisher := &fakeBackupIntentPublisher{}
 	repoID, recipeID := uuid.New(), uuid.New()
 	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
-		Registry:    registry,
+		Registry:     registry,
+		ConfigReader: fakeBackupConfigReader{registry}, ConfigIndex: registry,
 		Publisher:   publisher,
 		OwnerReader: fakeBackupOwnerReader{owned: map[uuid.UUID]uuid.UUID{repoID: testOrgID()}},
 		Logger:      zap.NewNop(),
@@ -90,20 +122,30 @@ func TestBackupIntentHandler_RecipeApply(t *testing.T) {
 		t.Fatalf("HandleIntent: %v", err)
 	}
 
-	if len(registry.recipes) != 1 {
-		t.Errorf("expected 1 recipe, got %d", len(registry.recipes))
-	}
-	require.Equal(t, testOrgID(), registry.recipes[recipeID].OrgID)
+	require.Empty(t, registry.recipes, "a publisher mock cannot supply a signed canonical head to index")
 	if publisher.recipeCount != 1 {
 		t.Errorf("expected 1 recipe publish, got %d", publisher.recipeCount)
 	}
+}
+
+func TestBackupIntentHandlerMirrorsOnlyCanonicalConfig(t *testing.T) {
+	id := uuid.New()
+	canonical := newFakeBackupIntentRegistry()
+	index := newFakeBackupIntentRegistry()
+	canonical.policies[id] = &domain.BackupPolicy{ID: id, OrgID: testOrgID(), Name: "signed-policy", VerificationMode: domain.BackupVerificationNone}
+	h := NewBackupIntentHandler(BackupIntentHandlerConfig{ConfigReader: fakeBackupConfigReader{canonical}, ConfigIndex: index, Logger: zap.NewNop()})
+	h.mirrorPublishedConfig(t.Context(), kinds.BackupPolicyRegistry, id, false)
+	require.Equal(t, "signed-policy", index.policies[id].Name)
+	require.Equal(t, testOrgID(), index.policies[id].OrgID)
+	h.mirrorPublishedConfig(t.Context(), kinds.BackupRecipeRegistry, uuid.New(), false)
+	require.Empty(t, index.recipes, "missing canonical state cannot advance the SQL index")
 }
 
 func TestBackupIntentHandlerDoesNotIndexUnpublishedPolicy(t *testing.T) {
 	id := uuid.New()
 	registry := newFakeBackupIntentRegistry()
 	publisher := &fakeBackupIntentPublisher{err: fmt.Errorf("relay outbox unavailable")}
-	h := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Publisher: publisher, OwnerReader: fakeBackupOwnerReader{}, Logger: zap.NewNop()})
+	h := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Publisher: publisher, OwnerReader: fakeBackupOwnerReader{}, ConfigReader: fakeBackupConfigReader{registry}, ConfigIndex: registry, Logger: zap.NewNop()})
 	intent := &Intent{Op: "policy-apply", OrgID: testOrgID(), Content: map[string]any{
 		"id": id.String(), "org_id": testOrgID().String(), "name": "retention", "verification_mode": "none",
 	}}
@@ -116,7 +158,8 @@ func TestBackupIntentHandler_Delete(t *testing.T) {
 	publisher := &fakeBackupIntentPublisher{}
 	recipeID := uuid.New()
 	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
-		Registry:    registry,
+		Registry:     registry,
+		ConfigReader: fakeBackupConfigReader{registry}, ConfigIndex: registry,
 		Publisher:   publisher,
 		OwnerReader: fakeBackupOwnerReader{owned: map[uuid.UUID]uuid.UUID{recipeID: testOrgID()}},
 		Logger:      zap.NewNop(),
@@ -149,6 +192,8 @@ type fakeBackupIntentRegistry struct {
 	recipes          map[uuid.UUID]*domain.BackupRecipe
 	policies         map[uuid.UUID]*domain.BackupPolicy
 	repositories     map[uuid.UUID]*domain.BackupRepository
+	definitions      map[uuid.UUID]*domain.BackupDefinition
+	deleted          map[uuid.UUID]bool
 	runs             map[uuid.UUID]*domain.BackupRun
 	restores         map[uuid.UUID]*domain.BackupRestoreRun
 	verifications    map[uuid.UUID]*domain.BackupVerificationRecord
@@ -161,11 +206,50 @@ func newFakeBackupIntentRegistry() *fakeBackupIntentRegistry {
 		recipes:       make(map[uuid.UUID]*domain.BackupRecipe),
 		policies:      make(map[uuid.UUID]*domain.BackupPolicy),
 		repositories:  make(map[uuid.UUID]*domain.BackupRepository),
+		definitions:   make(map[uuid.UUID]*domain.BackupDefinition),
+		deleted:       make(map[uuid.UUID]bool),
 		runs:          make(map[uuid.UUID]*domain.BackupRun),
 		restores:      make(map[uuid.UUID]*domain.BackupRestoreRun),
 		verifications: make(map[uuid.UUID]*domain.BackupVerificationRecord),
 		retentionRuns: make(map[uuid.UUID]*domain.BackupRetentionRun),
 	}
+}
+
+func (r *fakeBackupIntentRegistry) UpsertBackupRecipe(ctx context.Context, v *domain.BackupRecipe) error {
+	r.deleted[v.ID] = false
+	return r.CreateOrUpdateRecipe(ctx, v)
+}
+func (r *fakeBackupIntentRegistry) UpsertBackupPolicy(ctx context.Context, v *domain.BackupPolicy) error {
+	r.deleted[v.ID] = false
+	return r.CreateOrUpdatePolicy(ctx, v)
+}
+func (r *fakeBackupIntentRegistry) UpsertBackupRepository(ctx context.Context, v *domain.BackupRepository) error {
+	r.deleted[v.ID] = false
+	return r.CreateOrUpdateRepository(ctx, v)
+}
+func (r *fakeBackupIntentRegistry) UpsertBackupDefinition(_ context.Context, v *domain.BackupDefinition) error {
+	r.deleted[v.ID] = false
+	r.definitions[v.ID] = v
+	return nil
+}
+func (r *fakeBackupIntentRegistry) MarkBackupConfigDeleted(_ context.Context, family int, id uuid.UUID) error {
+	r.deleted[id] = true
+	return nil
+}
+func (r *fakeBackupIntentRegistry) ResetBackupConfigIndex(context.Context) error {
+	for id := range r.repositories {
+		r.deleted[id] = true
+	}
+	for id := range r.policies {
+		r.deleted[id] = true
+	}
+	for id := range r.recipes {
+		r.deleted[id] = true
+	}
+	for id := range r.definitions {
+		r.deleted[id] = true
+	}
+	return nil
 }
 
 func (r *fakeBackupIntentRegistry) CreateOrUpdateRecipe(_ context.Context, recipe *domain.BackupRecipe) error {

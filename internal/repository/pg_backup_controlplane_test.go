@@ -85,6 +85,7 @@ func TestPgBackupControlPlaneRepositoryUpsertAndGetBackupDefinition(t *testing.T
 	defer mock.Close()
 	repo := newPgBackupControlPlaneRepositoryWithDB(mock)
 	definition := backupDefinitionFixture()
+	definition.OrgID = uuid.New()
 	tenantID := uuid.New()
 	environmentID := uuid.New()
 	definition.TenantID = &tenantID
@@ -95,23 +96,24 @@ func TestPgBackupControlPlaneRepositoryUpsertAndGetBackupDefinition(t *testing.T
 		WithArgs(definition.ID, definition.Name, definition.RepositoryID, definition.RepositoryName, definition.PolicyID, definition.PolicyName, definition.RecipeID, definition.RecipeName,
 			definition.RecipeVersion, definition.ScheduleExpression, definition.ScheduleEnabled, definition.ScheduleJitterWindow, tenantID, definition.TenantName,
 			environmentID, definition.EnvironmentName, definition.OwnerPubkey, definition.RequiresApproval, definition.ApprovalPolicy, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(),
-			pgxmock.AnyArg(), definition.Group, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), definition.CreatedBy).
+			pgxmock.AnyArg(), definition.Group, pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg(), definition.CreatedBy, definition.OrgID).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 
 	require.NoError(t, repo.UpsertBackupDefinition(ctx, definition))
 
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + backupDefinitionColumns + " FROM backup_definitions WHERE id = $1")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + backupDefinitionSelectColumns + " FROM backup_definitions WHERE id = $1 AND NOT canonical_deleted")).
 		WithArgs(definition.ID).
-		WillReturnRows(pgxmock.NewRows(splitColumns(backupDefinitionColumns)).
+		WillReturnRows(pgxmock.NewRows(splitColumns(backupDefinitionSelectColumns)).
 			AddRow(definition.ID, definition.Name, definition.RepositoryID, definition.RepositoryName, definition.PolicyID, definition.PolicyName, definition.RecipeID, definition.RecipeName,
 				definition.RecipeVersion, definition.ScheduleExpression, definition.ScheduleEnabled, definition.ScheduleJitterWindow, tenantID.String(), definition.TenantName,
 				environmentID.String(), definition.EnvironmentName, definition.OwnerPubkey, definition.RequiresApproval, definition.ApprovalPolicy, []byte(`{"allowed_prefixes":["fs:/restore"]}`),
-				[]byte(`["site:west"]`), []byte(`["backup.snapshot_create"]`), []byte(`{"service":"api"}`), definition.Group, []byte(`{"source":"test"}`), now, now, definition.CreatedBy))
+				[]byte(`["site:west"]`), []byte(`["backup.snapshot_create"]`), []byte(`{"service":"api"}`), definition.Group, []byte(`{"source":"test"}`), now, now, definition.CreatedBy, definition.OrgID))
 
 	stored, err := repo.GetBackupDefinition(ctx, definition.ID)
 
 	require.NoError(t, err)
 	require.Equal(t, definition.ID, stored.ID)
+	require.Equal(t, definition.OrgID, stored.OrgID)
 	require.Equal(t, tenantID, *stored.TenantID)
 	require.Equal(t, environmentID, *stored.EnvironmentID)
 	require.Equal(t, []string{"site:west"}, stored.ExecutorLabels)
