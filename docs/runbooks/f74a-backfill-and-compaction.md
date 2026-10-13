@@ -1,5 +1,13 @@
 # F74a backfill and observation compaction
 
+This runbook governs the legacy F74a import, immutable archive and manual
+`f74a-compact` commands. It does not govern the daemon's automatic 30-day
+rolling retention of unlinked hot `runtime_observations`: that separate
+non-required runner deletes bounded batches without a backup receipt or
+restore proof. Current state-linked
+rows stay hot; canonical state remains on relays. See
+[PostgreSQL loss and relay-first recovery](postgres-loss-and-recovery.md).
+
 This procedure verifies the derived PostgreSQL source and canonical F74a
 publication, and measures potential redundant historical runtime samples.
 Normal daemon startup and PostgreSQL reconnect do not launch a legacy F74a
@@ -20,7 +28,7 @@ If the signed event is no longer retained, or a current relay refuses it,
 the import remains incomplete. Restore the original local event store/outbox
 from a verified backup or resolve the relay refusal before retrying; do not
 edit the receipt or completion marker to bypass verification.
-**Confirmed deletion and live compaction are not available.** The shipped
+**F74a CLI confirmed deletion and live compaction are not available.** The shipped
 `f74a-census`, `f74a-compact --cutoff`, `f74a-restore-preflight --cutoff`,
 and `f74a-verify-receipt` actions are read-only;
 `f74a-compact --confirm` is rejected. There is no `--batch-size` or

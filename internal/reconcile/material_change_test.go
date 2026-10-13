@@ -11,8 +11,22 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.uber.org/zap"
 )
+
+type materialTransitionLogExporter struct{ records []sdklog.Record }
+
+func (e *materialTransitionLogExporter) Export(_ context.Context, records []sdklog.Record) error {
+	for _, record := range records {
+		e.records = append(e.records, record.Clone())
+	}
+	return nil
+}
+func (*materialTransitionLogExporter) Shutdown(context.Context) error   { return nil }
+func (*materialTransitionLogExporter) ForceFlush(context.Context) error { return nil }
 
 const materialDesiredHash = "sha256:desired-state"
 
@@ -315,6 +329,29 @@ func TestReconcilerFirstObservationOnUnknownStateEmitsOneEvent(t *testing.T) {
 	h.pass(t, r)
 	stateChanged, _ = h.counts()
 	require.Equal(t, 1, stateChanged, "subsequent unchanged observations are silent")
+}
+
+func TestReconcilerMaterialTransitionEmitsOneOTELLog(t *testing.T) {
+	exporter := &materialTransitionLogExporter{}
+	provider := sdklog.NewLoggerProvider(sdklog.WithProcessor(sdklog.NewSimpleProcessor(exporter)))
+	previous := global.GetLoggerProvider()
+	global.SetLoggerProvider(provider)
+	t.Cleanup(func() {
+		global.SetLoggerProvider(previous)
+		require.NoError(t, provider.Shutdown(context.Background()))
+	})
+	h := newMaterialHarness(t, domain.DriftStatusUnknown)
+	r := h.reconciler()
+	h.pass(t, r)
+	h.pass(t, r)
+	require.Len(t, exporter.records, 1, "unchanged observations must not emit telemetry transitions")
+	attrs := map[string]string{}
+	exporter.records[0].WalkAttributes(func(kv attribute.KeyValue) bool { attrs[string(kv.Key)] = kv.Value.AsString(); return true })
+	require.Equal(t, h.serviceID.String(), attrs["service.id"])
+	require.Equal(t, h.envID.String(), attrs["environment.id"])
+	require.Equal(t, "unknown", attrs["from.state"])
+	require.Equal(t, "healthy", attrs["to.state"])
+	require.Contains(t, strings.Split(attrs["reason"], ","), changeReasonObservationLink)
 }
 
 func TestReconcilerBaselineReadFailureDoesNotManufactureTransition(t *testing.T) {

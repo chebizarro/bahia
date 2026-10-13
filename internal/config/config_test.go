@@ -144,6 +144,20 @@ func TestDatabaseStartupProbeTimeoutBounds(t *testing.T) {
 	}
 }
 
+func TestLoadTelemetryOTLPHTTPProtocol(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "telemetry.yaml")
+	if err := os.WriteFile(path, []byte("telemetry:\n  enabled: true\n  otlp_endpoint: http://collector:4318\n  otlp_protocol: http\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Telemetry.Enabled || cfg.Telemetry.OTLPEndpoint != "http://collector:4318" || cfg.Telemetry.OTLPProtocol != "http" {
+		t.Fatalf("OTLP HTTP config = %+v", cfg.Telemetry)
+	}
+}
+
 func TestIntentDomainDisabledKeyLoads(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "intent-domains.yaml")
 	content := "nostr:\n  intent_domains_disabled: [service, policy]\n"

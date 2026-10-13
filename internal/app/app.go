@@ -773,6 +773,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		Enabled:      cfg.Telemetry.Enabled,
 		ServiceName:  cfg.Telemetry.ServiceName,
 		OTLPEndpoint: cfg.Telemetry.OTLPEndpoint,
+		OTLPProtocol: cfg.Telemetry.OTLPProtocol,
 	}, logger)
 	if dbAvailable {
 		telemetryProvider.SetFleetHealthSources(workerRepo, stateRepo)
@@ -782,6 +783,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	bgManager := NewBackgroundManager(logger)
 	bgManager.RegisterWithOptions(nostrPub)
 	bgManager.RegisterWithOptions(controlPlanePub)
+	if pgObservations, ok := obsRepo.(*repository.PgRuntimeObservationRepository); ok {
+		bgManager.RegisterWithOptions(NewRuntimeObservationRetentionRunner(pgObservations, logger), RunnerRequired(false))
+	}
 	if managedInstanceSupervisor != nil {
 		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerRequired(false))
 	}

@@ -1554,6 +1554,7 @@ type TelemetryConfig struct {
 	Enabled      bool   `koanf:"enabled" secret:"false"`
 	ServiceName  string `koanf:"service_name" secret:"false"`
 	OTLPEndpoint string `koanf:"otlp_endpoint" secret:"false"` // OpenTelemetry collector endpoint
+	OTLPProtocol string `koanf:"otlp_protocol" secret:"false"` // "grpc" (default) or "http"
 }
 
 // NotificationsConfig holds notification dispatcher settings.

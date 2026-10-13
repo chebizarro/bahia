@@ -25,6 +25,30 @@ func newPgRuntimeObservationRepositoryWithDB(db pgQueryer) *PgRuntimeObservation
 	return &PgRuntimeObservationRepository{pool: db}
 }
 
+// DeleteExpiredBatch removes at most limit unlinked hot observations. Current
+// state links remain hot until a subsequent material transition replaces them.
+// Each call is one transaction, so a cancelled or restarted runner resumes by
+// selecting the remaining rows rather than maintaining a fragile cursor.
+func (r *PgRuntimeObservationRepository) DeleteExpiredBatch(ctx context.Context, cutoff time.Time, limit int) (int64, error) {
+	if limit < 1 || limit > 1000 {
+		return 0, fmt.Errorf("runtime observation retention batch size must be in 1..1000")
+	}
+	command, err := r.pool.Exec(ctx, `
+		WITH expired AS (
+			SELECT o.id FROM runtime_observations o
+			WHERE o.observed_at < $1
+			  AND NOT EXISTS (SELECT 1 FROM environment_service_state s WHERE s.current_observation_id = o.id)
+			ORDER BY o.observed_at, o.id
+			LIMIT $2 FOR UPDATE OF o SKIP LOCKED
+		)
+		DELETE FROM runtime_observations o USING expired WHERE o.id = expired.id
+	`, cutoff, limit)
+	if err != nil {
+		return 0, fmt.Errorf("deleting expired runtime observations: %w", err)
+	}
+	return command.RowsAffected(), nil
+}
+
 const obsColumns = `id, service_id, environment_id, deployment_unit_id, observed_image_digest, observed_image_repo, observed_container_id, observed_host, observed_version, health_status, source, metadata, normalized_state, normalized_hash, observed_at`
 
 func (r *PgRuntimeObservationRepository) Create(ctx context.Context, obs *domain.RuntimeObservation) error {

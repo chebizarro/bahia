@@ -32,6 +32,10 @@ type appMetricInstruments struct {
 	adoptionImportDuration         metric.Float64Histogram
 	runtimeActions                 metric.Int64Counter
 	runtimeActionDuration          metric.Float64Histogram
+	runtimeUnitState               metric.Int64Gauge
+	runtimeTransitions             metric.Int64Counter
+	runtimeObservationRowsRetired  metric.Int64Counter
+	runtimeObservationBatches      metric.Int64Counter
 	reconcileTotal                 metric.Int64Counter
 	reconcileStatesChecked         metric.Int64Gauge
 	reconcileDuration              metric.Float64Histogram
@@ -131,6 +135,10 @@ func newAppMetricInstruments(provider metric.MeterProvider) (*appMetricInstrumen
 		adoptionImportDuration:         b.secondsHistogram("bahia_adoption_import_duration_seconds", "Adoption import batch duration in seconds"),
 		runtimeActions:                 b.int64Counter("bahia_runtime_actions_total", "Direct runtime actions by action and status"),
 		runtimeActionDuration:          b.secondsHistogram("bahia_runtime_action_duration_seconds", "Direct runtime action duration in seconds"),
+		runtimeUnitState:               b.int64Gauge("bahia_runtime_unit_state", "Latest observed runtime health code per deployment unit"),
+		runtimeTransitions:             b.int64Counter("bahia_runtime_transitions_total", "Material runtime transitions per deployment unit and bounded health state"),
+		runtimeObservationRowsRetired:  b.int64Counter("bahia_runtime_observation_rows_retired_total", "Expired PostgreSQL runtime observation rows deleted"),
+		runtimeObservationBatches:      b.int64Counter("bahia_runtime_observation_retention_batches_total", "Runtime observation retention batches by outcome"),
 		reconcileTotal:                 b.int64Counter("bahia_reconcile_total", "Total reconciliation cycles"),
 		reconcileStatesChecked:         b.int64Gauge("bahia_reconcile_states_checked", "Number of states checked in last reconcile"),
 		reconcileDuration:              b.secondsHistogram("bahia_reconcile_duration_seconds", "Reconciliation cycle duration in seconds"),
