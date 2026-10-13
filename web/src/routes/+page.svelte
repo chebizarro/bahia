@@ -532,7 +532,7 @@
     ? 'Payment records not readable with this key'
     : costSummary.paymentCount > 0
       ? `${costSummary.paymentCount} recent ${pluralize(costSummary.paymentCount, 'payment')}`
-      : workers.length === 0 ? 'No workers yet' : 'No recent spend');
+      : 'No recent spend');
   let costSummaryStatus = $derived(costSummary.paymentCount > 0 ? 'warning' : 'success');
   let dashboardOperations = $derived(operations.filter((operation) =>
     ['deployment', 'service', 'environment', 'action', 'observation', 'remediation', 'hive-ci'].includes(operation.domain)
