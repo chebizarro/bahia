@@ -127,7 +127,7 @@ bahia environments units create <environment-id> --file unit.json [--default-uni
 bahia environments units update <environment-id> <key> --file unit.json
 ```
 
-`--units-file` replaces the complete explicit unit set (`[]` returns to the implicit default); omitting it on update leaves units unchanged. Unit flags (`--unit-key`, `--unit-runtime-type`, `--unit-endpoint-ref`, `--unit-compose-dir`, `--unit-reconcile-mode`, …) describe a single unit inline; unit JSON follows `schemas/deployment_unit.json`. Environment-level flags cover `--strategy` (`replace`, `blue_green`, `canary`), `--reconcile-mode` and `--default-reconcile-mode` (`observe_only`, `auto_apply`, `approval_required`, `disabled`), `--protected`, `--secret-scope-mode` (`service`, `environment`, `unit`), `--failure-domain-label`, `--runtime-config-file`, and `--loom-worker-selector-file`.
+`--units-file` replaces the complete explicit unit set (`[]` returns to the implicit default); omitting it on update leaves units unchanged. Unit flags (`--unit-key`, `--unit-runtime-type`, `--unit-endpoint-ref`, `--unit-compose-dir`, `--unit-reconcile-mode`, …) describe a single unit inline. Unit `runtime_type` accepts `docker`, `compose`, `kubernetes`, `podman`, `vm-firecracker`, or `vm-qemu`; the domain validator is authoritative. Environment-level flags cover `--strategy` (`replace`, `blue_green`, `canary`), `--reconcile-mode` and `--default-reconcile-mode` (`observe_only`, `auto_apply`, `approval_required`, `disabled`), `--protected`, `--secret-scope-mode` (`service`, `environment`, `unit`), `--failure-domain-label`, `--runtime-config-file`, and `--loom-worker-selector-file`.
 
 ### builds and artifacts
 
