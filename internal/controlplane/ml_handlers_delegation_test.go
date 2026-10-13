@@ -39,3 +39,49 @@ func TestHandleMLInferenceRollbackRequestRejectsSelfDelegation(t *testing.T) {
 		t.Fatalf("self-delegation result content = %q, want self-delegation refusal", result.Content)
 	}
 }
+
+func TestMLDelegationClaimRequiresCurrentSignedList(t *testing.T) {
+	store := testDelegationStore(t)
+	operator, agent, human := nostr.Generate(), nostr.Generate(), nostr.Generate()
+	lists := NewDelegationLists(nil, store, []string{operator.Public().Hex()}, []string{agent.Public().Hex()}, nil)
+	capture := &captureNostrPublisher{published: 1}
+	signer, err := NewPrivateKeySigner(nostr.Generate().Hex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reactor := NewReactor(Config{AuthorizedPubkeys: []string{agent.Public().Hex()}}, nil, nil, signer, zap.NewNop(),
+		WithDelegationLists(lists), WithControlPlanePublisher(capture),
+		WithMLRegistry(service.NewMLRegistryService(nil, nil, zap.NewNop())),
+		WithMLInferenceExecutor(mlParseTestExecutor{}))
+	request := func(d string) *nostr.Event {
+		return signedLLMRequest(t, agent.Hex(), KindMLInferenceRollbackRequest,
+			`{"requested_by":"`+human.Public().Hex()+`"}`, nostr.Tags{{"d", d}})
+	}
+	reactor.handleMLInferenceRollbackRequest(context.Background(), request("before-list"))
+	if got := tagValueNostr(capture.events[len(capture.events)-1].Tags, "result"); got != "delegation_unauthorized" {
+		t.Fatalf("before signed list result = %q", got)
+	}
+	grant := signedDelegationList(t, operator, agent.Public(), 100, human.Public())
+	if err := lists.Apply(&grant); err != nil {
+		t.Fatal(err)
+	}
+	reactor.handleMLInferenceRollbackRequest(context.Background(), request("before-eose"))
+	if got := tagValueNostr(capture.events[len(capture.events)-1].Tags, "result"); got != "delegation_unauthorized" {
+		t.Fatalf("before EOSE result = %q", got)
+	}
+	lists.mu.Lock()
+	lists.caughtUp = true
+	lists.mu.Unlock()
+	reactor.handleMLInferenceRollbackRequest(context.Background(), request("granted"))
+	if got := tagValueNostr(capture.events[len(capture.events)-1].Tags, "result"); got != "endpoint_resolution_error" {
+		t.Fatalf("signed grant did not pass delegation gate: result = %q", got)
+	}
+	revoke := signedDelegationList(t, operator, agent.Public(), 101)
+	if err := lists.Apply(&revoke); err != nil {
+		t.Fatal(err)
+	}
+	reactor.handleMLInferenceRollbackRequest(context.Background(), request("revoked"))
+	if got := tagValueNostr(capture.events[len(capture.events)-1].Tags, "result"); got != "delegation_unauthorized" {
+		t.Fatalf("after revocation result = %q", got)
+	}
+}

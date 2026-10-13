@@ -83,10 +83,18 @@ func TestConfigFabricSignerIndependentOfDisabledAssistant(t *testing.T) {
 }
 
 func TestConfigFabricSignerAbsentIsExplicitlyUnavailable(t *testing.T) {
-	provider := NewHealthProvider(nil, nil)
-	registerConfigFabricSignerHealth(provider, nil)
+	restoreDBHooks := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDBHooks()
+	cfg := startupTestConfig("emergency")
+	cfg.Assistant.Enabled = false
+	cfg.Nostr.LocalStore.Path = filepath.Join(t.TempDir(), "events.bolt")
+	application, err := New(cfg)
+	require.NoError(t, err)
+	defer syncTestLogger(t, application.Logger)
+	defer closeRelayPools(application.relayPools...)
+	require.Nil(t, application.configFabricSignerSession)
 	var health HealthCheck
-	for _, check := range provider.Readiness().Checks {
+	for _, check := range application.Health.Readiness().Checks {
 		if check.Name == "config_fabric_signer" {
 			health = check
 		}
@@ -94,6 +102,6 @@ func TestConfigFabricSignerAbsentIsExplicitlyUnavailable(t *testing.T) {
 	require.Equal(t, HealthStatusWarn, health.Status)
 	require.Contains(t, health.Message, "publish and rollback are unavailable")
 	fabric := service.NewConfigFabricService(repositorytest.NewInMemoryNostrEventRepository(), &configFabricCapturePublisher{}, nil)
-	_, err := fabric.Publish(t.Context(), configFabricTestRequest())
+	_, err = fabric.Publish(t.Context(), configFabricTestRequest())
 	require.ErrorContains(t, err, "operator signer is not configured")
 }

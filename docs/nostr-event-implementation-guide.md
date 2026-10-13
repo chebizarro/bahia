@@ -46,6 +46,12 @@ A new kind number requires a written justification that its relay behaviour
 | Is it a secret reveal, a log fetch or an assistant turn? | ContextVM `25910` inside a gift wrap |
 | Is it a delete? | NIP-09 `5` for relay-level deletion; a `deleted=true` tombstone for durable domain state |
 
+For an agent's claim of a human requester, use the existing NIP-51 `30000`
+list at `d=agent:<agent-pubkey>:delegation`, signed by a trusted operator and
+`p`-tagged with each permitted human. Do not allocate a custom kind or use
+NIP-26 event-author substitution. Replacing the list without a `p` tag
+revokes that operator's grant.
+
 ## What every change must include
 
 1. **Constants, not literals.** Kinds and topics come from `internal/kinds`

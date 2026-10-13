@@ -38,7 +38,7 @@ The Bahia relay sidecar advertises NIPs 1, 9, 11, 17, 40, 42, 44, 45, 51,
 | NIP-40 | expiration enforcement and sweeping |
 | NIP-42 | protected relay reads and relay-specific authentication |
 | NIP-45 | COUNT on the same indexed filter surface as REQ |
-| NIP-51 | relay sets, membership lists and curation sets |
+| NIP-51 | relay sets, membership lists, signed agent delegation lists and curation sets |
 | NIP-65 | advisory service relay preferences |
 | NIP-70 | protected-events behavior where used by the event library |
 | NIP-77 | bounded negentropy reconciliation |

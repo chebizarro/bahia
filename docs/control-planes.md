@@ -108,7 +108,8 @@ by operating `mode`).
 
 | Decision | Source of truth |
 |---|---|
-| Fleet operators (fleet-scoped intents, assistant RPC, MCP tool calls outside intents, continuity definitions) | `nostr.authorized_pubkeys`; published as the fleet-OCK `operators:continuity` record. An empty list denies every fleet-scoped request. |
+| Fleet operators (fleet-scoped intents, assistant RPC, MCP tool calls outside intents, continuity definitions) | `nostr.authorized_pubkeys`; published as the fleet-OCK `operators:continuity` record. An empty list denies every fleet-scoped request. The same configured pubkeys are trusted authors of delegation lists, not delegation grants. |
+| Agent claims of a human requester | Current signed NIP-51 `30000` list at `agent:<signer-pubkey>:delegation`, with that human in a `p` tag; no static-config grant fallback. |
 | SoulFactory document authors | `soul_factory.authorized_pubkeys`; published as `operators:soul-factory` |
 | Adoption scan and import | `adoption.enabled` plus `adoption.allowed_pubkeys` (cumulative with the fleet list) |
 | Direct runtime deploy/restart/stop | `direct_runtime_actions.enabled` plus `direct_runtime_actions.allowed_pubkeys` (cumulative) |

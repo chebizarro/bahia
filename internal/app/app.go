@@ -3111,7 +3111,20 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				logger.Warn("signer-first direct-runtime control plane ignores non-pubkey operator allowlist entries", zap.Strings("allowed_subjects", cfg.DirectRuntime.AllowedSubjects), zap.Strings("allowed_emails", cfg.DirectRuntime.AllowedEmails))
 			}
 		}
+		delegationAgents := controlPlaneAuthorizedPubkeys(cfg, servicePubkey, assistantIdentity)
+		delegationLists := controlplane.NewDelegationLists(controlPlanePool, localEventStore, cfg.Nostr.AuthorizedPubkeys, delegationAgents, logger)
+		if err := delegationLists.Load(); err != nil {
+			return nil, fmt.Errorf("load signed delegation lists: %w", err)
+		}
+		bgManager.RegisterWithOptions(delegationLists, RunnerRequired(false))
+		healthProvider.RegisterCheck("delegation_lists", func() HealthCheck {
+			if !delegationLists.CaughtUp() {
+				return HealthCheck{Name: "delegation_lists", Status: HealthStatusWarn, Message: "signed delegation lists have not caught up; delegation claims are unavailable"}
+			}
+			return HealthCheck{Name: "delegation_lists", Status: HealthStatusPass, Message: "signed delegation lists caught up"}
+		})
 		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
+			controlplane.WithDelegationLists(delegationLists),
 			controlplane.WithBackupRegistry(backupRegistry),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, serviceKeyer, logger, nostrEventRepo)),

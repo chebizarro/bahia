@@ -201,6 +201,10 @@ func (r *Reactor) handleMLInferenceRollbackRequest(ctx context.Context, event *n
 		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "rejected", "delegation_unauthorized", err.Error(), nil, nil)
 		return
 	}
+	if delegation != nil && !r.delegations.Allows(event.PubKey.Hex(), delegation.RequesterPubkey) {
+		r.publishMLResult(ctx, event, KindMLInferenceRollbackResult, "rejected", "delegation_unauthorized", "claimed requester is not granted by a caught-up signed delegation list", nil, nil)
+		return
+	}
 	if req.Endpoint == "" {
 		req.Endpoint = tagValueNostr(event.Tags, "endpoint")
 	}

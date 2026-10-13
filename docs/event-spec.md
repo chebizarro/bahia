@@ -69,7 +69,7 @@ current state of X"; that answer is a REQ against canonical state.
 | Hive-CI | `5401` workflow run; `5402` workflow result | run outbound (self-dispatch) and inbound; result inbound |
 | NIP-34 | `30617`, `30618`, `1617`–`1619`, `1621`, `1630`–`1633`, `10317`; replies `1111` | read through the sidecar as open interop |
 | SoulFactory | `31950` template, `31951` soul, `31952` draft, `31953` fleet config; `5950`/`6950`/`7950` provisioning request/status/result; `1950` action, `1951` action result; `30317` runtime capability; `38384`/`38386` runtime control/result | exchanged directly with SoulFactory reactors and runtimes |
-| Cascadia | `30000` NIP-51 lists (`service:<id>:membership` relay allowlists) | consumed by the sidecar config consumer |
+| Cascadia / Bahia | `30000` NIP-51 lists (`service:<id>:membership` relay allowlists; `agent:<agent-pubkey>:delegation` requester grants) | membership consumed by sidecar; delegation consumed by daemon |
 
 The functions `kinds.IsRequestKind`, `kinds.IsCanonicalObservableKind` and
 `kinds.IsOpenInteropKind` define exactly which kinds the daemon accepts as
@@ -559,6 +559,19 @@ events durably unless `nostr.sidecar.event_retention` is set.
   channels, plugins},"defaults":{model, bindings, required_plugins}}`.
   Secret-shaped strings are `${VAR}` placeholders. Provisioning pins the
   newest signed event from `soul_factory.authorized_pubkeys`.
+
+### Delegation lists (`30000`)
+
+A trusted fleet operator publishes a NIP-51 addressable list with exactly one
+`d=agent:<agent-pubkey>:delegation` tag and zero or more lowercase 64-hex `p`
+tags naming humans that agent may claim as requester. The signer is the list
+author, not the agent. The complete replacement list is authoritative for
+that `(kind, author, d)` coordinate; highest `created_at` wins, lowest event
+ID breaks ties. A list with no `p` tags revokes that author's grants. Bahia
+accepts a grant from any currently trusted list author only after relay EOSE
+catch-up; it verifies ID and signature and never treats the static operator
+allowlist as a delegation grant. The agent still signs its own request; this
+list does not substitute the event author (NIP-26 is not used).
 
 ## 9. Discovery and relay topology
 

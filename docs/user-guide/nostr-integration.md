@@ -5,7 +5,7 @@ Nostr is Bahia's control plane and source of durable product state. Clients subs
 ## Trust boundary
 
 - The daemon signs canonical state, status, audit, discovery, and documentation with `nostr.private_key`.
-- Fleet operators are the pubkeys configured in `nostr.authorized_pubkeys`.
+- Fleet operators are the pubkeys configured in `nostr.authorized_pubkeys`. Those keys may author delegation lists; an agent claim of a human requires a current signed kind-`30000` list with `d=agent:<agent-pubkey>:delegation` and a `p=<human-pubkey>` tag.
 - Organization membership and roles authorize tenant-scoped work.
 - Confidential records use an organization or fleet content key (OCK).
 - Every inbound event is checked for ID, Schnorr signature, author, kind, required tags, timestamp, and content shape before use.
@@ -20,6 +20,7 @@ Nostr is Bahia's control plane and source of durable product state. Clients subs
 | Audit fact | `4903` | service | entity and correlation tags; assistant checkpoints use `t=assistant-checkpoint:<session_id>` |
 | Interactive request | `25910`, optionally wrapped by `1059` or `21059` | requester | registered ContextVM JSON-RPC method |
 | Documentation | `30023` with `t=bahia-docs` | service | `d=<topic>` |
+| Agent delegation list | `30000` (NIP-51) | trusted fleet operator | `d=agent:<agent-pubkey>:delegation`, `p=<human-pubkey>` |
 | Worker advertisement | `10100` | worker | worker pubkey |
 | Discovery | `11316`–`11320`, `30002`, `10002` | service | endpoint and relay-set contracts |
 
