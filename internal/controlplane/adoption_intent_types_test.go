@@ -48,7 +48,9 @@ func TestValidateAdoptionSecretRefs(t *testing.T) {
 }
 
 func TestAdoptionSecretRefPayloadRejectsValues(t *testing.T) {
-	content := map[string]interface{}{"secret_refs": map[string]interface{}{"DB_PASSWORD": map[string]interface{}{"store": "signet", "credential_id": "cred_"+strings.Repeat("a", 64), "version": 1, "value": "super-secret"}}}
+	content := map[string]interface{}{"secret_refs": map[string]interface{}{"DB_PASSWORD": map[string]interface{}{"store": "signet", "credential_id": "cred_" + strings.Repeat("a", 64), "version": 1, "value": "super-secret"}}}
 	err := validateAdoptionSecretRefPayload(content)
-	if err == nil || strings.Contains(err.Error(), "super-secret") { t.Fatalf("payload accepted or echoed value: %v", err) }
+	if err == nil || strings.Contains(err.Error(), "super-secret") {
+		t.Fatalf("payload accepted or echoed value: %v", err)
+	}
 }
