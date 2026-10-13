@@ -99,16 +99,6 @@ func VerifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAt
 	return verifyF74aAttestedReceipt(ctx, pool, pinnedAttestorHex, receiptJSON, nil)
 }
 
-// A future independent live backup provider may use this private verifier on
-// restart. It authenticates the same receipt against the run's immutable
-// per-row deletion provenance, not against today's physical hot flags.
-func verifyF74aAttestedReceiptForDeletionRun(ctx context.Context, pool *pgxpool.Pool, pinnedAttestorHex string, receiptJSON []byte, runID uuid.UUID) (F74aReceiptVerification, error) {
-	if runID == uuid.Nil {
-		return F74aReceiptVerification{}, fmt.Errorf("F74a deletion run ID is required")
-	}
-	return verifyF74aAttestedReceipt(ctx, pool, pinnedAttestorHex, receiptJSON, &runID)
-}
-
 func verifyF74aAttestedReceipt(ctx context.Context, pool *pgxpool.Pool, pinnedAttestorHex string, receiptJSON []byte, runID *uuid.UUID) (F74aReceiptVerification, error) {
 	var out F74aReceiptVerification
 	pub, err := hex.DecodeString(strings.TrimSpace(pinnedAttestorHex))

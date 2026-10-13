@@ -1,3 +1,5 @@
+//go:build integration
+
 package repository
 
 import (
@@ -121,7 +123,8 @@ func (p *f74aLiveAttestorProof) proveCurrentF74aBackup(ctx context.Context, runI
 	if err != nil {
 		return F74aReceiptVerification{}, fmt.Errorf("F74a live attestor unavailable")
 	}
-	defer response.Body.Close()
+	// The response is read-only; a close error cannot validate an invalid grant.
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return F74aReceiptVerification{}, fmt.Errorf("F74a live attestor refused admission")
 	}

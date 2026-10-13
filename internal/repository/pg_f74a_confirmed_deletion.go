@@ -1,3 +1,5 @@
+//go:build integration
+
 package repository
 
 import (
@@ -11,6 +13,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
+
+// This deletion seam is integration-only until an independent production proof
+// provider exists; no production command can invoke it.
 
 // f74aIndependentBatchProof has deliberately no production implementer. A
 // future implementer must independently reauthenticate the signed receipt,
@@ -294,4 +299,14 @@ func reconcileF74aDeletionBatch(ctx context.Context, tx pgx.Tx, run f74aConfirme
 		return fmt.Errorf("F74a signed source inventory changed during deletion batch")
 	}
 	return nil
+}
+
+// A future independent live backup provider may use this private verifier on
+// restart. It authenticates the same receipt against the run's immutable
+// per-row deletion provenance, not against today's physical hot flags.
+func verifyF74aAttestedReceiptForDeletionRun(ctx context.Context, pool *pgxpool.Pool, pinnedAttestorHex string, receiptJSON []byte, runID uuid.UUID) (F74aReceiptVerification, error) {
+	if runID == uuid.Nil {
+		return F74aReceiptVerification{}, fmt.Errorf("F74a deletion run ID is required")
+	}
+	return verifyF74aAttestedReceipt(ctx, pool, pinnedAttestorHex, receiptJSON, &runID)
 }

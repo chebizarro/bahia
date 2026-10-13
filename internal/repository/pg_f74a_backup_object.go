@@ -46,7 +46,8 @@ func VerifyF74aLocalBackupObject(ctx context.Context, proof F74aReceiptVerificat
 		return 0, fmt.Errorf("F74a backup object is not a regular readable file")
 	}
 	file := os.NewFile(uintptr(fd), "f74a-backup-object")
-	defer file.Close()
+	// Closing a read-only descriptor cannot change the verified bytes.
+	defer func() { _ = file.Close() }()
 	before, err := file.Stat()
 	if err != nil {
 		return 0, fmt.Errorf("F74a backup object cannot be stated")
