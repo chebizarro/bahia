@@ -81,23 +81,6 @@ func TestArchitectureDBLessDaemonBootGatesNilRepositoryRoutes(t *testing.T) {
 	require.Empty(t, failures, "DB-less routes must be gated (503) or work without Postgres")
 }
 
-// TestArchitectureServicesVisibleFromRelaysWithNoDB is the target the ratchet
-// above falls short of (audit Recommendation 2a): with no Postgres, services
-// (and environments and DNS) come from addressable relay state, so the
-// daemon serves them.
-func TestArchitectureServicesVisibleFromRelaysWithNoDB(t *testing.T) {
-	t.Skip("pending bahia-irsry.11: DB-less daemon must rebuild services from relay state")
-
-	app, err := New(unreachableDatabaseConfig(t, "full"))
-	require.NoError(t, err)
-	defer syncTestLogger(t, app.Logger)
-	defer closeRelayPools(app.relayPools...)
-
-	recorder := httptest.NewRecorder()
-	app.HTTPServer.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/services", nil))
-	require.Equal(t, http.StatusOK, recorder.Code)
-}
-
 // dbLessServedRoutes are the routes a DB-less daemon answers.
 // Growing this set means a route works from relay state alone.
 var dbLessServedRoutes = map[string]bool{

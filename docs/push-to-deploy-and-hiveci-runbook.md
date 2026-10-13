@@ -43,8 +43,11 @@ ssh edge-01 'test -w /srv/data/bahia-controlplane'
 ssh edge-01 'curl -fsS http://172.17.0.1:8080/health'
 ```
 
-The rendered web service must carry non-empty
-`PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS`.
+Configure repository variables `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and
+`PUBLIC_BAHIA_SERVICE_PUBKEYS` for the edge and Hive CI workflows (and provide
+them to the `act` runner). Both workflows reject missing values rather than
+using a baked-in relay or signer. The rendered web service must carry non-empty
+values for both variables.
 `scripts/check_web_bootstrap_compose.py` enforces that invariant. The workflow
 also runs the relay-policy gate and image-admission policy before changing the
 stack.

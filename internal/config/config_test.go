@@ -81,9 +81,6 @@ func TestDefaults(t *testing.T) {
 	if cfg.DirectRuntime.Enabled {
 		t.Error("expected direct runtime actions disabled by default")
 	}
-	if cfg.LLM.AllowOperationalREST {
-		t.Error("expected LLM operational REST disabled by default")
-	}
 	if cfg.Assistant.LLMStreaming {
 		t.Error("expected assistant LLM streaming disabled by default")
 	}
@@ -400,7 +397,6 @@ hiveci:
     - repo_coordinate: 30617:owner:astillero
       workflow_path: .gitea/workflows/release.yml
       service_name: astillero
-      environment_name: edge-01-production
       build_dependencies:
         - name: cascadia-go
           clone_url: https://git.sharegap.net/cascadia/cascadia-go.git
@@ -423,6 +419,30 @@ hiveci:
 	}
 }
 
+func TestLoadRejectsHiveCIDispatchPolicySeedFields(t *testing.T) {
+	for _, field := range []string{"environment_name: edge-01-production", "branch_pattern: main", "metadata: {}", "service_id: 0199c693-7b5f-7a42-b13e-fb6107ff039c", "environment_id: 0199c693-7b5f-7a42-b13e-fb6107ff039d", "id: 0199c693-7b5f-7a42-b13e-fb6107ff039b"} {
+		t.Run(strings.Split(field, ":")[0], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			content := "dev_mode: true\nhiveci:\n  policies:\n    - repo_coordinate: 30617:owner:astillero\n      enabled: false\n      " + field + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "hiveci.policies[0]."+strings.Split(field, ":")[0]) || !strings.Contains(err.Error(), "hiveci-policy intents") {
+				t.Fatalf("Load() error = %v, want explicit policy-seed migration", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsHiveCIDispatchPolicySeedEnv(t *testing.T) {
+	t.Setenv("BAHIA_HIVECI__POLICIES__0__BRANCH_PATTERN", "main")
+	_, err := Load("")
+	if err == nil || !strings.Contains(err.Error(), "hiveci.policies[0].branch_pattern") {
+		t.Fatalf("Load() error = %v, want explicit policy-seed migration", err)
+	}
+}
+
 func TestLoadHiveCIRejectsUnsafeBuildDependencyConfiguration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -440,7 +460,7 @@ func TestLoadHiveCIRejectsUnsafeBuildDependencyConfiguration(t *testing.T) {
 			cfg.HiveCI.Enabled = true
 			cfg.HiveCI.TrustedCIPubkeys = []string{"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}
 			cfg.HiveCI.DependencyGitea = HiveCIDependencyGiteaConfig{BaseURL: "https://git.sharegap.net", Token: "fleet-read-token"}
-			cfg.HiveCI.Policies = []HiveCIPolicyConfig{{
+			cfg.HiveCI.Policies = []HiveCIDispatchPolicyConfig{{
 				RepoCoordinate: "30617:owner:astillero", WorkflowPath: ".gitea/workflows/release.yml", ServiceName: "astillero",
 				BuildDependencies: []HiveCIBuildDependencyConfig{{Name: "drydock", CloneURL: test.cloneURL}},
 			}}
@@ -2567,39 +2587,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("LLM operational REST requires auth", func(t *testing.T) {
-		cfg := Defaults()
-		cfg.LLM.Enabled = true
-		cfg.LLM.AllowOperationalREST = true
-		cfg.LLM.AllowedSubjects = []string{"ops"}
-		err := cfg.validate()
-		if err == nil || !strings.Contains(err.Error(), "auth.enabled=true") {
-			t.Fatalf("validate error = %v, want auth requirement", err)
-		}
-	})
-
-	t.Run("LLM operational REST requires allowlist", func(t *testing.T) {
-		cfg := Defaults()
-		cfg.Auth.Enabled = true
-		cfg.LLM.Enabled = true
-		cfg.LLM.AllowOperationalREST = true
-		err := cfg.validate()
-		if err == nil || !strings.Contains(err.Error(), "llm operator allowlist") {
-			t.Fatalf("validate error = %v, want llm allowlist requirement", err)
-		}
-	})
-
-	t.Run("LLM operational REST requires LLM subsystem", func(t *testing.T) {
-		cfg := Defaults()
-		cfg.Auth.Enabled = true
-		cfg.LLM.AllowOperationalREST = true
-		cfg.LLM.AllowedSubjects = []string{"ops"}
-		err := cfg.validate()
-		if err == nil || !strings.Contains(err.Error(), "llm.enabled=true") {
-			t.Fatalf("validate error = %v, want llm enabled requirement", err)
-		}
-	})
-
 	t.Run("enabled with auth and allowlists is valid", func(t *testing.T) {
 		cfg := Defaults()
 		cfg.Nostr.PrivateKey = "test-secret-key"
@@ -2609,7 +2596,6 @@ func TestPrivilegedRouteConfigValidation(t *testing.T) {
 		cfg.DirectRuntime.Enabled = true
 		cfg.DirectRuntime.AllowedPubkeys = []string{strings.Repeat("ab", 32)}
 		cfg.LLM.Enabled = true
-		cfg.LLM.AllowOperationalREST = true
 		cfg.LLM.AllowedSubjects = []string{"llm-ops"}
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("validate error = %v", err)
@@ -2767,7 +2753,6 @@ direct_runtime_actions:
     - abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01abcdef01
 llm:
   enabled: true
-  allow_operational_rest: true
   allowed_subjects:
     - llm-ops
 `)
@@ -2785,8 +2770,19 @@ llm:
 	if !cfg.DirectRuntime.Enabled || len(cfg.DirectRuntime.AllowedSubjects) != 1 || cfg.DirectRuntime.AllowedSubjects[0] != "runtime-user" {
 		t.Fatalf("direct runtime config not loaded: %+v", cfg.DirectRuntime)
 	}
-	if !cfg.LLM.AllowOperationalREST || len(cfg.LLM.AllowedSubjects) != 1 || cfg.LLM.AllowedSubjects[0] != "llm-ops" {
-		t.Fatalf("llm operational REST config not loaded: %+v", cfg.LLM)
+	if len(cfg.LLM.AllowedSubjects) != 1 || cfg.LLM.AllowedSubjects[0] != "llm-ops" {
+		t.Fatalf("llm operator allowlist config not loaded: %+v", cfg.LLM)
+	}
+}
+
+func TestLoadRejectsRemovedLLMOperationalREST(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("llm:\n  allow_operational_rest: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "llm.allow_operational_rest was removed") {
+		t.Fatalf("Load() error = %v, want removed operational REST key", err)
 	}
 }
 
@@ -2956,37 +2952,6 @@ func TestPrivilegedFeatureValidationRequiresAuthAndOperatorAllowlists(t *testing
 		t.Fatalf("direct runtime with auth and allowlist should validate: %v", err)
 	}
 
-	llmOperationalNoAuth := Defaults()
-	llmOperationalNoAuth.LLM.Enabled = true
-	llmOperationalNoAuth.LLM.AllowOperationalREST = true
-	if err := llmOperationalNoAuth.validate(); err == nil || !strings.Contains(err.Error(), "auth.enabled=true is required when llm.allow_operational_rest=true") {
-		t.Fatalf("llm operational REST without auth error = %v", err)
-	}
-
-	llmOperationalNoAllowlist := Defaults()
-	llmOperationalNoAllowlist.Auth.Enabled = true
-	llmOperationalNoAllowlist.LLM.Enabled = true
-	llmOperationalNoAllowlist.LLM.AllowOperationalREST = true
-	if err := llmOperationalNoAllowlist.validate(); err == nil || !strings.Contains(err.Error(), "llm operator allowlist is required") {
-		t.Fatalf("llm operational REST without allowlist error = %v", err)
-	}
-
-	llmOperationalNoLLM := Defaults()
-	llmOperationalNoLLM.Auth.Enabled = true
-	llmOperationalNoLLM.LLM.AllowOperationalREST = true
-	llmOperationalNoLLM.LLM.AllowedPubkeys = []string{"0123456789abcdef"}
-	if err := llmOperationalNoLLM.validate(); err == nil || !strings.Contains(err.Error(), "llm.enabled=true is required") {
-		t.Fatalf("llm operational REST without llm enabled error = %v", err)
-	}
-
-	llmOperationalAllowed := Defaults()
-	llmOperationalAllowed.Auth.Enabled = true
-	llmOperationalAllowed.LLM.Enabled = true
-	llmOperationalAllowed.LLM.AllowOperationalREST = true
-	llmOperationalAllowed.LLM.AllowedPubkeys = []string{"0123456789abcdef"}
-	if err := llmOperationalAllowed.validate(); err != nil {
-		t.Fatalf("llm operational REST with auth and allowlist should validate: %v", err)
-	}
 }
 
 func TestRuntimeEndpointValidationRequiresKnownRefsAndCompleteTLS(t *testing.T) {

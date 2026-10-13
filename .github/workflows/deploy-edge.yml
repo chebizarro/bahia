@@ -38,8 +38,8 @@ jobs:
       COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
       RELEASE_ROOT: /srv/data/bahia-controlplane/releases
       EDGE_HEALTH_HOST: 172.17.0.1
-      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
-      PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
+      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${{ vars.PUBLIC_BAHIA_BOOTSTRAP_RELAYS }}
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: ${{ vars.PUBLIC_BAHIA_SERVICE_PUBKEYS }}
       # Optional ops-widget publisher allowlist forwarded to web.environment via
       # Compose interpolation. Empty is valid and denies every widget publisher.
       PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS: ${{ inputs.wheelhouse_allowed_pubkeys || vars.PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS || '' }}
@@ -105,6 +105,8 @@ jobs:
           set -euo pipefail
 
           : "${RELEASE_REVISION:?RELEASE_REVISION is required}"
+          : "${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:?repository variable PUBLIC_BAHIA_BOOTSTRAP_RELAYS is required}"
+          : "${PUBLIC_BAHIA_SERVICE_PUBKEYS:?repository variable PUBLIC_BAHIA_SERVICE_PUBKEYS is required}"
           [[ "$RELEASE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMPOSE_FILE" == "$CONTROLPLANE_ROOT/docker-compose.yml" ]]
           [[ "$RELEASE_ROOT" == "$CONTROLPLANE_ROOT/releases" ]]

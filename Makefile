@@ -51,10 +51,7 @@ build-bahia-dns-agent:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/bahia-dns-agent ./cmd/bahia-dns-agent
 
 # Portable static cross-compiles for LAN resolver hosts (see cmd/bahia-dns-agent/README.md).
-# Builds linux-amd64 and linux-arm64. linux-mips-softfloat is deliberately excluded
-# because it always fails today (see bahia-1m1ef); build it explicitly via
-# dist-bahia-dns-agent-linux-mips-softfloat once that issue is resolved.
-dist-bahia-dns-agent: dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64
+dist-bahia-dns-agent: dist-bahia-dns-agent-linux-amd64 dist-bahia-dns-agent-linux-arm64 dist-bahia-dns-agent-linux-mips-softfloat
 
 dist-bahia-dns-agent-linux-amd64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o bin/bahia-dns-agent-linux-amd64 ./cmd/bahia-dns-agent
@@ -62,10 +59,6 @@ dist-bahia-dns-agent-linux-amd64:
 dist-bahia-dns-agent-linux-arm64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o bin/bahia-dns-agent-linux-arm64 ./cmd/bahia-dns-agent
 
-# Known limitation: currently fails because internal/controlplane transitively
-# links modernc.org/sqlite (via internal/adapters/nostr -> internal/adapters/sbom),
-# whose libc has no 32-bit MIPS port. Tracked in beads as bahia-1m1ef; excluded
-# from the dist-bahia-dns-agent aggregate until fixed.
 dist-bahia-dns-agent-linux-mips-softfloat:
 	CGO_ENABLED=0 GOOS=linux GOARCH=mips GOMIPS=softfloat go build $(LDFLAGS) -o bin/bahia-dns-agent-linux-mips-softfloat ./cmd/bahia-dns-agent
 

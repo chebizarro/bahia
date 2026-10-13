@@ -179,5 +179,8 @@ runtime reconciles ──▶ runtime observation ──▶ service-state (observ
 - [Troubleshooting](troubleshooting.md) — relay, signer, and authorization problems
 
 Hive-CI pipeline policies are authored with operator-signed
-`bahia hiveci-policy` intents. The `hiveci.policies` configuration only
-authorizes build-dependency dispatch; it does not seed canonical policies.
+`bahia hiveci-policy` intents. The `hiveci.policies` configuration only authorizes build-dependency dispatch:
+`repo_coordinate`, `workflow_path`, `service_name`, `enabled`, and
+`build_dependencies`. It does not seed canonical policies. The former
+`environment_name`, `branch_pattern`, and `metadata` config keys are rejected;
+put canonical pipeline-policy content in operator-signed `hiveci-policy` intents.

@@ -575,7 +575,6 @@ type PackageBackendConfig struct {
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
 type LLMControlplaneConfig struct {
 	Enabled              bool                                `koanf:"enabled" secret:"false"`
-	AllowOperationalREST bool                                `koanf:"allow_operational_rest" secret:"false"`
 	DefaultGatewayRef    string                              `koanf:"default_gateway_ref" secret:"false"`
 	RecoveryPollInterval time.Duration                       `koanf:"recovery_poll_interval" secret:"false"`
 	StaleRunTimeout      time.Duration                       `koanf:"stale_run_timeout" secret:"false"`
@@ -1364,17 +1363,13 @@ type OCIServiceAccountConfig struct {
 	RepoPrefixes []string `koanf:"repo_prefixes" secret:"false"` // e.g. cascadia/
 }
 
-// HiveCIPolicyConfig authorizes build-dependency dispatch from configured
-// repositories. It does not create canonical Hive-CI pipeline policies;
-// those are operator-signed intents.
-type HiveCIPolicyConfig struct {
+// HiveCIDispatchPolicyConfig authorizes build-dependency dispatch from configured
+// repositories. Canonical pipeline policies are separate operator-signed intents.
+type HiveCIDispatchPolicyConfig struct {
 	RepoCoordinate    string                        `koanf:"repo_coordinate" yaml:"repo_coordinate" secret:"false"`
 	WorkflowPath      string                        `koanf:"workflow_path" yaml:"workflow_path" secret:"false"`
-	BranchPattern     string                        `koanf:"branch_pattern" yaml:"branch_pattern" secret:"false"`
 	ServiceName       string                        `koanf:"service_name" yaml:"service_name" secret:"false"`
-	EnvironmentName   string                        `koanf:"environment_name" yaml:"environment_name" secret:"false"`
 	Enabled           *bool                         `koanf:"enabled" yaml:"enabled" secret:"false"`
-	Metadata          map[string]any                `koanf:"metadata" yaml:"metadata" secret:"true"`
 	BuildDependencies []HiveCIBuildDependencyConfig `koanf:"build_dependencies" yaml:"build_dependencies"`
 }
 
@@ -1435,12 +1430,12 @@ type HiveCIConfig struct {
 	// already-running, observation-verified image as governed build/artifact
 	// lineage. It exists so bridging live reality never requires direct
 	// database mutation; CI-attested registration remains the norm.
-	AllowLiveArtifactImport bool                        `koanf:"allow_live_artifact_import" secret:"false"`
-	RetryInterval           time.Duration               `koanf:"retry_interval" secret:"false"`
-	MaxRetries              int                         `koanf:"max_retries" secret:"false"`
-	Policies                []HiveCIPolicyConfig        `koanf:"policies" yaml:"policies"`
-	DependencyGitea         HiveCIDependencyGiteaConfig `koanf:"dependency_gitea" yaml:"dependency_gitea"`
-	Initiator               HiveCIInitiatorConfig       `koanf:"initiator" yaml:"initiator"`
+	AllowLiveArtifactImport bool                         `koanf:"allow_live_artifact_import" secret:"false"`
+	RetryInterval           time.Duration                `koanf:"retry_interval" secret:"false"`
+	MaxRetries              int                          `koanf:"max_retries" secret:"false"`
+	Policies                []HiveCIDispatchPolicyConfig `koanf:"policies" yaml:"policies"`
+	DependencyGitea         HiveCIDependencyGiteaConfig  `koanf:"dependency_gitea" yaml:"dependency_gitea"`
+	Initiator               HiveCIInitiatorConfig        `koanf:"initiator" yaml:"initiator"`
 }
 
 var hiveCIDependencyNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -1706,7 +1701,6 @@ func Defaults() *Config {
 		},
 		LLM: LLMControlplaneConfig{
 			Enabled:              false,
-			AllowOperationalREST: false,
 			RecoveryPollInterval: 30 * time.Second,
 			StaleRunTimeout:      15 * time.Minute,
 			ReconcileInterval:    60 * time.Second,
@@ -1955,6 +1949,12 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 	if err := rejectUnknownRouteCanaryOverrideKeys(k); err != nil {
 		return nil, err
 	}
+	if k.Exists("llm.allow_operational_rest") {
+		return nil, fmt.Errorf("config validation failed: llm.allow_operational_rest was removed with operational REST; use signed intents for mutations and relay subscriptions for reads")
+	}
+	if err := rejectHiveCIDispatchPolicySeedFields(k); err != nil {
+		return nil, err
+	}
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
@@ -1968,6 +1968,35 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func rejectHiveCIDispatchPolicySeedFields(k *koanf.Koanf) error {
+	hiveci, _ := k.Raw()["hiveci"].(map[string]any)
+	policies, _ := hiveci["policies"].([]any)
+	allowed := map[string]bool{
+		"repo_coordinate": true, "workflow_path": true, "service_name": true,
+		"enabled": true, "build_dependencies": true,
+	}
+	for _, key := range k.Keys() {
+		parts := strings.Split(key, ".")
+		if len(parts) >= 4 && parts[0] == "hiveci" && parts[1] == "policies" && !allowed[parts[3]] {
+			return fmt.Errorf("config validation failed: hiveci.policies[%s].%s is not a build-dispatch field; configure canonical pipeline policy content with operator-signed hiveci-policy intents", parts[2], parts[3])
+		}
+	}
+	for i, item := range policies {
+		policy, _ := item.(map[string]any)
+		fields := make([]string, 0, len(policy))
+		for field := range policy {
+			fields = append(fields, field)
+		}
+		sort.Strings(fields)
+		for _, field := range fields {
+			if !allowed[field] {
+				return fmt.Errorf("config validation failed: hiveci.policies[%d].%s is not a build-dispatch field; configure canonical pipeline policy content with operator-signed hiveci-policy intents", i, field)
+			}
+		}
+	}
+	return nil
 }
 
 func rejectUnknownInternalRoutingKeys(k *koanf.Koanf) error {
@@ -2866,17 +2895,6 @@ func normalizePubkeyList(values []string) ([]string, error) {
 }
 
 func (c *Config) validateLLM() error {
-	if c.LLM.AllowOperationalREST {
-		if !c.Auth.Enabled {
-			return fmt.Errorf("config validation failed: auth.enabled=true is required when llm.allow_operational_rest=true")
-		}
-		if c.LLM.Empty() {
-			return fmt.Errorf("config validation failed: llm operator allowlist is required when llm.allow_operational_rest=true")
-		}
-		if !c.LLM.Enabled {
-			return fmt.Errorf("config validation failed: llm.enabled=true is required when llm.allow_operational_rest=true")
-		}
-	}
 	if !c.LLM.Enabled {
 		return nil
 	}

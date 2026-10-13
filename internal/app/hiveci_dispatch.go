@@ -26,13 +26,13 @@ type hiveCIJobSubmitter interface {
 }
 
 type hiveCIRunDispatcher struct {
-	policies  []config.HiveCIPolicyConfig
+	policies  []config.HiveCIDispatchPolicyConfig
 	pinner    hiveCIDependencyPinner
 	submitter hiveCIJobSubmitter
 	logger    *zap.Logger
 }
 
-func hiveCIHasBuildDependencies(policies []config.HiveCIPolicyConfig) bool {
+func hiveCIHasBuildDependencies(policies []config.HiveCIDispatchPolicyConfig) bool {
 	for _, policy := range policies {
 		if (policy.Enabled == nil || *policy.Enabled) && len(policy.BuildDependencies) > 0 {
 			return true
@@ -41,7 +41,7 @@ func hiveCIHasBuildDependencies(policies []config.HiveCIPolicyConfig) bool {
 	return false
 }
 
-func hiveCIBuildDependencyAuthorizations(ctx context.Context, policies []config.HiveCIPolicyConfig, services repository.ServiceRepository) ([]giteaAdapter.BuildDependencyAuthorization, error) {
+func hiveCIBuildDependencyAuthorizations(ctx context.Context, policies []config.HiveCIDispatchPolicyConfig, services repository.ServiceRepository) ([]giteaAdapter.BuildDependencyAuthorization, error) {
 	if !hiveCIHasBuildDependencies(policies) {
 		return nil, nil
 	}
@@ -72,7 +72,7 @@ func hiveCIBuildDependencyAuthorizations(ctx context.Context, policies []config.
 	return authorizations, nil
 }
 
-func newHiveCIRunDispatcher(policies []config.HiveCIPolicyConfig, pinner hiveCIDependencyPinner, submitter hiveCIJobSubmitter, logger *zap.Logger) *hiveCIRunDispatcher {
+func newHiveCIRunDispatcher(policies []config.HiveCIDispatchPolicyConfig, pinner hiveCIDependencyPinner, submitter hiveCIJobSubmitter, logger *zap.Logger) *hiveCIRunDispatcher {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -150,8 +150,8 @@ func (d *hiveCIRunDispatcher) Dispatch(ctx context.Context, run hiveciAdapter.Wo
 		zap.String("ref", run.Ref), zap.String("commit", run.CommitSHA), zap.Int("build_dependencies", len(dependencies)))
 }
 
-func (d *hiveCIRunDispatcher) authorizedPolicy(run hiveciAdapter.WorkflowRunDispatch) (*config.HiveCIPolicyConfig, error) {
-	var selected *config.HiveCIPolicyConfig
+func (d *hiveCIRunDispatcher) authorizedPolicy(run hiveciAdapter.WorkflowRunDispatch) (*config.HiveCIDispatchPolicyConfig, error) {
+	var selected *config.HiveCIDispatchPolicyConfig
 	var signature string
 	for index := range d.policies {
 		policy := &d.policies[index]
@@ -175,7 +175,7 @@ func (d *hiveCIRunDispatcher) authorizedPolicy(run hiveciAdapter.WorkflowRunDisp
 	return selected, nil
 }
 
-func dependencyPolicySignature(policy config.HiveCIPolicyConfig) string {
+func dependencyPolicySignature(policy config.HiveCIDispatchPolicyConfig) string {
 	dependencies := make([]string, 0, len(policy.BuildDependencies))
 	for _, dependency := range policy.BuildDependencies {
 		dependencies = append(dependencies, strings.TrimSpace(dependency.Name)+"\x00"+strings.TrimSpace(dependency.CloneURL))

@@ -34,10 +34,10 @@ func (s *dispatchSubmitter) SubmitJob(_ context.Context, job loom.JobRequest) (s
 	return "loom-job-id", nil
 }
 
-func astilleroDispatchPolicy() config.HiveCIPolicyConfig {
-	return config.HiveCIPolicyConfig{
+func astilleroDispatchPolicy() config.HiveCIDispatchPolicyConfig {
+	return config.HiveCIDispatchPolicyConfig{
 		RepoCoordinate: "30617:owner:astillero", WorkflowPath: ".gitea/workflows/release.yml",
-		ServiceName: "astillero", EnvironmentName: "edge-01-production",
+		ServiceName: "astillero",
 		BuildDependencies: []config.HiveCIBuildDependencyConfig{
 			{Name: "cascadia-go", CloneURL: "https://git.sharegap.net/cascadia/cascadia-go.git"},
 			{Name: "drydock", CloneURL: "https://git.sharegap.net/cascadia/drydock.git"},
@@ -59,7 +59,7 @@ func TestHiveCIRunDispatcherSubmitsOnlyFleetAuthorizedImmutableDependencies(t *t
 		{Name: "drydock", CloneURL: "https://git.sharegap.net/cascadia/drydock.git", CommitSHA: strings.Repeat("b", 40)},
 	}}
 	submitter := &dispatchSubmitter{}
-	dispatcher := newHiveCIRunDispatcher([]config.HiveCIPolicyConfig{astilleroDispatchPolicy()}, pinner, submitter, zap.NewNop())
+	dispatcher := newHiveCIRunDispatcher([]config.HiveCIDispatchPolicyConfig{astilleroDispatchPolicy()}, pinner, submitter, zap.NewNop())
 	dispatcher.Dispatch(t.Context(), astilleroWorkflowDispatch())
 	if len(submitter.jobs) != 1 {
 		t.Fatalf("submitted jobs = %d, want 1", len(submitter.jobs))
@@ -90,7 +90,7 @@ func TestHiveCIRunDispatcherSubmitsOnlyFleetAuthorizedImmutableDependencies(t *t
 func TestHiveCIRunDispatcherResolutionFailurePreventsPublish(t *testing.T) {
 	pinner := &dispatchPinner{err: fmt.Errorf("dependency default branch unavailable")}
 	submitter := &dispatchSubmitter{}
-	dispatcher := newHiveCIRunDispatcher([]config.HiveCIPolicyConfig{astilleroDispatchPolicy()}, pinner, submitter, zap.NewNop())
+	dispatcher := newHiveCIRunDispatcher([]config.HiveCIDispatchPolicyConfig{astilleroDispatchPolicy()}, pinner, submitter, zap.NewNop())
 	dispatcher.Dispatch(t.Context(), astilleroWorkflowDispatch())
 	if len(submitter.jobs) != 0 {
 		t.Fatalf("unresolved dependency submitted %d jobs", len(submitter.jobs))
@@ -99,7 +99,7 @@ func TestHiveCIRunDispatcherResolutionFailurePreventsPublish(t *testing.T) {
 
 func TestHiveCIRunDispatcherRequiresMatchingFleetServicePolicy(t *testing.T) {
 	submitter := &dispatchSubmitter{}
-	dispatcher := newHiveCIRunDispatcher([]config.HiveCIPolicyConfig{astilleroDispatchPolicy()}, &dispatchPinner{}, submitter, zap.NewNop())
+	dispatcher := newHiveCIRunDispatcher([]config.HiveCIDispatchPolicyConfig{astilleroDispatchPolicy()}, &dispatchPinner{}, submitter, zap.NewNop())
 	run := astilleroWorkflowDispatch()
 	run.RepoCoordinate = "30617:attacker:other"
 	dispatcher.Dispatch(t.Context(), run)
@@ -128,7 +128,7 @@ func TestHiveCIRunDispatcherDoesNotLogCredentialBearingDependencyURL(t *testing.
 	}
 	core, logs := observer.New(zap.DebugLevel)
 	submitter := &dispatchSubmitter{}
-	dispatcher := newHiveCIRunDispatcher([]config.HiveCIPolicyConfig{policy}, pinner, submitter, zap.New(core))
+	dispatcher := newHiveCIRunDispatcher([]config.HiveCIDispatchPolicyConfig{policy}, pinner, submitter, zap.New(core))
 	dispatcher.Dispatch(t.Context(), astilleroWorkflowDispatch())
 	if len(submitter.jobs) != 0 {
 		t.Fatal("unsafe dependency was submitted")

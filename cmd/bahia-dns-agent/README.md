@@ -75,11 +75,9 @@ make build-bahia-dns-agent      # host build, CGO_ENABLED=0
 make dist-bahia-dns-agent       # linux/amd64, linux/arm64, linux/mips softfloat
 ```
 
-Known limitation: the `linux/mips` (GOMIPS=softfloat) target currently fails
-because `internal/controlplane` transitively links `modernc.org/sqlite`
-(via `internal/adapters/nostr` → `internal/adapters/sbom`), whose libc has no
-32-bit MIPS port. Tracked as beads issue `bahia-1m1ef`; amd64 and arm64
-static builds are verified.
+The `linux/mips` target uses `GOMIPS=softfloat`. Its dependency set excludes
+the in-process Syft/SQLite generator (which the DNS agent never uses);
+the architecture gate checks that the DNS binary stays SQLite-free.
 
 ## Deployment
 

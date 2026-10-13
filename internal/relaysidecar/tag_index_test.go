@@ -138,12 +138,12 @@ func TestEventStoreBuildsTheTagIndexForExistingStores(t *testing.T) {
 	requireTagFilters(t, store, f)
 }
 
-// writePreIrsry44Store writes events into dataDir's events.bolt the way an
+// writeLegacyEventStore writes events into dataDir's events.bolt the way an
 // older sidecar did: straight through the eventstore, with
 // ReplaceEvent for state (which keeps every version of a d it does not index)
 // and kind-5 requests stored without their long coordinates applied, and none
 // of Bahia's buckets or markers.
-func writePreIrsry44Store(t *testing.T, dataDir string, events ...nostr.Event) {
+func writeLegacyEventStore(t *testing.T, dataDir string, events ...nostr.Event) {
 	t.Helper()
 	backend := &boltdb.BoltBackend{Path: filepath.Join(dataDir, eventStoreFile)}
 	require.NoError(t, backend.Init())
@@ -158,12 +158,12 @@ func writePreIrsry44Store(t *testing.T, dataDir string, events ...nostr.Event) {
 	backend.Close()
 }
 
-// TestEventStoreRepairsPreIrsry44StoresOnce: on its first
+// TestEventStoreRepairsLegacyStoresOnce: on its first
 // open, a store written by an older sidecar drops the
 // events its stored kind-5 requests delete and every superseded version of an
 // empty or long-d coordinate, behind its own marker. A rerun without the
 // marker converges on the same store.
-func TestEventStoreRepairsPreIrsry44StoresOnce(t *testing.T) {
+func TestEventStoreRepairsLegacyStoresOnce(t *testing.T) {
 	dir := t.TempDir()
 	sk := nostr.Generate()
 	base := nostr.Now() - 3600
@@ -179,7 +179,7 @@ func TestEventStoreRepairsPreIrsry44StoresOnce(t *testing.T) {
 	note := signedStoreEvent(t, sk, 1, base, nil, "deleted note")
 	foreign := signedStoreEvent(t, nostr.Generate(), 1, base, nil, "another author's note")
 	request := signedStoreEvent(t, sk, nostr.KindDeletion, base+50, nostr.Tags{{"a", config}, {"e", note.ID.Hex()}, {"e", foreign.ID.Hex()}}, "")
-	writePreIrsry44Store(t, dir, stale, current, emptyStale, emptyCurrent, deletedConfig, note, foreign, request)
+	writeLegacyEventStore(t, dir, stale, current, emptyStale, emptyCurrent, deletedConfig, note, foreign, request)
 
 	all := nostr.Filter{Kinds: []nostr.Kind{1, 30078, 30079, nostr.KindDeletion}}
 	requireRepaired := func(store *eventStore) {
@@ -207,7 +207,7 @@ func TestEventStoreRepairsPreIrsry44StoresOnce(t *testing.T) {
 
 	// Marked: a stale version written behind the store's back afterwards is
 	// not collapsed by the next open.
-	writePreIrsry44Store(t, dir, stale)
+	writeLegacyEventStore(t, dir, stale)
 	store, err = openEventStore(t.Context(), dir, nil)
 	require.NoError(t, err)
 	require.Contains(t, storeIDs(t, store, all), stale.ID, "a marked store is not repaired again")

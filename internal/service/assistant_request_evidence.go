@@ -24,8 +24,8 @@ type AssistantContextVMRequestEvidenceResolver struct {
 	Subscriber AssistantRelaySubscriber
 	// RequestAuthor is the hex pubkey that signs assistant ContextVM commands.
 	RequestAuthor string
-	// Methods maps tool names to accepted JSON-RPC methods; production wiring
-	// uses mcp.AssistantAsyncToolRequestMethods.
+	// Methods maps tool names to accepted JSON-RPC methods for legacy request
+	// evidence; intent-backed tools use the processor receipt instead.
 	Methods map[string][]string
 	// IntentEvidence verifies a processed in-process assistant intent marker.
 	IntentEvidence func(name, actor, key, eventID string) (*domain.AsyncToolReceipt, error)

@@ -25,8 +25,11 @@ Use `--expected-updated-at` to reject a stale edit and read the canonical
 revision before retrying a conflict. The daemon stores encrypted canonical
 state on relays through its outbox before optionally mirroring PostgreSQL.
 No SQL or config seed creates pipeline policies. `hiveci.policies` in daemon
-configuration remains a separate build-dependency dispatch allowlist, not a
-source of pipeline-policy canonical state.
+configuration is a separate build-dependency dispatch allowlist with only
+`repo_coordinate`, `workflow_path`, `service_name`, `enabled`, and
+`build_dependencies`. Config `environment_name`, `branch_pattern`, and
+`metadata` are rejected; canonical policy content belongs in signed
+`hiveci-policy` intents.
 
 ## Browse builds
 

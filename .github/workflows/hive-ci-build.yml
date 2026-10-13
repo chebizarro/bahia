@@ -45,12 +45,12 @@ jobs:
       HARBOR_REGISTRY: harbor.sharegap.net
       IMAGE_REPO: harbor.sharegap.net/cascadia/bahia
       WEB_IMAGE_REPO: harbor.sharegap.net/cascadia/bahia-web
-      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: wss://bahia.sharegap.net/relay
-      PUBLIC_BAHIA_SERVICE_PUBKEYS: 37202fe3be21ff51b97531655d3f053cf1999f30c9e27ab0f44bf364d8b53dcc
+      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${{ vars.PUBLIC_BAHIA_BOOTSTRAP_RELAYS }}
+      PUBLIC_BAHIA_SERVICE_PUBKEYS: ${{ vars.PUBLIC_BAHIA_SERVICE_PUBKEYS }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # No later step needs authenticated Git or the v6+ credential include file.
           persist-credentials: false
@@ -59,6 +59,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          : "${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:?repository variable PUBLIC_BAHIA_BOOTSTRAP_RELAYS is required}"
+          : "${PUBLIC_BAHIA_SERVICE_PUBKEYS:?repository variable PUBLIC_BAHIA_SERVICE_PUBKEYS is required}"
           : "${GITHUB_SHA:?GITHUB_SHA is required}"
           : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
           [[ "$GITHUB_REF" == "refs/heads/master" ]]
