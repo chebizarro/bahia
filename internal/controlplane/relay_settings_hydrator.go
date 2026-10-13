@@ -311,11 +311,13 @@ func (h *RelaySettingsHydrator) subscribe(ctx context.Context) error {
 		case <-drainCh:
 			drainCh = nil
 			stopDrain = func() {}
-			syncedAt := h.now().UTC()
-			if err := h.store.MarkSynced(ctx, h.servicePubkey, syncedAt); err != nil {
-				h.logger.Warn("relay settings sync checkpoint failed; retaining durable projection", zap.Error(err))
-			} else {
-				h.markProjectionSynced(syncedAt)
+			if h.IsLive() {
+				syncedAt := h.now().UTC()
+				if err := h.store.MarkSynced(ctx, h.servicePubkey, syncedAt); err != nil {
+					h.logger.Warn("relay settings sync checkpoint failed; retaining durable projection", zap.Error(err))
+				} else {
+					h.markProjectionSynced(syncedAt)
+				}
 			}
 			h.caughtUp.Store(true)
 			h.logger.Info("relay settings historical catch-up completed after bounded EOSE drain",

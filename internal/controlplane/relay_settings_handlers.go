@@ -81,17 +81,18 @@ type RelayPolicyState struct {
 // canonical-event provenance. Discovery cache and browser emergency-override
 // state are deliberately not folded into this view.
 type RelayPolicyProjectionView struct {
-	Availability    string `json:"availability"`
-	Source          string `json:"source"`
-	EventID         string `json:"event_id,omitempty"`
-	Author          string `json:"author,omitempty"`
-	EventCreatedAt  string `json:"event_created_at,omitempty"`
-	EventAcceptedAt string `json:"event_accepted_at,omitempty"`
-	Schema          string `json:"schema,omitempty"`
-	Hash            string `json:"hash,omitempty"`
-	SourceRelay     string `json:"source_relay,omitempty"`
-	LastSyncAt      string `json:"last_sync_at,omitempty"`
-	Freshness       string `json:"freshness"`
+	Availability     string `json:"availability"`
+	Source           string `json:"source"`
+	EventID          string `json:"event_id,omitempty"`
+	Author           string `json:"author,omitempty"`
+	EventCreatedAt   string `json:"event_created_at,omitempty"`
+	EventAcceptedAt  string `json:"event_accepted_at,omitempty"`
+	Schema           string `json:"schema,omitempty"`
+	Hash             string `json:"hash,omitempty"`
+	SourceRelay      string `json:"source_relay,omitempty"`
+	LastSyncAt       string `json:"last_sync_at,omitempty"`
+	RelayConfirmedAt string `json:"relay_confirmed_at,omitempty"`
+	Freshness        string `json:"freshness"`
 }
 
 type relayPolicyApplyPayload struct {
@@ -189,13 +190,13 @@ func (h *RelaySettingsHandlers) SetPublisher(publisher RelaySettingsEventPublish
 
 func (h *RelaySettingsHandlers) projectionView(projection repository.RelayPolicyProjection) RelayPolicyProjectionView {
 	freshness := "stale"
-	if !projection.LastSyncAt.IsZero() {
+	if projection.RelayConfirmedAt != nil && !projection.LastSyncAt.IsZero() {
 		age := h.now().UTC().Sub(projection.LastSyncAt.UTC())
 		if age <= h.freshnessWindow {
 			freshness = "fresh"
 		}
 	}
-	return RelayPolicyProjectionView{
+	view := RelayPolicyProjectionView{
 		Availability:    "available",
 		Source:          "postgres_projection",
 		EventID:         projection.EventID,
@@ -208,6 +209,10 @@ func (h *RelaySettingsHandlers) projectionView(projection repository.RelayPolicy
 		LastSyncAt:      projection.LastSyncAt.UTC().Format(time.RFC3339),
 		Freshness:       freshness,
 	}
+	if projection.RelayConfirmedAt != nil {
+		view.RelayConfirmedAt = projection.RelayConfirmedAt.UTC().Format(time.RFC3339)
+	}
+	return view
 }
 
 func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req ContextVMRequest) (any, error) {
@@ -618,20 +623,20 @@ func normalizePubkeysForSettings(field string, values []string) ([]string, error
 func validateWebsocketRelayURLForSettings(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("relay URL %q must be an absolute ws/wss URL", raw)
+		return fmt.Errorf("relay URL must be an absolute ws/wss URL")
 	}
 	if parsed.Scheme != "wss" && parsed.Scheme != "ws" {
-		return fmt.Errorf("relay URL %q must use ws or wss", raw)
+		return fmt.Errorf("relay URL must use ws or wss")
 	}
-	return validatePublicRelayURLComponentsForSettings(parsed, raw)
+	return validatePublicRelayURLComponentsForSettings(parsed)
 }
 
 func validateRelayAdministrationRelayURLForSettings(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("relay administration URL %q must be an absolute ws/wss URL", raw)
+		return fmt.Errorf("relay administration URL must be an absolute ws/wss URL")
 	}
-	if err := validatePublicRelayURLComponentsForSettings(parsed, raw); err != nil {
+	if err := validatePublicRelayURLComponentsForSettings(parsed); err != nil {
 		return err
 	}
 	switch parsed.Scheme {
@@ -641,18 +646,18 @@ func validateRelayAdministrationRelayURLForSettings(raw string) error {
 		if isLoopbackHostForSettings(parsed.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("relay administration URL %q uses ws; external relay administration targets must use wss", raw)
+		return fmt.Errorf("external relay administration targets must use wss")
 	default:
-		return fmt.Errorf("relay administration URL %q must use ws or wss", raw)
+		return fmt.Errorf("relay administration URL must use ws or wss")
 	}
 }
 
 func validateRelayAdministrationHTTPURLForSettings(raw string) error {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return fmt.Errorf("relay administration HTTP URL %q must be absolute", raw)
+		return fmt.Errorf("relay administration HTTP URL must be absolute")
 	}
-	if err := validatePublicRelayURLComponentsForSettings(parsed, raw); err != nil {
+	if err := validatePublicRelayURLComponentsForSettings(parsed); err != nil {
 		return err
 	}
 	switch parsed.Scheme {
@@ -662,21 +667,21 @@ func validateRelayAdministrationHTTPURLForSettings(raw string) error {
 		if isLoopbackHostForSettings(parsed.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("relay administration HTTP URL %q uses http; external relay administration targets must use https", raw)
+		return fmt.Errorf("external relay administration HTTP targets must use https")
 	default:
-		return fmt.Errorf("relay administration HTTP URL %q must use http or https", raw)
+		return fmt.Errorf("relay administration HTTP URL must use http or https")
 	}
 }
 
-func validatePublicRelayURLComponentsForSettings(parsed *url.URL, raw string) error {
+func validatePublicRelayURLComponentsForSettings(parsed *url.URL) error {
 	if parsed.User != nil {
-		return fmt.Errorf("relay URL %q must not include userinfo", raw)
+		return fmt.Errorf("relay URL must not include userinfo")
 	}
 	if parsed.RawQuery != "" || parsed.ForceQuery {
-		return fmt.Errorf("relay URL %q must not include a query", raw)
+		return fmt.Errorf("relay URL must not include a query")
 	}
 	if parsed.Fragment != "" {
-		return fmt.Errorf("relay URL %q must not include a fragment", raw)
+		return fmt.Errorf("relay URL must not include a fragment")
 	}
 	return nil
 }

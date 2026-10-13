@@ -138,6 +138,7 @@ export function normalizeRelayPolicyProjectionResponse(response = {}) {
       hash: safeProvenanceToken(projection.hash),
       source_relay: safeProvenanceRelay(projection.source_relay),
       last_sync_at: String(projection.last_sync_at || '').trim(),
+      relay_confirmed_at: String(projection.relay_confirmed_at || '').trim(),
       freshness: String(projection.freshness || '').trim(),
       source: String(projection.source || '').trim()
     }
@@ -158,6 +159,7 @@ export function liveRelayPolicyTruth(state, { event, relay, receivedAt = new Dat
       hash: '',
       source_relay: safeProvenanceRelay(relay),
       last_sync_at: receivedAt,
+      relay_confirmed_at: receivedAt,
       freshness: 'live',
       source: 'canonical_relay_event'
     }

@@ -80,6 +80,7 @@ describe('relay settings control-plane helpers', () => {
         hash: 'b'.repeat(64),
         source_relay: 'wss://relay.example/path?credential=redacted',
         last_sync_at: '2026-08-03T01:02:03Z',
+        relay_confirmed_at: '',
         freshness: 'stale'
       }
     })).toEqual({
@@ -91,6 +92,7 @@ describe('relay settings control-plane helpers', () => {
         hash: 'b'.repeat(64),
         source_relay: 'wss://relay.example/path',
         last_sync_at: '2026-08-03T01:02:03Z',
+        relay_confirmed_at: '',
         freshness: 'stale',
         source: ''
       }
@@ -102,6 +104,12 @@ describe('relay settings control-plane helpers', () => {
       canonical_policy: {},
       server_projection: { freshness: 'fresh' }
     })).toMatchObject({ truthState: 'intentionally-empty', policy: expect.any(Object) });
+
+    expect(relaySettings.normalizeRelayPolicyProjectionResponse({
+      truth_state: 'loaded-cached',
+      canonical_policy: { browser_relays: ['wss://relay.example'] },
+      server_projection: { relay_confirmed_at: '2026-08-03T02:03:04Z', freshness: 'fresh' }
+    }).provenance.relay_confirmed_at).toBe('2026-08-03T02:03:04Z');
   });
 
   it('classifies validated live signed-empty separately from unavailable', () => {
@@ -116,6 +124,7 @@ describe('relay settings control-plane helpers', () => {
         event_id: 'c'.repeat(64),
         source_relay: 'wss://live.example/path',
         last_sync_at: '2026-08-03T02:03:04Z',
+        relay_confirmed_at: '2026-08-03T02:03:04Z',
         freshness: 'live'
       }
     });

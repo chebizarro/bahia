@@ -26,6 +26,8 @@ Observed deployment versions come from canonical runtime-state records in the da
 
 The container entrypoint writes these values into the runtime seed, so one image can be deployed with different trusted relays and service identities. Local session overrides do not change daemon relay policy.
 
+The relay-policy panel distinguishes a signed event loaded from the browser's local event store from one observed on a live relay subscription. Its **Relay confirmation** timestamp is shown only after a relay serves the signed event in the current browser session; an EOSE with no event does not confirm a cached policy. Server projection metadata separately records `relay_confirmed_at` when the daemon observes its accepted head. Relay URLs containing userinfo, query strings, or fragments are rejected before a policy can be signed and published.
+
 The relay sidecar defaults `nostr.sidecar.read_auth_mode` to `enforce`. Unset or unknown values also normalize to `enforce`. Protected REQ/COUNT filters therefore require NIP-42 authentication from an admitted key. `warn` observes without enforcing; `off` disables the read-auth gate.
 
 ## OpenClaw Fleet
