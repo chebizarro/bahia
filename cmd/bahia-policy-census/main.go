@@ -72,7 +72,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	deadline := flags.Duration("deadline", 5*time.Minute, "global SQL snapshot and relay read deadline (up to 30m)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 10000 || *pageSize < 0 || *pageSize > 1000 || *deadline <= 0 || *deadline > 30*time.Minute ||
 		(*pageSize == 0 && (*afterID != "" || *expectedHead != "")) || (*pageSize > 0 && ((*expectedHead != "" && !policyHeadID.MatchString(*expectedHead)) || (*afterID != "" && *expectedHead == ""))) {
-		fmt.Fprintln(stderr, "usage: bahia-policy-census --config path --relays url,... [--max-rows 1..10000 | --page-size 1..1000 [--expected-policy-head 64-hex-id [--after-id UUID]]] [--deadline 5m]")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-policy-census --config path --relays url,... [--max-rows 1..10000 | --page-size 1..1000 [--expected-policy-head 64-hex-id [--after-id UUID]]] [--deadline 5m]")
 		return 1
 	}
 	var cursor uuid.UUID
@@ -119,7 +120,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, "start SQL snapshot: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	// Read-only rollback is best-effort; the snapshot result takes precedence.
+	defer func() { _ = tx.Rollback(ctx) }()
 	projection, err := readPolicyProjectionHint(ctx, tx, secret.Public().Hex())
 	if err != nil {
 		return fail(stderr, "read durable relay policy discovery hint: %v", err)
@@ -245,7 +247,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func fail(stderr io.Writer, format string, args ...any) int {
-	fmt.Fprintf(stderr, format+"\n", args...)
+	// Failure diagnostics are best-effort; the exit code already signals failure.
+	_, _ = fmt.Fprintf(stderr, format+"\n", args...)
 	return 1
 }
 

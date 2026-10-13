@@ -14,7 +14,7 @@ func TestMain(m *testing.M) {
 	// pools. Keep admission enabled without sharing the production-sized burst
 	// across otherwise independent test cases and -count repetitions.
 	budget := nostrout.PurposeBudget{RatePerMinute: 6_000, Burst: 200}
-	nostrout.InitDefault(nostrout.Config{
+	if _, err := nostrout.InitDefault(nostrout.Config{
 		Aggregate: budget,
 		PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
 			nostrout.PurposePriority: budget,
@@ -25,7 +25,9 @@ func TestMain(m *testing.M) {
 		},
 		RelayWire:         budget,
 		RelayWirePriority: budget,
-	})
+	}); err != nil {
+		panic(err)
+	}
 	os.Exit(m.Run())
 }
 

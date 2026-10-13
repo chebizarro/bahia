@@ -51,46 +51,56 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv fu
 	maxRows := flags.Int("max-rows", 10000, "maximum rows per SQL family (1..100000)")
 	deadline := flags.Duration("deadline", 5*time.Minute, "SQL snapshot deadline (up to 30m)")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *maxRows < 1 || *maxRows > 100000 || *deadline <= 0 || *deadline > 30*time.Minute {
-		fmt.Fprintln(stderr, "usage: bahia-raw-key-crypto-census --service-pubkey HEX [--max-rows N] [--deadline 5m] (BAHIA_CENSUS_DATABASE_URL required)")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-raw-key-crypto-census --service-pubkey HEX [--max-rows N] [--deadline 5m] (BAHIA_CENSUS_DATABASE_URL required)")
 		return 1
 	}
 	*pubkey = strings.ToLower(strings.TrimSpace(*pubkey))
 	decoded, err := hex.DecodeString(*pubkey)
 	if err != nil || len(decoded) != 32 {
-		fmt.Fprintln(stderr, "service-pubkey must be a 32-byte x-only hex pubkey")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "service-pubkey must be a 32-byte x-only hex pubkey")
 		return 1
 	}
 	dsn := strings.TrimSpace(getenv("BAHIA_CENSUS_DATABASE_URL"))
 	if dsn == "" {
-		fmt.Fprintln(stderr, "BAHIA_CENSUS_DATABASE_URL is required; no census performed")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "BAHIA_CENSUS_DATABASE_URL is required; no census performed")
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(ctx, *deadline)
 	defer cancel()
 	conn, err := pgx.Connect(ctx, dsn)
 	if err != nil {
-		fmt.Fprintln(stderr, "SQL connection failed; no census performed")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "SQL connection failed; no census performed")
 		return 1
 	}
-	defer conn.Close(context.Background())
+	// The read-only census result takes precedence over connection teardown.
+	defer func() { _ = conn.Close(context.Background()) }()
 	tx, err := conn.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		fmt.Fprintln(stderr, "read-only SQL snapshot failed; no census performed")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "read-only SQL snapshot failed; no census performed")
 		return 1
 	}
-	defer tx.Rollback(context.Background())
+	// Read-only rollback is best-effort; the snapshot result takes precedence.
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	r, err := census(ctx, tx, *pubkey, *maxRows)
 	if err != nil {
 		// SQL errors may include connection strings or values. Never echo them.
-		fmt.Fprintln(stderr, "SQL census incomplete; no partial report:", safeError(err))
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "SQL census incomplete; no partial report:", safeError(err))
 		return 1
 	}
 	if err := tx.Commit(ctx); err != nil {
-		fmt.Fprintln(stderr, "read-only SQL snapshot commit failed; no report")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "read-only SQL snapshot commit failed; no report")
 		return 1
 	}
 	if err := json.NewEncoder(stdout).Encode(r); err != nil {
-		fmt.Fprintln(stderr, "encode census report failed")
+		// Failure diagnostics are best-effort; the exit code already signals failure.
+		_, _ = fmt.Fprintln(stderr, "encode census report failed")
 		return 1
 	}
 	return 0

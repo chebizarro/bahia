@@ -33,7 +33,8 @@ func TestCensusClassifiesBoundedSQLWithoutPlaintext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mock.Close(context.Background())
+	// Mock teardown is not a census expectation; pgxmock reports an unexpected Close.
+	defer func() { _ = mock.Close(context.Background()) }()
 	mock.ExpectQuery("SELECT encryption_method").WithArgs(11).WillReturnRows(pgxmock.NewRows([]string{"encryption_method", "octet_length"}).AddRow("aes256gcm", 28).AddRow("nip44", 52).AddRow("unknown-method", 9))
 	mock.ExpectQuery("SELECT encryption_method").WithArgs(11).WillReturnRows(pgxmock.NewRows([]string{"encryption_method", "octet_length"}).AddRow("aes256gcm", 29))
 	tags := `[["t","org-member"],["state_hash","` + strings.Repeat("a", 64) + `"]]`
@@ -79,7 +80,8 @@ func TestCensusExcessAndMissingTableFailWithoutPartialReport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer mock.Close(context.Background())
+			// Mock teardown is not a census expectation; pgxmock reports an unexpected Close.
+			defer func() { _ = mock.Close(context.Background()) }()
 			q := mock.ExpectQuery("SELECT encryption_method").WithArgs(2)
 			if tc.rows != nil {
 				q.WillReturnRows(tc.rows)

@@ -108,7 +108,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "configure logger: %v\n", err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	// Logger sync is best-effort during process shutdown.
+	defer func() { _ = logger.Sync() }()
 	if seeded {
 		logger.Info("seeded persisted SoulFactory controller policy from environment configuration")
 	}
