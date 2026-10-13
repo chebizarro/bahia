@@ -158,8 +158,22 @@ func (g *RouteCanaryGate) Apply(ctx context.Context, plan *domain.DesiredPublicR
 // The loop is deadline-driven and cancellable rather than sleep-driven: a route
 // legitimately takes time to propagate, but the gate must never conclude success
 // merely because time elapsed.
+func (g *RouteCanaryGate) configFor(hostname string) RouteCanaryGateConfig {
+	cfg := g.cfg
+	if timeout, retry := g.evaluator.Policy().GateTimingFor(hostname); timeout > 0 || retry > 0 {
+		if timeout > 0 {
+			cfg.Timeout = timeout
+		}
+		if retry > 0 {
+			cfg.RetryInterval = retry
+		}
+	}
+	return cfg
+}
+
 func (g *RouteCanaryGate) verify(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (RouteCanaryVerdict, bool, error) {
-	gateCtx, cancel := context.WithTimeout(ctx, g.cfg.Timeout)
+	cfg := g.configFor(plan.Hostname)
+	gateCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
 
 	var (
@@ -181,7 +195,7 @@ func (g *RouteCanaryGate) verify(ctx context.Context, plan *domain.DesiredPublic
 			}
 		}
 
-		timer := time.NewTimer(g.cfg.RetryInterval)
+		timer := time.NewTimer(cfg.RetryInterval)
 		select {
 		case <-gateCtx.Done():
 			timer.Stop()
@@ -189,7 +203,7 @@ func (g *RouteCanaryGate) verify(ctx context.Context, plan *domain.DesiredPublic
 				return lastVerdict, true, nil
 			}
 			return RouteCanaryVerdict{}, false, fmt.Errorf("%w: route did not serve traffic within %s",
-				ErrRouteCanaryGateFailed, g.cfg.Timeout)
+				ErrRouteCanaryGateFailed, cfg.Timeout)
 		case <-timer.C:
 		}
 	}

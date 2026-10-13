@@ -63,9 +63,17 @@ route_canaries:
   overrides:
     api.example.com:
       expected_body_contains: '"status":"ok"'
+      failure_threshold: 2
+      success_threshold: 1
+      detect_catch_all: false
+      require_discriminating_health_path: false
+      gate_timeout: 120s
+      gate_retry_interval: 5s
 ```
 
-`route_canaries.enabled` requires `edge_routing.enabled`. Internal dial addresses require `internal_routing.enabled`. Per-route overrides can change interval, timeout, expected status/body, TLS warning, and perspectives.
+`route_canaries.enabled` requires `edge_routing.enabled`. Internal dial addresses require `internal_routing.enabled`. Per-route overrides can change probe interval and timeout, gate timeout and retry interval, failure and success thresholds, expected status/body, TLS warning, and catch-all/discriminating-health-path policy. Unset fields inherit fleet-wide values. A route that requires a discriminating health path must also enable catch-all detection. Override hostnames that match no managed route are reported in the startup log and the `route_canary_overrides` readiness check; the warning clears when the route appears.
+
+Failure and success thresholds govern periodic outage hysteresis. The post-deploy gate retries until its configured deadline and records its final verdict immediately, regardless of those thresholds.
 
 ## Evidence and alerts
 

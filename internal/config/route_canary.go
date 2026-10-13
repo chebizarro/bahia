@@ -109,13 +109,19 @@ func (c RouteCanaryConfig) domainOverrides() map[string]domain.RouteCanaryOverri
 	overrides := make(map[string]domain.RouteCanaryOverride, len(c.Overrides))
 	for hostname, override := range c.Overrides {
 		overrides[hostname] = domain.RouteCanaryOverride{
-			Interval:             override.Interval,
-			ProbeTimeout:         override.ProbeTimeout,
-			ExpectedStatusMin:    cloneOptional(override.ExpectedStatusMin),
-			ExpectedStatusMax:    cloneOptional(override.ExpectedStatusMax),
-			ExpectedBodyContains: cloneOptional(override.ExpectedBodyContains),
-			ExpectedBodyRegex:    cloneOptional(override.ExpectedBodyRegex),
-			TLSMinDaysRemaining:  cloneOptional(override.TLSMinDaysRemaining),
+			Interval:                        override.Interval,
+			ProbeTimeout:                    override.ProbeTimeout,
+			GateTimeout:                     override.GateTimeout,
+			GateRetryInterval:               override.GateRetryInterval,
+			FailureThreshold:                cloneOptional(override.FailureThreshold),
+			SuccessThreshold:                cloneOptional(override.SuccessThreshold),
+			DetectCatchAll:                  cloneOptional(override.DetectCatchAll),
+			RequireDiscriminatingHealthPath: cloneOptional(override.RequireDiscriminatingHealthPath),
+			ExpectedStatusMin:               cloneOptional(override.ExpectedStatusMin),
+			ExpectedStatusMax:               cloneOptional(override.ExpectedStatusMax),
+			ExpectedBodyContains:            cloneOptional(override.ExpectedBodyContains),
+			ExpectedBodyRegex:               cloneOptional(override.ExpectedBodyRegex),
+			TLSMinDaysRemaining:             cloneOptional(override.TLSMinDaysRemaining),
 		}
 	}
 	return overrides

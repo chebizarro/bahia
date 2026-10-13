@@ -8,6 +8,7 @@ import (
 
 func canaryOverrideInt(value int) *int          { return &value }
 func canaryOverrideString(value string) *string { return &value }
+func canaryOverrideBool(value bool) *bool       { return &value }
 
 const jsonStatusOKRegex = `(?s).*"status"\s*:\s*"ok".*`
 
@@ -264,6 +265,65 @@ func TestForHostnameInheritsUnsetFields(t *testing.T) {
 	}
 }
 
+func TestForHostnameResolvesRemainingPolicyFields(t *testing.T) {
+	policy := enabledPolicy()
+	policy.DetectCatchAll = true
+	policy.RequireDiscriminatingHealthPath = true
+	policy.Thresholds = RouteCanaryThresholds{FailureThreshold: 3, SuccessThreshold: 2}
+	policy.Overrides = map[string]RouteCanaryOverride{
+		"git.sharegap.net": {
+			FailureThreshold: canaryOverrideInt(1), SuccessThreshold: canaryOverrideInt(1),
+			DetectCatchAll: canaryOverrideBool(false), RequireDiscriminatingHealthPath: canaryOverrideBool(false),
+			GateTimeout: 2 * time.Minute, GateRetryInterval: 7 * time.Second,
+		},
+	}
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	effective := policy.ForHostname("GIT.sharegap.net.")
+	if effective.Thresholds.FailureThreshold != 1 || effective.Thresholds.SuccessThreshold != 1 || effective.DetectCatchAll || effective.RequireDiscriminatingHealthPath {
+		t.Fatalf("override not applied: %+v", effective)
+	}
+	other := policy.ForHostname("other.sharegap.net")
+	if other.Thresholds.FailureThreshold != 3 || other.Thresholds.SuccessThreshold != 2 || !other.DetectCatchAll || !other.RequireDiscriminatingHealthPath {
+		t.Fatalf("override leaked to neighbour: %+v", other)
+	}
+	if timeout, retry := policy.GateTimingFor("GIT.sharegap.net."); timeout != 2*time.Minute || retry != 7*time.Second {
+		t.Fatalf("gate timing = %s/%s", timeout, retry)
+	}
+	if timeout, retry := policy.GateTimingFor("other.sharegap.net"); timeout != 0 || retry != 0 {
+		t.Fatalf("gate timing leaked: %s/%s", timeout, retry)
+	}
+}
+
+func TestDeriveRouteCanaryTargetsResolvesCatchAllPolicyPerRoute(t *testing.T) {
+	policy := enabledPolicy()
+	policy.DetectCatchAll = true
+	policy.Overrides = map[string]RouteCanaryOverride{
+		"git.sharegap.net":    {DetectCatchAll: canaryOverrideBool(false)},
+		"strict.sharegap.net": {RequireDiscriminatingHealthPath: canaryOverrideBool(true)},
+	}
+	for _, test := range []struct {
+		hostname string
+		control  bool
+		require  bool
+	}{
+		{"git.sharegap.net", false, false},
+		{"strict.sharegap.net", true, true},
+		{"other.sharegap.net", true, false},
+	} {
+		plan := planWithInternal(false)
+		plan.Hostname = test.hostname
+		targets, err := DeriveRouteCanaryTargets(plan, policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := targets[0].ControlPath != ""; got != test.control || targets[0].RequireDiscriminatingHealthPath != test.require {
+			t.Fatalf("%s: control=%t require=%t", test.hostname, got, targets[0].RequireDiscriminatingHealthPath)
+		}
+	}
+}
+
 func TestProbeIntervalFor(t *testing.T) {
 	policy := overriddenPolicy()
 	if interval, ok := policy.ProbeIntervalFor("GIT.sharegap.net."); !ok || interval != 15*time.Second {
@@ -296,6 +356,10 @@ func TestRouteCanaryPolicyValidateRejectsUnusableOverrides(t *testing.T) {
 		{name: "interval below minimum", hostname: "git.sharegap.net", override: RouteCanaryOverride{Interval: time.Second}, want: "minimum"},
 		{name: "negative interval", hostname: "git.sharegap.net", override: RouteCanaryOverride{Interval: -time.Minute}, want: "negative"},
 		{name: "negative timeout", hostname: "git.sharegap.net", override: RouteCanaryOverride{ProbeTimeout: -time.Second}, want: "negative"},
+		{name: "negative gate timeout", hostname: "git.sharegap.net", override: RouteCanaryOverride{GateTimeout: -time.Second}, want: "negative"},
+		{name: "zero failure threshold", hostname: "git.sharegap.net", override: RouteCanaryOverride{FailureThreshold: canaryOverrideInt(0)}, want: "failure_threshold"},
+		{name: "zero success threshold", hostname: "git.sharegap.net", override: RouteCanaryOverride{SuccessThreshold: canaryOverrideInt(0)}, want: "success_threshold"},
+		{name: "required without detection", hostname: "git.sharegap.net", override: RouteCanaryOverride{RequireDiscriminatingHealthPath: canaryOverrideBool(true)}, want: "requires detect_catch_all"},
 		{name: "min above inherited max", hostname: "git.sharegap.net", override: RouteCanaryOverride{ExpectedStatusMin: canaryOverrideInt(401)}, want: "status range"},
 		{name: "status out of range", hostname: "git.sharegap.net", override: RouteCanaryOverride{ExpectedStatusMax: canaryOverrideInt(600)}, want: "status range"},
 		{name: "negative tls window", hostname: "git.sharegap.net", override: RouteCanaryOverride{TLSMinDaysRemaining: canaryOverrideInt(-1)}, want: "tls_min_days_remaining"},

@@ -82,6 +82,8 @@ nostr:
 
 Everything a client can read or change goes through the relays, so the two values that matter most are `nostr.private_key` (the service identity) and the relay list. `nostr.authorized_pubkeys` names the fleet operators who may act outside any organization (policies, DNS, workers, ML, tool decisions, fleet rekeys, MCP over HTTP). See [Nostr Integration](nostr-integration.md#relays) for the full relay and sidecar reference, and each feature page for its own section (`adoption`, `direct_runtime_actions`, `dns`, `hiveci`, `llm`, `soul_factory`, `assistant`, `supervision`, `route_canaries`, `virtualization`).
 
+For managed routes, `route_canaries.overrides.<hostname>` tunes per-route probe expectations, thresholds, catch-all policy, and post-deploy gate timing without changing signed route state. See [Route Canaries](features/route-canaries.md#configuration) for the keys, defaults, and unmatched-hostname warning.
+
 Secret values belong in Signet's secret store. Point the daemon at it with a dedicated requester key (never the service key) and the Signet agent that owns Bahia's credentials; see [Secret store](../architecture/secret-store.md) and the [runbook](../runbooks/signet-secret-store.md):
 
 ```yaml

@@ -19,6 +19,7 @@ func writeRouteCanaryConfig(t *testing.T, content string) string {
 
 func routeCanaryInt(value int) *int          { return &value }
 func routeCanaryString(value string) *string { return &value }
+func routeCanaryBool(value bool) *bool       { return &value }
 
 // TestLoadDecodesRouteCanaryOverridesFromRepoConfig proves per-route overrides
 // are repo-configured: they decode from YAML keyed by hostname, dotted hostnames
@@ -35,6 +36,12 @@ func TestLoadDecodesRouteCanaryOverridesFromRepoConfig(t *testing.T) {
     Git.ShareGap.net.:
       interval: 15s
       probe_timeout: 45s
+      gate_timeout: 120s
+      gate_retry_interval: 7s
+      failure_threshold: 1
+      success_threshold: 1
+      detect_catch_all: false
+      require_discriminating_health_path: false
       expected_status_min: 401
       expected_status_max: 401
       expected_body_contains: ""
@@ -58,6 +65,11 @@ func TestLoadDecodesRouteCanaryOverridesFromRepoConfig(t *testing.T) {
 	}
 	if git.Interval != 15*time.Second || git.ProbeTimeout != 45*time.Second {
 		t.Fatalf("durations not decoded: %+v", git)
+	}
+	if git.GateTimeout != 120*time.Second || git.GateRetryInterval != 7*time.Second ||
+		git.FailureThreshold == nil || *git.FailureThreshold != 1 || git.SuccessThreshold == nil || *git.SuccessThreshold != 1 ||
+		git.DetectCatchAll == nil || *git.DetectCatchAll || git.RequireDiscriminatingHealthPath == nil || *git.RequireDiscriminatingHealthPath {
+		t.Fatalf("remaining override fields not decoded: %+v", git)
 	}
 	if git.ExpectedStatusMin == nil || *git.ExpectedStatusMin != 401 || git.ExpectedStatusMax == nil || *git.ExpectedStatusMax != 401 {
 		t.Fatalf("status range not decoded: %+v", git)
@@ -147,6 +159,8 @@ func TestRouteCanaryOverrideFieldsCoverEveryDecodedField(t *testing.T) {
 	for _, want := range []string{
 		"interval", "probe_timeout", "expected_status_min", "expected_status_max",
 		"expected_body_contains", "expected_body_regex", "tls_min_days_remaining",
+		"failure_threshold", "success_threshold", "detect_catch_all", "require_discriminating_health_path",
+		"gate_timeout", "gate_retry_interval",
 	} {
 		if _, ok := fields[want]; !ok {
 			t.Fatalf("override field %q is not accepted", want)
@@ -240,6 +254,21 @@ func TestValidateRouteCanariesFailsClosedOnUnusableOverrides(t *testing.T) {
 			},
 			want: "bare hostname",
 		},
+		{name: "zero failure threshold", edit: func(c *RouteCanaryConfig) {
+			c.Overrides = map[string]RouteCanaryOverrideConfig{"git.sharegap.net": {FailureThreshold: routeCanaryInt(0)}}
+		}, want: "failure_threshold"},
+		{name: "zero success threshold", edit: func(c *RouteCanaryConfig) {
+			c.Overrides = map[string]RouteCanaryOverrideConfig{"git.sharegap.net": {SuccessThreshold: routeCanaryInt(0)}}
+		}, want: "success_threshold"},
+		{name: "negative gate timeout", edit: func(c *RouteCanaryConfig) {
+			c.Overrides = map[string]RouteCanaryOverrideConfig{"git.sharegap.net": {GateTimeout: -time.Second}}
+		}, want: "gate timing"},
+		{name: "negative gate retry", edit: func(c *RouteCanaryConfig) {
+			c.Overrides = map[string]RouteCanaryOverrideConfig{"git.sharegap.net": {GateRetryInterval: -time.Second}}
+		}, want: "gate timing"},
+		{name: "required path without detection", edit: func(c *RouteCanaryConfig) {
+			c.Overrides = map[string]RouteCanaryOverrideConfig{"git.sharegap.net": {RequireDiscriminatingHealthPath: routeCanaryBool(true)}}
+		}, want: "requires detect_catch_all"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

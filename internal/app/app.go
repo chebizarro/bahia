@@ -926,6 +926,12 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			return check
 		})
 	}
+	if routeCanarySupervisor != nil && len(cfg.RouteCanaries.Overrides) > 0 {
+		healthProvider.RegisterCheck("route_canary_overrides", func() HealthCheck {
+			unmatched, scanned := routeCanarySupervisor.UnmatchedOverrideHostnames()
+			return routeCanaryOverrideHealth(unmatched, scanned)
+		})
+	}
 	if internalRouteBackend != nil {
 		healthProvider.RegisterCheck("internal_routing", func() HealthCheck {
 			check := HealthCheck{Name: "internal_routing", Status: HealthStatusPass, Message: "nginx include directory and certificate files are ready"}

@@ -3,11 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -292,6 +295,123 @@ func TestSupervisorAppliesStatusOverrideOnlyToItsRoute(t *testing.T) {
 
 func canaryOverrideInt(value int) *int          { return &value }
 func canaryOverrideString(value string) *string { return &value }
+
+func TestSupervisorUsesRouteThresholdsWithoutLeakingToNeighbour(t *testing.T) {
+	policy := testRouteCanaryPolicy()
+	policy.Thresholds = domain.RouteCanaryThresholds{FailureThreshold: 3, SuccessThreshold: 2}
+	policy.Overrides = map[string]domain.RouteCanaryOverride{
+		canaryFastRoute: {FailureThreshold: canaryOverrideInt(1), SuccessThreshold: canaryOverrideInt(1)},
+	}
+	prober := newHostnameRouteProber()
+	prober.status[canaryFastRoute], prober.status[canarySlowRoute] = 502, 502
+	evaluator, err := NewRouteCanaryEvaluator(prober, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast := canaryRoutePlanFor(canaryFastRoute, "44444444-4444-4444-4444-444444444444")
+	slow := canaryRoutePlanFor(canarySlowRoute, "55555555-5555-5555-5555-555555555555")
+	repo := newMemoryRouteCanaryRepo()
+	supervisor, err := NewRouteCanarySupervisor(staticPlanSource{plans: []*domain.DesiredPublicRoutePlan{fast, slow}}, repo, evaluator, nil, nil, time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC)
+	supervisor.now = func() time.Time { return now }
+	state := func(plan *domain.DesiredPublicRoutePlan) domain.RouteCanaryState {
+		value, err := repo.GetState(context.Background(), domain.RouteCanaryKeyForPlan(plan))
+		if err != nil || value == nil {
+			t.Fatalf("state: %v", err)
+		}
+		return *value
+	}
+	supervisor.EvaluateOnce(context.Background())
+	if !state(fast).Open || state(slow).Open {
+		t.Fatal("first failure did not use per-route threshold")
+	}
+	supervisor.EvaluateOnce(context.Background())
+	if state(slow).Open {
+		t.Fatal("fleet route opened before its third failure")
+	}
+	supervisor.EvaluateOnce(context.Background())
+	if !state(slow).Open {
+		t.Fatal("fleet route did not open on third failure")
+	}
+	prober.status[canaryFastRoute], prober.status[canarySlowRoute] = 200, 200
+	supervisor.EvaluateOnce(context.Background())
+	if state(fast).Open || !state(slow).Open {
+		t.Fatal("first success did not use per-route recovery threshold")
+	}
+	supervisor.EvaluateOnce(context.Background())
+	if state(slow).Open {
+		t.Fatal("fleet route did not recover on second success")
+	}
+}
+
+func TestSupervisorWarnsForUnmatchedOverrideUntilRouteAppears(t *testing.T) {
+	policy := testRouteCanaryPolicy()
+	policy.Overrides = map[string]domain.RouteCanaryOverride{"typo.sharegap.net": {Interval: 15 * time.Second}}
+	evaluator, err := NewRouteCanaryEvaluator(newHostnameRouteProber(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &mutableCanaryPlanSource{}
+	core, logs := observer.New(zap.WarnLevel)
+	supervisor, err := NewRouteCanarySupervisor(source, newMemoryRouteCanaryRepo(), evaluator, nil, nil, time.Minute, zap.New(core))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, scanned := supervisor.UnmatchedOverrideHostnames(); scanned {
+		t.Fatal("inventory reported before enumeration")
+	}
+	source.err = errors.New("enumeration unavailable")
+	supervisor.EvaluateDue(context.Background())
+	if _, scanned := supervisor.UnmatchedOverrideHostnames(); scanned {
+		t.Fatal("failed enumeration reported a match result")
+	}
+	source.err = nil
+	supervisor.EvaluateDue(context.Background())
+	if names, scanned := supervisor.UnmatchedOverrideHostnames(); !scanned || !slices.Equal(names, []string{"typo.sharegap.net"}) {
+		t.Fatalf("unmatched = %v, scanned=%t", names, scanned)
+	}
+	if logs.FilterMessage("route canary overrides match no managed route").Len() != 1 {
+		t.Fatal("missing startup warning")
+	}
+	supervisor.EvaluateDue(context.Background())
+	if logs.FilterMessage("route canary overrides match no managed route").Len() != 1 {
+		t.Fatal("warning repeated without change")
+	}
+	source.plans = []*domain.DesiredPublicRoutePlan{canaryRoutePlanFor("Typo.ShareGap.net.", "44444444-4444-4444-4444-444444444444")}
+	supervisor.EvaluateDue(context.Background())
+	if names, _ := supervisor.UnmatchedOverrideHostnames(); len(names) != 0 {
+		t.Fatalf("resolved override still unmatched: %v", names)
+	}
+}
+
+func TestGateUsesRouteTimingWithoutLeakingToNeighbour(t *testing.T) {
+	policy := testRouteCanaryPolicy()
+	policy.Overrides = map[string]domain.RouteCanaryOverride{
+		canaryFastRoute:      {GateTimeout: 2 * time.Minute, GateRetryInterval: 7 * time.Second},
+		"retry.sharegap.net": {GateRetryInterval: 9 * time.Second},
+	}
+	evaluator, err := NewRouteCanaryEvaluator(newHostnameRouteProber(), policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate, err := NewRouteCanaryGate(&stubRouteApplier{}, evaluator, nil, nil, nil,
+		RouteCanaryGateConfig{Timeout: time.Minute, RetryInterval: 3 * time.Second}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg := gate.configFor(canaryFastRoute); cfg.Timeout != 2*time.Minute || cfg.RetryInterval != 7*time.Second {
+		t.Fatalf("overridden gate timing: %+v", cfg)
+	}
+	if cfg := gate.configFor(canarySlowRoute); cfg.Timeout != time.Minute || cfg.RetryInterval != 3*time.Second {
+		t.Fatalf("fleet gate timing: %+v", cfg)
+	}
+	if cfg := gate.configFor("retry.sharegap.net"); cfg.Timeout != time.Minute || cfg.RetryInterval != 9*time.Second {
+		t.Fatalf("partial gate timing: %+v", cfg)
+	}
+}
 
 // TestGateAppliesRouteOverride proves the post-deploy gate uses the same
 // per-route policy as periodic probing: an overridden route deploys on its own
