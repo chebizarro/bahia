@@ -55,6 +55,65 @@ func newAdmissionTestPublisher(t *testing.T, admission *nostrout.Admission, repo
 	return publisher, &frames
 }
 
+func TestDocsOutboxFloodKeepsAssistantCheckpointProjectionAndStatusDeliverable(t *testing.T) {
+	ctx := context.Background()
+	admission := nostrout.New(nostrout.DefaultConfig())
+	repo := newSignalingOutbox()
+	publisher, frames := newAdmissionTestPublisher(t, admission, repo, relayA)
+	var pendingDoc *gonostr.Event
+	for i := 0; i < 38; i++ {
+		ev := testSignedEvent(fmt.Sprintf("startup-doc-%d", i))
+		ev.Kind = 30023
+		ev.Tags = gonostr.Tags{{"d", ev.Content}, {"t", "bahia-docs"}}
+		_, err := publisher.PublishSignedEventWithResults(ctx, ev)
+		if i == 0 {
+			require.NoError(t, err)
+			require.Equal(t, ev.ID.Hex(), receive(t, repo.published, "first docs event"))
+		} else {
+			require.ErrorIs(t, err, ErrPublishIncomplete)
+			entry, found, loadErr := publisher.localOutbox.Get(ev.ID)
+			require.NoError(t, loadErr)
+			require.True(t, found)
+			require.Equal(t, localstore.OutboxPending, entry.State)
+			require.Zero(t, entry.Rounds)
+			if pendingDoc == nil {
+				pendingDoc = ev
+			}
+		}
+	}
+	for i := 0; i < 10; i++ {
+		ev := testSignedEvent(fmt.Sprintf("checkpoint-%d", i))
+		ev.Kind = 4903
+		ev.Tags = gonostr.Tags{{"t", "assistant-checkpoint:session"}}
+		_, err := publisher.PublishSignedEventWithResults(ctx, ev)
+		require.NoError(t, err, "checkpoint %d must deliver without waiting for docs", i)
+		require.Equal(t, ev.ID.Hex(), receive(t, repo.published, "assistant checkpoint"))
+	}
+	projection := testSignedEvent("assistant-projection")
+	projection.Kind = 30900
+	projection.Tags = gonostr.Tags{{"d", "bahia.assistant-session.v2:session"}}
+	_, err := publisher.PublishSignedEventWithResults(ctx, projection)
+	require.NoError(t, err)
+	require.Equal(t, projection.ID.Hex(), receive(t, repo.published, "assistant projection"))
+	status := testSignedEvent("assistant-status")
+	status.Tags = gonostr.Tags{{"d", "bahia.assistant-status.v1:session"}, {"t", "assistant-status"}}
+	_, err = publisher.PublishSignedEventWithResults(ctx, status)
+	require.NoError(t, err)
+	require.Equal(t, status.ID.Hex(), receive(t, repo.published, "assistant status"))
+	require.Equal(t, int32(13), frames.Load(), "only one doc plus assistant traffic reached the relay")
+
+	// A skipped docs round is durable back-pressure, not abandonment. Once
+	// bulk capacity returns, the exact signed outbox entry can deliver.
+	publisher.pool.outboundAdmission = nostrout.New(nostrout.Config{PurposeBudgets: generousAdmissionLanes()})
+	d, _ := publisher.trackDelivery(*pendingDoc, 0)
+	d.mu.Lock()
+	report := publisher.deliverRound(ctx, d)
+	d.mu.Unlock()
+	require.True(t, report.delivered)
+	require.Equal(t, int32(14), frames.Load())
+	require.Equal(t, pendingDoc.ID.Hex(), receive(t, repo.published, "paced docs redelivery"))
+}
+
 // TestPublisherAdmissionRefusalIsBackPressureNotAbandonment pins the contract
 // with the outbox (docs/architecture/outbox-delivery.md): a round the shared
 // controller refuses before relay I/O never counts against the attempt budget,

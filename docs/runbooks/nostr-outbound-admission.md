@@ -53,16 +53,16 @@ Logical budgets count events, not relay fan-out. Defaults per process
 
 | Lane | Carries | Rate/min | Burst |
 |---|---|---:|---:|
-| priority | kind 5 tombstones, kind 1059 gift wraps, kind 25910 ContextVM | 10 | 4 |
-| state | replaceable (10000–19999) and addressable (30000–39999) | 10 | 3 |
+| priority | kind 5 tombstones, kind 1059 gift wraps, kind 25910 ContextVM, assistant checkpoints (`4903`), session projections (`30900`), and statuses (`30315`) | 30 | 24 |
+| state | other replaceable (10000–19999) and addressable (30000–39999) events | 10 | 3 |
 | general | everything else | 10 | 3 |
-| bulk | declared multi-event operations only | 5 | 1 |
+| bulk | paced docs publications and declared multi-event operations | 5 | 1 |
 | signer | NIP-46 requests (kind 24133) | 10 | 4 |
-| aggregate | all lanes together | 45 | 15 |
+| aggregate | all lanes together | 65 | 35 |
 
 Each relay also has a wire budget, charged immediately before every EVENT
-frame (after any reconnect), including NIP-42 AUTH retries: 15 frames/minute
-(burst 5) reserved for priority frames and 40 frames/minute (burst 13) for
+frame (after any reconnect), including NIP-42 AUTH retries: 30 frames/minute
+(burst 24) reserved for priority frames and 25 frames/minute (burst 7) for
 everything else. A server plus one standalone agent against the same relay
 therefore stays below the shared relay's historic 120 events/minute bucket.
 Lanes and wire shares are fixed partitions: bulk operations, state repair, and
@@ -79,10 +79,10 @@ Configuration keys live under `nostr.outbound` (environment:
 | Key | Default |
 |---|---|
 | `kill_switch_file` | empty (see below; also `BAHIA_NOSTR_OUTBOUND_KILL_SWITCH_FILE`) |
-| `aggregate.rate_per_minute`, `aggregate.burst` | `45`, `15` (unset: sum of the lanes) |
+| `aggregate.rate_per_minute`, `aggregate.burst` | `65`, `35` (unset: sum of the lanes) |
 | `lanes.priority`, `lanes.state`, `lanes.general`, `lanes.bulk`, `lanes.signer` | table above |
-| `relay_wire.rate_per_minute`, `relay_wire.burst` | `40`, `13` |
-| `relay_wire_priority.rate_per_minute`, `relay_wire_priority.burst` | `15`, `5` |
+| `relay_wire.rate_per_minute`, `relay_wire.burst` | `25`, `7` |
+| `relay_wire_priority.rate_per_minute`, `relay_wire_priority.burst` | `30`, `24` |
 | `breaker_min`, `breaker_max` | `2s`, `1m` |
 | `duplicate_ttl`, `duplicate_limit` | `10m`, `4096` |
 
@@ -117,6 +117,12 @@ policy, or a NOTICE frame. While open, ordinary publications fail with
 admitted before a newer rate limit cannot close that newer circuit.
 
 ## Multi-event operations
+
+Startup docs sync takes one bounded bulk operation per changed topic. It
+publishes that topic through the outbox before proceeding to the next; it
+neither stages an unbounded catalog queue nor spends the assistant's priority
+lane or reserved relay-wire share. A docs entry already in the outbox remains
+on the bulk lane during redelivery.
 
 Concord rotations, Direct Invite batches, and NIP-77 reconcile uploads are
 admitted as one bounded operation before their first irreversible step (the

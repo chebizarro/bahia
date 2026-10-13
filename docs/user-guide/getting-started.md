@@ -35,6 +35,12 @@ If you run with PostgreSQL, create the database and apply the schema before the 
 
 The daemon reads `-config <file>` (YAML) and then environment variables prefixed `BAHIA_`. `BAHIA_<SECTION>_<FIELD>` maps to `section.field` (`BAHIA_DB_HOST` → `db.host`); use `__` for deeper nesting (`BAHIA_NOSTR__SIDECAR__ENABLED`).
 
+Outbound relay traffic uses bounded `nostr.outbound` admission. Its priority
+share reserves capacity for assistant checkpoints, session projections and
+statuses while startup docs sync is paced through bulk admission. See the
+[outbound admission runbook](../runbooks/nostr-outbound-admission.md) for the
+default budgets and configuration overrides.
+
 Podman targets accept `runtime.default.podman_host` (environment variable
 `BAHIA_RUNTIME__DEFAULT__PODMAN_HOST`) or an environment-specific
 `runtime.environments.<name>.podman_host`. Set it to a custom socket such as

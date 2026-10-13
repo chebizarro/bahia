@@ -170,8 +170,10 @@ is unknown.
 
 Reconciliation addresses one work item in `uncertain` state:
 
-- evidence resolution supplies the exact `request_event_id` observed for the
-  submitted downstream request;
+- evidence resolution supplies the exact signed kind-`30900` intent event ID
+  matched to the durable processor marker; the correlated kind-`30315`
+  status remains the outcome evidence. An ephemeral kind-`25910` request ID
+  cannot be looked up later and is not reconciliation evidence;
 - abandonment supplies a reason and the exact attestation
   `outcome_unknown_cannot_reconcile`.
 

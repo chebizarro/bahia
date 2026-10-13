@@ -2849,7 +2849,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		if servicePubkey != "" {
 			docsQuerier = newDocsRelayQuerier(controlPlanePool, servicePubkey, logger)
 		}
-		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, controlPlanePub, docsQuerier, logger)
+		docsNostrPublisher := docs.NewNostrDocsPublisher(userDocsForNostr, controlPlanePub, docsQuerier, outboundAdmission, logger)
 		bgManager.RegisterWithOptions(docsNostrPublisher, RunnerRequired(false))
 		logger.Info("NIP-23 docs publisher registered", zap.Strings("relays", controlPlaneRelays))
 	}

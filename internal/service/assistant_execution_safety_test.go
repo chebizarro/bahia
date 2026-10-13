@@ -548,7 +548,7 @@ func TestAssistantExecutionMissingReceiptBecomesUncertainAndReconcilesWithoutRep
 		_, err := second.engine.Reconcile(context.Background(), AssistantTurnReconciliationRequest{Reconciliation: domain.AssistantReconciliationRequest{ContractVersion: 2, SessionID: "s-uncertain", RunID: x.RunID, WorkID: x.Work[0].WorkID, RequestEventID: requestID}, OperatorPubkey: "operator", RequestEventID: "reconcile-" + requestID})
 		return err
 	}
-	evidence.set(nil, errors.New("request event not found at EOSE"))
+	evidence.set(nil, errors.New("processed assistant intent evidence does not match work"))
 	if err := reconcile("absent"); !errors.Is(err, ErrAssistantReconciliationRejected) {
 		t.Fatalf("absence reconciled: %v", err)
 	}
