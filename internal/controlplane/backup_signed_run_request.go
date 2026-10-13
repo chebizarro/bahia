@@ -101,6 +101,9 @@ func validateSignedBackupRunRequestWithFreshness(event *nostr.Event, actor strin
 			return nil, fmt.Errorf("backup request contains non-request field %q", key)
 		}
 	}
+	if err := rejectLegacyBackupCredentialVersion(intent.Content); err != nil {
+		return nil, err
+	}
 	if contentIntentID, ok := intent.Content["intent_id"]; ok && contentIntentID != intent.IntentID {
 		return nil, fmt.Errorf("backup request content intent_id differs from signed tag")
 	}

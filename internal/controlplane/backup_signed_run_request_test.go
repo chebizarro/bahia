@@ -3,6 +3,7 @@ package controlplane
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,18 +19,19 @@ func signedBackupRunFixture(t *testing.T, key nostr.SecretKey, mutate func(map[s
 	t.Helper()
 	runID, err := uuid.NewV7()
 	require.NoError(t, err)
-	credentialID := uuid.New()
+	secretID := uuid.New()
+	credentialRef := domain.SecretCredentialRef{Store: secretstore.BackendSignet, CredentialID: "cred_" + strings.Repeat("a", 64), Version: 3}
 	policyID := uuid.New()
 	repositoryID := uuid.New()
 	recipeID := uuid.New()
 	now := time.Now().UTC().Truncate(time.Second)
-	repository := domain.BackupRepository{ID: repositoryID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "file:/backup", CredentialProfile: "backup-operator", CreatedAt: now, UpdatedAt: now}
+	repository := domain.BackupRepository{ID: repositoryID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "file:/backup", CredentialProfile: secretID.String(), CreatedAt: now, UpdatedAt: now}
 	policy := domain.BackupPolicy{ID: policyID, Name: "verify", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, CreatedAt: now, UpdatedAt: now}
 	recipe := domain.BackupRecipe{ID: recipeID, Name: "database", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: repositoryID, PolicyID: &policyID, TargetRef: "/database", VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, CreatedAt: now, UpdatedAt: now}
 	content := map[string]any{
 		"id": runID.String(), "recipe_id": recipeID.String(), "repository_id": repositoryID.String(), "policy_id": policyID.String(),
 		"backend": domain.BackupBackendKopia, "target_ref": recipe.TargetRef, "verification_mode": recipe.VerificationMode,
-		"execution_snapshot": domain.BackupExecutionSnapshot{RecipeEventID: nostr.Generate().Public().Hex(), RepositoryEventID: nostr.Generate().Public().Hex(), PolicyEventID: nostr.Generate().Public().Hex(), CredentialVersionID: &credentialID, Recipe: recipe, Repository: repository, Policy: &policy},
+		"execution_snapshot": domain.BackupExecutionSnapshot{RecipeEventID: nostr.Generate().Public().Hex(), RepositoryEventID: nostr.Generate().Public().Hex(), PolicyEventID: nostr.Generate().Public().Hex(), CredentialRef: &credentialRef, Recipe: recipe, Repository: repository, Policy: &policy},
 	}
 	if mutate != nil {
 		mutate(content)
@@ -44,7 +47,7 @@ func signedBackupRunFixture(t *testing.T, key nostr.SecretKey, mutate func(map[s
 	return event
 }
 
-func TestSignedBackupRunRequestBindsResolvedInputsAndCredentialVersion(t *testing.T) {
+func TestSignedBackupRunRequestBindsResolvedInputsAndSignetVersion(t *testing.T) {
 	key := nostr.Generate()
 	event := signedBackupRunFixture(t, key, nil)
 	intent, err := ValidateSignedBackupRunRequest(&event, key.Public().Hex())
@@ -59,10 +62,18 @@ func TestSignedBackupRunRequestBindsResolvedInputsAndCredentialVersion(t *testin
 	}{
 		{"unbound repository", "resolved execution inputs", func(m map[string]any) { delete(m, "repository_id") }},
 		{"recipe drift", "signed run inputs", func(m map[string]any) { m["target_ref"] = "/other" }},
-		{"unversioned credential", "immutable credential version", func(m map[string]any) {
+		{"unversioned credential", "pinned Signet credential reference", func(m map[string]any) {
 			s := m["execution_snapshot"].(domain.BackupExecutionSnapshot)
-			s.CredentialVersionID = nil
+			s.CredentialRef = nil
 			m["execution_snapshot"] = s
+		}},
+		{"legacy version", "legacy credential_version_id is unsupported", func(m map[string]any) {
+			s := m["execution_snapshot"].(domain.BackupExecutionSnapshot)
+			encoded, _ := json.Marshal(s)
+			var raw map[string]any
+			_ = json.Unmarshal(encoded, &raw)
+			raw["credential_version_id"] = uuid.NewString()
+			m["execution_snapshot"] = raw
 		}},
 		{"lifecycle injection", "non-request field", func(m map[string]any) { m["status"] = "succeeded" }},
 	}

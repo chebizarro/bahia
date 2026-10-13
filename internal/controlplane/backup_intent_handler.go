@@ -14,6 +14,7 @@ import (
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -381,6 +382,9 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		!backupRunContentEqual(signed.Content, intent.Content) {
 		return fmt.Errorf("backup run request fields do not match the signed intent")
 	}
+	if err := rejectLegacyBackupCredentialVersion(signed.Content); err != nil {
+		return err
+	}
 	requested, err := backupRunFromIntentContent(signed)
 	if err != nil || requested.ID == uuid.Nil || intent.Coordinate != "backup-run:"+requested.ID.String() {
 		return fmt.Errorf("backup run request requires an author-minted run coordinate")
@@ -479,12 +483,18 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 		snapshot.RecipeEventID == "" || snapshot.RepositoryEventID == "" {
 		return fmt.Errorf("execution snapshot conflicts with signed run inputs")
 	}
-	if strings.TrimSpace(snapshot.Repository.CredentialProfile) != "" {
-		if snapshot.CredentialVersionID == nil || *snapshot.CredentialVersionID == uuid.Nil {
-			return fmt.Errorf("execution snapshot requires an immutable credential version for the repository profile")
+	if profile := strings.TrimSpace(snapshot.Repository.CredentialProfile); profile != "" {
+		if id, err := uuid.Parse(profile); err != nil || id == uuid.Nil {
+			return fmt.Errorf("execution snapshot repository credential_profile must be a canonical secret UUID")
 		}
-	} else if snapshot.CredentialVersionID != nil {
-		return fmt.Errorf("execution snapshot credential version has no repository profile")
+		if snapshot.CredentialRef == nil {
+			return fmt.Errorf("execution snapshot requires a pinned Signet credential reference")
+		}
+		if err := secretstore.ValidateRef(*snapshot.CredentialRef); err != nil {
+			return fmt.Errorf("execution snapshot credential reference: %w", err)
+		}
+	} else if snapshot.CredentialRef != nil {
+		return fmt.Errorf("execution snapshot credential reference has no repository secret")
 	}
 	if snapshot.Policy == nil {
 		if requested.PolicyID != nil || snapshot.PolicyEventID != "" {
@@ -497,6 +507,17 @@ func validateBackupExecutionSnapshot(requested, receipt *domain.BackupRun) error
 	right, rightErr := json.Marshal(receipt.ExecutionSnapshot)
 	if leftErr != nil || rightErr != nil || !bytes.Equal(left, right) {
 		return fmt.Errorf("execution snapshot conflicts with the ACKed run receipt")
+	}
+	return nil
+}
+
+func rejectLegacyBackupCredentialVersion(content map[string]any) error {
+	raw, ok := content["execution_snapshot"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	if _, legacy := raw["credential_version_id"]; legacy {
+		return fmt.Errorf("legacy credential_version_id is unsupported: use a pinned Signet credential_ref and a canonical secret UUID in credential_profile")
 	}
 	return nil
 }
