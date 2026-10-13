@@ -569,7 +569,6 @@ type PackageBackendConfig struct {
 // LLMControlplaneConfig holds DB-first LLM provisioning control-plane settings.
 type LLMControlplaneConfig struct {
 	Enabled              bool                                `koanf:"enabled" secret:"false"`
-	AllowOperationalREST bool                                `koanf:"allow_operational_rest" secret:"false"`
 	DefaultGatewayRef    string                              `koanf:"default_gateway_ref" secret:"false"`
 	RecoveryPollInterval time.Duration                       `koanf:"recovery_poll_interval" secret:"false"`
 	StaleRunTimeout      time.Duration                       `koanf:"stale_run_timeout" secret:"false"`
@@ -1700,7 +1699,6 @@ func Defaults() *Config {
 		},
 		LLM: LLMControlplaneConfig{
 			Enabled:              false,
-			AllowOperationalREST: false,
 			RecoveryPollInterval: 30 * time.Second,
 			StaleRunTimeout:      15 * time.Minute,
 			ReconcileInterval:    60 * time.Second,
@@ -1948,6 +1946,9 @@ func load(configPath string, persistBootstrap bool) (*Config, error) {
 	}
 	if err := rejectUnknownRouteCanaryOverrideKeys(k); err != nil {
 		return nil, err
+	}
+	if k.Exists("llm.allow_operational_rest") {
+		return nil, fmt.Errorf("config validation failed: llm.allow_operational_rest was removed with operational REST; use signed intents for mutations and relay subscriptions for reads")
 	}
 	if err := k.Unmarshal("", cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
@@ -2860,17 +2861,6 @@ func normalizePubkeyList(values []string) ([]string, error) {
 }
 
 func (c *Config) validateLLM() error {
-	if c.LLM.AllowOperationalREST {
-		if !c.Auth.Enabled {
-			return fmt.Errorf("config validation failed: auth.enabled=true is required when llm.allow_operational_rest=true")
-		}
-		if c.LLM.Empty() {
-			return fmt.Errorf("config validation failed: llm operator allowlist is required when llm.allow_operational_rest=true")
-		}
-		if !c.LLM.Enabled {
-			return fmt.Errorf("config validation failed: llm.enabled=true is required when llm.allow_operational_rest=true")
-		}
-	}
 	if !c.LLM.Enabled {
 		return nil
 	}

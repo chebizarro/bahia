@@ -15,7 +15,7 @@ import (
 
 // These goldens pin the MCP result shapes, served without any repository
 // dependency. Real OCK encryption and the local signed-event store are used.
-func TestF74bMCPStoreReadParityWithoutDatabase(t *testing.T) {
+func TestMCPStoreReadParityWithoutDatabase(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	fixture := attachCanonicalMCPFixture(t, server)
