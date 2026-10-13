@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -884,7 +885,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 					Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "suspended", "sql_authority": "disabled"}}
 			}
 			return HealthCheck{Name: "runtime_reconciliation", Status: HealthStatusWarn,
-				Message: "canonical route-free Docker auto_apply is enabled; Compose, release-binding, route, tool and LLM effects remain fail closed (bahia-4f10q.2)",
+				Message: "canonical route-free Docker auto_apply is enabled; Compose, release-binding, route and LLM effects remain fail closed (bahia-4f10q.2/.2.2)",
 				Details: map[string]string{"desired_source": "relay/local cp-state", "auto_apply": "docker_subset", "sql_authority": "disabled"}}
 		})
 		if autoApplyExecutor == nil {
@@ -1170,7 +1171,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	// LLM provisioning control plane.
 	var llmRegistry *service.LLMRegistryService
-	if cfg.LLM.Enabled {
+	if cfg.LLM.Enabled && dbAvailable {
 		llmRouteRepo := repository.NewPgLLMRouteRepository(pool)
 		llmReleaseRepo := repository.NewPgLLMReleaseRepository(pool)
 		llmIntentRepo := repository.NewPgLLMDeploymentIntentRepository(pool)
@@ -1178,7 +1179,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		llmObsRepo := repository.NewPgLLMRouteObservationRepository(pool)
 		llmStateRepo := repository.NewPgLLMRouteStateRepository(pool)
 		llmRegistry = service.NewLLMRegistryService(llmRouteRepo, llmReleaseRepo, envRepo, llmIntentRepo, llmRunRepo, llmObsRepo, llmStateRepo, publisher, logger)
-		registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "llm_provisioning_recovery", "LLM provisioning and gateway route repair require canonical signed-intent and desired-state replay")
 		logger.Info("LLM control plane enabled", zap.String("default_gateway_ref", cfg.LLM.DefaultGatewayRef))
 	}
 
@@ -1704,16 +1704,18 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 	}
 	// Register the intent handler when the llm domain is enabled.
-	if enabledDomains["llm"] && llmRegistry != nil {
-		intentProcessor.RegisterHandler("llm", controlplane.NewLLMRouteIntentHandler(
+	var llmIntentHandler *controlplane.LLMRouteIntentHandler
+	if enabledDomains["llm"] && cfg.LLM.Enabled {
+		llmIntentHandler = controlplane.NewLLMRouteIntentHandler(
 			controlplane.LLMRouteIntentHandlerConfig{
-				DeploymentUnavailableReason: "LLM deployment execution is paused until canonical signed-intent recovery is available",
+				DeploymentUnavailableReason: "bahia-4f10q.2.2: LLM deployment execution is paused until canonical signed-intent recovery is available",
 				Routes:                      llmRegistry,
 				Publish:                     llmRoutePublisher,
 				Status:                      intentStatus,
 				Logger:                      logger,
 			},
-		))
+		)
+		intentProcessor.RegisterHandler("llm", llmIntentHandler)
 		logger.Info("LLM route intent handler registered")
 	}
 	// register package intent handler, publishing through the
@@ -2489,26 +2491,110 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// --- end N1 wiring ---
 
 	// Tool provisioning orchestration.
+	// Legacy SQL coordinator remains constructed for compatibility callers but
+	// is neither registered for recovery nor allowed to authorize signed tool
+	// approvals. The canonical controller below owns executable effects.
 	var toolCoordinator *service.ToolProvisioningCoordinator
 	toolBuilder := build.NewDockerBuilder(cfg.Runtime.DockerHost, logger)
+	var canonicalTool *reconcile.ToolCanonicalController
+	if enabledDomains["tool"] && autoApplySource != nil && autoApplyExecutor != nil &&
+		confidentialEncryptor != nil && serviceKeyer != nil && nostrPub != nil {
+		canonicalTool = &reconcile.ToolCanonicalController{
+			Base: autoApplySource, Outbox: localOutbox, DeliveryTarget: nostrPub.Target(),
+			AllowedAuthor: func(author string) bool {
+				for _, operator := range trustSet.FleetOps() {
+					if operator == author {
+						return true
+					}
+				}
+				return false
+			}, ImageRepo: "bahia-tools", InstallerVersion: "v1",
+			Decryptor: confidentialEncryptor, Builder: toolBuilder,
+			DeployEffect: reconcile.DockerAutoApplyEffect{Resolver: runtimeResolver},
+			Lock:         runtimeApplyLock, Signer: serviceKeyer, Logger: logger,
+			Enqueue: func(ctx context.Context, ev nostr.Event) error {
+				return nostrPub.Enqueue(ctx, ev, "tool-effect-status", nil)
+			},
+			Ready: bootstrapper.ReadySignal(),
+		}
+		bgManager.RegisterWithOptions(canonicalTool, RunnerRequired(false))
+	}
+	// Only the observable, idempotent external-API gateway effect is enabled.
+	// Unversioned gateway admin tokens cannot be atomically bound to a decision.
+	var canonicalLLM *reconcile.LLMCanonicalController
+	if cfg.LLM.Enabled && enabledDomains["llm"] && canonicalRuntime != nil &&
+		confidentialEncryptor != nil && serviceKeyer != nil && nostrPub != nil && llmIntentHandler != nil {
+		gatewayRef := strings.TrimSpace(cfg.LLM.DefaultGatewayRef)
+		gatewayAdminRevision := ""
+		var gateway llmadapter.GatewayRouteManager
+		if endpoint, ok := cfg.LLM.Gateways[gatewayRef]; ok && gatewayRef != "" &&
+			strings.TrimSpace(endpoint.AuthToken) == "" && strings.TrimSpace(endpoint.AuthTokenFile) == "" {
+			gateway = llmadapter.NewHTTPGatewayRouteManager(llmadapter.GatewayHTTPConfig{
+				Endpoints: map[string]llmadapter.GatewayHTTPEndpointConfig{gatewayRef: {
+					Type: endpoint.Type, BaseURL: endpoint.BaseURL, Timeout: endpoint.Timeout,
+				}},
+			}, nil)
+			gatewayAdminRevision = fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d", endpoint.Type, endpoint.BaseURL, endpoint.Timeout))))
+		} else {
+			gatewayRef = ""
+		}
+		canonicalLLM = &reconcile.LLMCanonicalController{
+			Runtime: canonicalRuntime, Outbox: localOutbox, DeliveryTarget: nostrPub.Target(),
+			Signer: serviceKeyer, Encryptor: confidentialEncryptor,
+			PublishRelease: func(ctx context.Context, event nostr.Event) error {
+				return nostrPub.PublishBeforeCommit(ctx, event, "llm-release", nil)
+			},
+			Enqueue: func(ctx context.Context, event nostr.Event) error {
+				return nostrPub.Enqueue(ctx, event, "llm-effect-status", nil)
+			},
+			AllowedAuthor: func(author string) bool {
+				for _, operator := range trustSet.FleetOps() {
+					if operator == author {
+						return true
+					}
+				}
+				return false
+			},
+			Records: secretView, Secrets: secretResolver, Gateway: gateway, GatewayRef: gatewayRef,
+			GatewayAdminRevision: gatewayAdminRevision,
+			Lock:                 runtimeApplyLock, Ready: bootstrapper.ReadySignal(), Logger: logger,
+		}
+		llmIntentHandler.SetCanonicalLifecycle(canonicalLLM)
+		bgManager.RegisterWithOptions(canonicalLLM, RunnerRequired(false))
+	}
 	toolSecurity := service.NewToolSecurityService(toolProvisionRepo, nil, logger, service.ToolSecurityConfig{})
 	defaultRuntime, rtErr := runtime.NewRuntime(runtime.RuntimeConfig{Type: cfg.Runtime.Type, DockerHost: cfg.Runtime.DockerHost, ComposeDir: cfg.Runtime.ComposeDir, RegistryAuth: runtimeRegistryAuth, KubeContext: cfg.Runtime.KubeContext, KubeNamespace: cfg.Runtime.KubeNamespace, KubeConfig: cfg.Runtime.KubeConfig}, logger)
 	if rtErr != nil {
-		logger.Warn("default runtime init for tool provisioning failed", zap.Error(rtErr))
+		logger.Warn("default runtime init for legacy tool provisioning failed", zap.Error(rtErr))
 	}
 	toolCoordinator = service.NewToolProvisioningCoordinator(
-		toolProvisionRepo,
-		serviceRepo,
-		envRepo,
-		toolSecurity,
-		toolBuilder,
-		defaultRuntime,
+		toolProvisionRepo, serviceRepo, envRepo, toolSecurity, toolBuilder, defaultRuntime,
 		controlplane.NewToolResponder(controlPlanePool, serviceKeyer, logger, nostrEventRepo),
-		notifDispatcher,
-		logger,
+		notifDispatcher, logger,
 		service.ToolProvisioningConfig{BaseImageRef: "", TargetRegistry: cfg.Registry.URL, TargetRepo: "tools/swarmstr", InstallerVersion: "v1"},
 	)
-	registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "tool_provisioning_recovery", "tool provisioning recovery requires canonical signed-intent replay; manual approvals are paused until atomic canonical execution is available")
+	if canonicalTool == nil {
+		registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "tool_provisioning_recovery", "bahia-4f10q.2.1: canonical Docker tool executor prerequisites are unavailable; tool effects are paused")
+	} else {
+		healthProvider.RegisterCheck("tool_provisioning_recovery", func() HealthCheck {
+			return HealthCheck{Name: "tool_provisioning_recovery", Status: HealthStatusWarn,
+				Message: "signed tool request/approval and local Docker build/deploy recovery enabled; unsigned MCP and non-Docker tool effects remain paused (bahia-4f10q.2.1)"}
+		})
+	}
+	if cfg.LLM.Enabled {
+		if canonicalLLM == nil {
+			registerSQLWorkflowRecoveryDegraded(healthProvider, logger, "llm_provisioning_recovery", "bahia-4f10q.2.2: canonical LLM release/deployment recovery prerequisites are unavailable")
+		} else {
+			message := "encrypted canonical LLM release receipts enabled; external route effect paused until an observable credential-pinned gateway is configured (bahia-4f10q.2.2)"
+			if canonicalLLM.Gateway != nil {
+				message = "encrypted canonical LLM release receipts and external-API route effects enabled; runtime-managed provisioning and unversioned gateway-admin credentials remain paused (bahia-4f10q.2.2)"
+			}
+			healthProvider.RegisterCheck("llm_provisioning_recovery", func() HealthCheck {
+				return HealthCheck{Name: "llm_provisioning_recovery", Status: HealthStatusWarn,
+					Message: message}
+			})
+		}
+	}
 
 	// MCP (Model Context Protocol) server for AI agent integration.
 
@@ -2988,7 +3074,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 		reactor := controlplane.NewReactor(reactorConfig, registry, controlPlanePool, serviceKeyer, logger, reactorOpts...)
 		if enabledDomains["tool"] {
-			intentProcessor.RegisterHandler("tool", controlplane.NewToolIntentHandler(reactor))
+			intentProcessor.RegisterHandler("tool", controlplane.NewToolIntentHandler(reactor, canonicalTool))
 		}
 		if enabledDomains["worker"] && workerRepo != nil {
 			intentProcessor.RegisterHandler("worker", controlplane.NewWorkerIntentHandler(reactor))

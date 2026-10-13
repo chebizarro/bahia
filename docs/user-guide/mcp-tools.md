@@ -121,7 +121,7 @@ Record overrides may return `pending` until the endpoint projection is visible. 
 
 ### Tool provisioning
 
-`bahia_tool_provision_request`, `bahia_tool_provision_status`, `bahia_tool_provision_approve`, `bahia_tool_provision_reject`, `bahia_tool_profile_get`, `bahia_tool_denylist_list`, `bahia_tool_denylist_add`, `bahia_tool_denylist_remove`. Tool provisioning and approval execution are suspended. Approve and reject do not turn SQL provisioning rows into authority: the daemon refuses an unsigned MCP-generated event, and even an operator-signed `tool/approval-response` intent receives a rejected `30315` status. No tool image build or deploy follows that status.
+`bahia_tool_provision_request`, `bahia_tool_provision_status`, `bahia_tool_provision_approve`, `bahia_tool_provision_reject`, `bahia_tool_profile_get`, `bahia_tool_denylist_list`, `bahia_tool_denylist_add`, `bahia_tool_denylist_remove`. These MCP write tools remain paused (`bahia-4f10q.2.1`): an authenticated MCP session cannot manufacture the operator signature required for a canonical tool request or approval. Operators instead publish signed `tool/request` and `tool/approval-response` kind-30900 intents directly. The bounded, managed-Docker executor requires both relay-ACKed acceptance receipts before building or deploying; denials never cause an effect. Legacy ContextVM and non-Docker tool provisioning remain paused.
 
 ### Backup
 

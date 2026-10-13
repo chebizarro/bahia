@@ -76,6 +76,7 @@ var canonicalRuntimeTopics = map[int]string{
 	kinds.DeploymentRunRegistry:         kinds.CPStateTopicDeploymentRun,
 	int(kinds.CPStateFamilyWorkerState): kinds.WorkerStateTopic,
 	kinds.LLMRouteRegistry:              kinds.CPStateTopicLLMRoute,
+	kinds.LLMReleaseRegistry:            kinds.CPStateTopicLLMRelease,
 	kinds.LLMRouteState:                 kinds.CPStateTopicLLMState,
 	kinds.MLInferenceEndpointRegistry:   kinds.CPStateTopicMLEndpoint,
 	kinds.MLInferenceEndpointState:      kinds.CPStateTopicMLEndpointState,

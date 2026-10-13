@@ -240,9 +240,19 @@ func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) 
 			return err
 		}
 	}
-	if intent != nil && intent.Domain == "tool" && intent.Op == "approval-response" {
-		if err := validateToolApprovalSignedEnvelope(intent); err != nil {
-			return err
+	if intent.Domain == "tool" {
+		switch intent.Op {
+		case "approval-response":
+			if err := validateToolApprovalSignedEnvelope(intent); err != nil {
+				return err
+			}
+		case "request":
+			if err := validateToolRequestSignedEnvelope(intent); err != nil {
+				return err
+			}
+			if !llmRequestObserved(intent, p.store) {
+				return fmt.Errorf("tool request is not observed in the local relay event store")
+			}
 		}
 	}
 	if raw, ok := intent.Content["expected_updated_at"]; ok {
@@ -280,9 +290,16 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		)
 		return nil
 	}
-	if intent.Domain == "tool" && intent.Op == "approval-response" {
-		if err := validateToolApprovalSignedEnvelope(intent); err != nil {
-			return err
+	if intent.Domain == "tool" {
+		switch intent.Op {
+		case "approval-response":
+			if err := validateToolApprovalSignedEnvelope(intent); err != nil {
+				return err
+			}
+		case "request":
+			if err := validateToolRequestSignedEnvelope(intent); err != nil {
+				return err
+			}
 		}
 	}
 	if requiresStrictIntentReplay(intent) && (p.status == nil || p.status.publish == nil || p.status.signer == nil) {
@@ -303,9 +320,10 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	}
 
 	// Step 1: Deduplicate by intent_id.
-	// Backup run replay is decided by the immutable outbox admission
-	// keys, not this separate processed cache.
-	if !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
+	// Virtualization and canonical LLM lifecycle replay are decided by their
+	// immutable outbox admissions, not this separate processed cache. Backup
+	// run replay has the same rule.
+	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if intent.Domain == kinds.VirtualizationDomain && record == nil {
 			return fmt.Errorf("bahia-4f10q.1: processed virtualization marker is corrupt")
@@ -436,7 +454,7 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		if intent.Domain == "tool" && errors.Is(err, errToolApprovalAuthority) {
 			return err
 		}
-		if intent.Domain == kinds.VirtualizationDomain || (intent.Domain == "tool" && intent.Op == "approval-response") {
+		if intent.Domain == kinds.VirtualizationDomain || (intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) {
 			if p.status == nil {
 				return fmt.Errorf("%w: rejection status publisher is unavailable", err)
 			}
@@ -484,7 +502,18 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		return nil
 	}
 	if requiresStrictIntentReplay(intent) {
-		return p.status.PublishAcceptedChecked(ctx, intent)
+		if err := p.status.PublishAcceptedChecked(ctx, intent); err != nil {
+			return err
+		}
+		// A checked admission may unlock a separately fenced external effect.
+		// Notify only after the signed status has reached the publish quorum;
+		// the handler's durable admission row also supports crash recovery.
+		if after, ok := handler.(interface {
+			AfterAccepted(context.Context, *Intent)
+		}); ok {
+			after.AfterAccepted(ctx, intent)
+		}
+		return nil
 	}
 
 	// Step 7: Publish canonical state is done by the domain handler.
@@ -630,7 +659,9 @@ func requiresStrictIntentReplay(intent *Intent) bool {
 	case "build":
 		return intent.Op == "request"
 	case "tool":
-		return intent.Op == "approval-response"
+		return intent.Op == "approval-response" || intent.Op == "request"
+	case "llm":
+		return isLLMLifecycleIntent(intent)
 	case "adoption":
 		return intent.Op == "scan"
 	case "ml":

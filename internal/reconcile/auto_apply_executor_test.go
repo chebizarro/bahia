@@ -87,6 +87,7 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 		executor := &CanonicalAutoApplyExecutor{
 			Source: &autoSnapshotStub{snapshot: snapshot}, Effect: processCrashEffect{marker: marker, mode: mode},
 			Lock: lock, Outbox: outbox, Signer: keyer.NewPlainKeySigner(key),
+			Family: os.Getenv("BAHIA_AUTO_APPLY_FAMILY"),
 			Enqueue: func(_ context.Context, event nostr.Event) error {
 				if mode == "publish" {
 					var content struct {
@@ -104,13 +105,20 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 		t.Fatalf("helper did not crash at %s boundary: %v", mode, err)
 	}
 	for _, tc := range []struct {
-		mode string
-		code int
+		mode   string
+		code   int
+		family string
 	}{
-		{"effect", 23},
-		{"publish", 24},
+		{"effect", 23, autoApplyReceiptFamily},
+		{"publish", 24, autoApplyReceiptFamily},
+		{"effect", 23, toolBuildReceiptFamily},
+		{"publish", 24, toolBuildReceiptFamily},
+		{"effect", 23, toolDeployReceiptFamily},
+		{"publish", 24, toolDeployReceiptFamily},
+		{"effect", 23, llmRouteReceiptFamily},
+		{"publish", 24, llmRouteReceiptFamily},
 	} {
-		t.Run(tc.mode, func(t *testing.T) {
+		t.Run(tc.family+"-"+tc.mode, func(t *testing.T) {
 			dir := t.TempDir()
 			path, marker := filepath.Join(dir, "outbox.bolt"), filepath.Join(dir, "effect.marker")
 			key := nostr.Generate()
@@ -120,11 +128,18 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 				EnvironmentEventID: "env-v1", ArtifactEventID: "artifact-v1", IntentEventID: "intent-v1",
 				Service: domain.Service{ID: serviceID}, Environment: domain.Environment{ID: envID},
 				Spec: domain.DesiredServiceSpec{ServiceID: serviceID, EnvironmentID: envID, DesiredHash: "sha256:desired"}}
+			if tc.family == toolBuildReceiptFamily || tc.family == toolDeployReceiptFamily {
+				snapshot.Tool = &ToolEffectInput{RequestEventID: "signed-tool-request", Step: tc.family}
+			}
+			if tc.family == llmRouteReceiptFamily {
+				snapshot.LLM = &LLMEffectInput{RequestEventID: "signed-llm-request", GatewayRef: "gateway"}
+			}
 			raw, err := json.Marshal(snapshot)
 			require.NoError(t, err)
 			cmd := exec.Command(os.Args[0], "-test.run=^TestCanonicalAutoApplyProcessCrashReplay$")
 			cmd.Env = append(os.Environ(),
 				"BAHIA_AUTO_APPLY_CRASH_HELPER="+tc.mode, "BAHIA_AUTO_APPLY_OUTBOX="+path,
+				"BAHIA_AUTO_APPLY_FAMILY="+tc.family,
 				"BAHIA_AUTO_APPLY_MARKER="+marker, "BAHIA_AUTO_APPLY_KEY="+key.Hex(),
 				"BAHIA_AUTO_APPLY_SNAPSHOT="+string(raw))
 			err = cmd.Run()
@@ -139,7 +154,7 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 			require.NoError(t, err)
 			executor := &CanonicalAutoApplyExecutor{
 				Source: &autoSnapshotStub{snapshot: snapshot}, Effect: processCrashEffect{marker: marker},
-				Lock: lock, Outbox: outbox, Signer: keyer.NewPlainKeySigner(key),
+				Lock: lock, Outbox: outbox, Signer: keyer.NewPlainKeySigner(key), Family: tc.family,
 				Enqueue: func(_ context.Context, event nostr.Event) error {
 					_, err := outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: "default"})
 					return err

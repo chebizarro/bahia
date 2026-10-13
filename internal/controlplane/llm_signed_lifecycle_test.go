@@ -1,15 +1,33 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestLLMAcceptedStatusRemainsAvailableForReceiptRecovery(t *testing.T) {
+	actor, serviceKey := nostr.Generate(), nostr.Generate()
+	route, env := uuid.New(), uuid.New()
+	request := signedLLMLifecycleIntent(t, actor, "deploy", route.String()+":"+env.String(),
+		map[string]any{"route_id": route.String(), "environment_id": env.String(), "release_id": uuid.NewString()}, time.Now())
+	var published nostr.Event
+	publisher := NewIntentStatusPublisher(func(_ context.Context, event nostr.Event) error {
+		published = event
+		return nil
+	}, keyer.NewPlainKeySigner(serviceKey), zap.NewNop())
+	require.NoError(t, publisher.PublishAcceptedChecked(t.Context(), request))
+	require.Equal(t, "accepted", tagValueNostr(published.Tags, "status"))
+	require.Equal(t, "llm", tagValueNostr(published.Tags, "workflow"))
+	require.Empty(t, tagValueNostr(published.Tags, "expiration"), "NIP-40 expiry cannot erase a nonterminal receipt's authority")
+}
 
 func signedLLMLifecycleIntent(t *testing.T, key nostr.SecretKey, op, coordinate string, content map[string]any, createdAt time.Time) *Intent {
 	t.Helper()

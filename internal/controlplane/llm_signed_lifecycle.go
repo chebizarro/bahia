@@ -96,6 +96,11 @@ func validateLLMLifecycleSignedRequest(intent *Intent) error {
 	return nil
 }
 
+// ValidateLLMLifecycleSignedRequest is shared with the DB-less replay source.
+func ValidateLLMLifecycleSignedRequest(intent *Intent) error {
+	return validateLLMLifecycleSignedRequest(intent)
+}
+
 func sameLLMRequestContent(a, b map[string]any) bool {
 	left, leftErr := json.Marshal(a)
 	right, rightErr := json.Marshal(b)

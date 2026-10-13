@@ -672,8 +672,8 @@ func (r *Reactor) handleToolApprovalResponse(_ context.Context, event *nostr.Eve
 	if event == nil || !event.CheckID() || !event.VerifySignature() || !r.isAuthorized(event.PubKey.Hex()) {
 		return fmt.Errorf("tool approval requires an authorized operator-signed event")
 	}
-	r.zapLog.Warn("tool approval paused: SQL-derived resolved tools cannot be bound atomically to a signed request")
-	return fmt.Errorf("tool approval paused: canonical execution inputs and atomic approval are unavailable")
+	r.zapLog.Warn("tool approval paused (bahia-4f10q.2.1): only the signed canonical handler owns effects")
+	return fmt.Errorf("tool approval paused (bahia-4f10q.2.1): canonical executor required")
 }
 
 func tagValueNostr(tags nostr.Tags, key string) string {

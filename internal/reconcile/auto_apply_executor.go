@@ -42,6 +42,8 @@ type ApplySnapshot struct {
 	Unit               domain.DeploymentUnit     `json:"unit"`
 	Spec               domain.DesiredServiceSpec `json:"spec"`
 	SecretPins         []ApplySecretPin          `json:"secret_pins,omitempty"`
+	Tool               *ToolEffectInput          `json:"tool,omitempty"`
+	LLM                *LLMEffectInput           `json:"llm,omitempty"`
 }
 
 type ApplySecretPin struct {
@@ -96,6 +98,24 @@ type CanonicalAutoApplyExecutor struct {
 	Signer  nostr.Signer
 	Enqueue func(context.Context, nostr.Event) error
 	Ready   <-chan struct{}
+	// Family and StatusScope isolate other canonical, revision-fenced steps
+	// from Docker auto-apply. Empty values retain the original lifecycle.
+	Family      string
+	StatusScope string
+}
+
+func (e *CanonicalAutoApplyExecutor) family() string {
+	if e != nil && e.Family != "" {
+		return e.Family
+	}
+	return autoApplyReceiptFamily
+}
+
+func (e *CanonicalAutoApplyExecutor) statusScope() string {
+	if e != nil && e.StatusScope != "" {
+		return e.StatusScope
+	}
+	return "auto-apply"
 }
 
 func (e *CanonicalAutoApplyExecutor) Name() string { return "canonical-auto-apply-recovery" }
@@ -118,7 +138,7 @@ func (e *CanonicalAutoApplyExecutor) ReconcileReceipts(ctx context.Context) erro
 	if e == nil || e.Outbox == nil {
 		return fmt.Errorf("canonical auto-apply receipt store is unavailable")
 	}
-	rows, err := e.Outbox.ListControlRecords(autoApplyReceiptFamily)
+	rows, err := e.Outbox.ListControlRecords(e.family())
 	if err != nil {
 		return err
 	}
@@ -133,20 +153,37 @@ func (e *CanonicalAutoApplyExecutor) ReconcileReceipts(ctx context.Context) erro
 			failures = append(failures, fmt.Errorf("invalid canonical auto-apply recovery receipt"))
 			continue
 		}
-		if err := e.deliverCheckpoint(ctx, record.Checkpoint); err != nil {
-			failures = append(failures, fmt.Errorf("receipt %s delivery: %w", record.Snapshot.IntentID, err))
-			continue
-		}
-		switch record.Phase {
-		case "terminal", "refused", "superseded", "recovery_required":
-			continue
-		}
-		if _, err := e.AutoRemediateDesiredState(ctx, record.Snapshot.Spec.ServiceID,
-			record.Snapshot.Spec.EnvironmentID, nil); err != nil {
-			failures = append(failures, fmt.Errorf("receipt %s resume: %w", record.Snapshot.IntentID, err))
+		if err := e.RecoverReceipt(ctx, record.Snapshot.IntentID); err != nil {
+			failures = append(failures, err)
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// RecoverReceipt re-enqueues the exact signed checkpoint before attempting to
+// resume one nonterminal effect. Callers with multiple step-specific sources
+// can select the source from the receipt ID, then invoke this method once.
+func (e *CanonicalAutoApplyExecutor) RecoverReceipt(ctx context.Context, id uuid.UUID) error {
+	record, err := e.readReceipt(id)
+	if err != nil {
+		return fmt.Errorf("read canonical effect receipt %s: %w", id, err)
+	}
+	if record == nil {
+		return fmt.Errorf("canonical effect receipt %s is absent", id)
+	}
+	if err := e.deliverCheckpoint(ctx, record.Checkpoint); err != nil {
+		return fmt.Errorf("receipt %s delivery: %w", id, err)
+	}
+	switch record.Phase {
+	case "terminal", "refused", "superseded", "recovery_required":
+		return nil
+	}
+	_, err = e.AutoRemediateDesiredState(ctx, record.Snapshot.Spec.ServiceID,
+		record.Snapshot.Spec.EnvironmentID, nil)
+	if err != nil {
+		return fmt.Errorf("receipt %s resume: %w", id, err)
+	}
+	return nil
 }
 
 func (e *CanonicalAutoApplyExecutor) AutoRemediateDesiredState(ctx context.Context, serviceID, envID uuid.UUID, statusFn service.DeployStatusCallback) (*domain.RuntimeObservation, error) {
@@ -213,6 +250,9 @@ func (e *CanonicalAutoApplyExecutor) AutoRemediateDesiredState(ctx context.Conte
 	if err != nil {
 		if receipt.Phase == "effect_started" {
 			return nil, e.refuse(ctx, receipt, ErrAutoApplyRecoveryRequired)
+		}
+		if errors.Is(err, ErrFreshDecisionRequired) {
+			return nil, e.refuse(ctx, receipt, err)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrAutoApplyRecoveryRequired, err)
 	}
@@ -291,7 +331,7 @@ func (e *CanonicalAutoApplyExecutor) AutoRemediateDesiredState(ctx context.Conte
 // An already-admitted decision still deserves a signed fresh-decision status;
 // no receipt means there was never an accepted executor snapshot to report.
 func (e *CanonicalAutoApplyExecutor) refuseStaleReceipts(ctx context.Context, serviceID, envID uuid.UUID) error {
-	rows, err := e.Outbox.ListControlRecords(autoApplyReceiptFamily)
+	rows, err := e.Outbox.ListControlRecords(e.family())
 	if err != nil {
 		return err
 	}
@@ -369,7 +409,7 @@ func (e *CanonicalAutoApplyExecutor) refuse(ctx context.Context, receipt *autoAp
 }
 
 func (e *CanonicalAutoApplyExecutor) readReceipt(id uuid.UUID) (*autoApplyReceipt, error) {
-	raw, err := e.Outbox.GetControlRecord(autoApplyReceiptFamily, id.String())
+	raw, err := e.Outbox.GetControlRecord(e.family(), id.String())
 	if err != nil || raw == nil {
 		return nil, err
 	}
@@ -421,7 +461,7 @@ func (e *CanonicalAutoApplyExecutor) checkpoint(ctx context.Context, snapshot Ap
 		return nil, err
 	}
 	event := nostr.Event{Kind: 30315, CreatedAt: at, Tags: nostr.Tags{
-		{"d", "intent-status:" + snapshot.DecisionActor + ":auto-apply:" + snapshot.IntentID.String()},
+		{"d", "intent-status:" + snapshot.DecisionActor + ":" + e.statusScope() + ":" + snapshot.IntentID.String()},
 		{"domain", "intent"}, {"t", "intent-status"}, {"p", snapshot.DecisionActor},
 		{"e", snapshot.DecisionEventID}, {"intent_id", snapshot.IntentID.String()},
 		{"status", status},
@@ -435,7 +475,7 @@ func (e *CanonicalAutoApplyExecutor) checkpoint(ctx context.Context, snapshot Ap
 	if err != nil {
 		return nil, err
 	}
-	_, err = e.Outbox.UpdateControlRecord(autoApplyReceiptFamily, snapshot.IntentID.String(), func(previous []byte) ([]byte, error) {
+	_, err = e.Outbox.UpdateControlRecord(e.family(), snapshot.IntentID.String(), func(previous []byte) ([]byte, error) {
 		if current == nil {
 			if previous != nil {
 				return nil, fmt.Errorf("auto-apply admission raced another decision")

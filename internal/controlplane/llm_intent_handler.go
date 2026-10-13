@@ -31,6 +31,14 @@ type LLMRouteCRUD interface {
 // PublishBeforeCommit for outbox durability.
 type LLMRouteStatePublisher func(ctx context.Context, route *domain.LLMRoute, deleted bool) error
 
+// LLMCanonicalLifecycle is the non-SQL release and deployment admission path.
+// It stages exact signed inputs; effects start only after the processor's
+// checked acceptance status has its own relay-quorum receipt.
+type LLMCanonicalLifecycle interface {
+	HandleLLMIntent(context.Context, *Intent) error
+	AfterAccepted(context.Context, *Intent)
+}
+
 // LLMRouteIntentHandler processes kind-30900 intents for the "llm" domain.
 // It is level-triggered: the intent's content is the full desired state, and
 // the handler reconciles the entity toward it regardless of whether prior
@@ -55,6 +63,7 @@ type LLMRouteIntentHandler struct {
 	status                      *IntentStatusPublisher
 	logger                      *zap.Logger
 	deploymentUnavailableReason string
+	canonicalLifecycle          LLMCanonicalLifecycle
 }
 
 // LLMRouteIntentHandlerConfig configures the LLM route intent handler.
@@ -64,6 +73,7 @@ type LLMRouteIntentHandlerConfig struct {
 	Status                      *IntentStatusPublisher
 	Logger                      *zap.Logger
 	DeploymentUnavailableReason string
+	CanonicalLifecycle          LLMCanonicalLifecycle
 }
 
 // NewLLMRouteIntentHandler constructs the handler.
@@ -82,6 +92,7 @@ func NewLLMRouteIntentHandler(cfg LLMRouteIntentHandlerConfig) *LLMRouteIntentHa
 		status:                      cfg.Status,
 		logger:                      logger.Named("llm-intent"),
 		deploymentUnavailableReason: reason,
+		canonicalLifecycle:          cfg.CanonicalLifecycle,
 	}
 }
 
@@ -92,6 +103,9 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		if err := validateLLMLifecycleSignedRequest(intent); err != nil {
 			return err
 		}
+		if h.canonicalLifecycle != nil {
+			return h.canonicalLifecycle.HandleLLMIntent(ctx, intent)
+		}
 	}
 	if h.deploymentUnavailableReason != "" {
 		switch intent.Op {
@@ -100,7 +114,10 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		}
 	}
 	if intent.Op == "release-register" {
-		return fmt.Errorf("LLM release registration paused: canonical-first encrypted release publication and local relay receipt are unavailable")
+		return fmt.Errorf("LLM release registration paused (bahia-4f10q.2.2): canonical-first encrypted release publication and local relay receipt are unavailable")
+	}
+	if h.routes == nil {
+		return fmt.Errorf("bahia-4f10q.2.2: canonical LLM route registry mutation is unavailable without a SQL read model")
 	}
 	switch intent.Op {
 	case "deploy":
@@ -115,6 +132,16 @@ func (h *LLMRouteIntentHandler) HandleIntent(ctx context.Context, intent *Intent
 		// Level-triggered: create and update both reconcile toward desired state.
 		return h.handleCreateOrUpdate(ctx, intent)
 	}
+}
+
+func (h *LLMRouteIntentHandler) AfterAccepted(ctx context.Context, intent *Intent) {
+	if h.canonicalLifecycle != nil {
+		h.canonicalLifecycle.AfterAccepted(ctx, intent)
+	}
+}
+
+func (h *LLMRouteIntentHandler) SetCanonicalLifecycle(lifecycle LLMCanonicalLifecycle) {
+	h.canonicalLifecycle = lifecycle
 }
 
 // PermissionFor returns the permission required for LLM operations.
@@ -222,11 +249,11 @@ func (h *LLMRouteIntentHandler) handleDeploymentDecision(ctx context.Context, in
 	return h.routes.RejectDeploymentIntent(ctx, id)
 }
 
-// Deployment operations retain the fleet-operator authority used by the
-// existing Reactor; route registry mutations also accept org RBAC.
+// Lifecycle operations require fleet-operator authority; route registry
+// mutations retain their separate org-RBAC contract.
 func (h *LLMRouteIntentHandler) AuthorizeIntent(ctx context.Context, trustSet *TrustSet, intent *Intent) error {
 	switch intent.Op {
-	case "deploy", "rollback", "approve", "reject":
+	case "deploy", "rollback", "approve", "reject", "release-register":
 		for _, pubkey := range trustSet.FleetOps() {
 			if pubkey == intent.Actor {
 				return nil

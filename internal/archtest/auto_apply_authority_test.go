@@ -90,6 +90,9 @@ func TestCanonicalAutoApplyUsesNoPostgresAdvisoryLock(t *testing.T) {
 	for _, path := range []string{
 		"internal/reconcile/auto_apply_executor.go",
 		"internal/reconcile/canonical_auto_apply_source.go",
+		"internal/reconcile/canonical_tool_controller.go",
+		"internal/reconcile/canonical_llm_controller.go",
+		"internal/reconcile/canonical_llm_source.go",
 		"internal/service/runtime_apply_lock.go",
 	} {
 		data, err := os.ReadFile(filepath.Join(repoRoot(t), path))

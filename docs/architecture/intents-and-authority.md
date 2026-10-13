@@ -304,13 +304,18 @@ authenticated by the operator-signed NIP-59 seal. Configuration never seeds this
 canonical policy family; `hiveci.policies` remains a separate fleet build-
 dependency dispatch allowlist.
 
-The `tool/approval-response` handler accepts only an operator-signed `30900`
-envelope whose actor, coordinate, operation, idempotency key, and content match
-the signature. It returns a checked, service-signed rejection status; it does
-not read or mutate a SQL provisioning row or dispatch a build. MCP's locally
-constructed event identity is not an operator signature and cannot authorize
-tool effects. Tool approval stays suspended until a canonical request receipt
-and restart-safe effect commit bind the approved inputs to the operator event.
+The bounded canonical tool path accepts a fleet-operator-signed `30900`
+`tool/request` and a separate operator-signed `tool/approval-response`. The
+decision must name the exact request event ID at `tool-approval:<request-id>`;
+both normal `30315` acceptance statuses require retained target/quorum relay
+proof before any effect. A local outbox-side admission binds the decision-time
+canonical Docker service, environment, deployment-intent and artifact winners,
+denied-package winners, and Signet credential/version pins. Build and deploy
+use separate filesystem-fenced effect/checkpoint receipts. Denial is a signed
+terminal status with no effect. SQL provisioning rows and MCP's constructed
+event identity are never authority. Legacy ContextVM tool requests, unsigned
+MCP tool provisioning, and non-Docker or public-route effects remain paused
+(`bahia-4f10q.2.1`).
 
 Side effects must be idempotent, because a crash between the side effect and
 step 6 replays the intent on restart: creates resolve by id
@@ -388,25 +393,25 @@ acceptance only after that status also reaches relay quorum; the canonical
 queued run state would be independently observable on relays. None of this is
 the response to a new production request while intake is paused.
 
-LLM release-register, deploy, rollback, approve and reject intents are also
-refused while canonical publication or execution is unavailable. Before the
-daemon signs a paused outcome, the request must be a valid operator-signed
-`30900` event observed by the local
-relay-synced event store. Its actor, UUIDv7 idempotency key, route/environment/
+The bounded canonical LLM lifecycle accepts only valid fleet-operator-signed,
+locally observed `30900` `release-register`, `deploy`, `rollback`, `approve`,
+and `reject` intents. The actor, UUIDv7 idempotency key, route/environment/
 release selection or decision target, content, and coordinate must agree with
-the signed envelope. This proves request identity for refusal only; a local
-event is not a relay ACK or an accepted provisioning receipt. Release
-registration must first publish an encrypted canonical release record,
-durably observe the relay ACK, and bind that record to the signed request
-before reporting success; a SQL release row or a route-state update alone is
-not a release receipt. The SQL-based LLM coordinator is not started by the app
-and cannot be enabled until a canonical, immutable execution snapshot and
-restart-safe effect fence exist. The snapshot must bind canonical route,
-release, and environment revisions, the required secret versions, and a
-replay-safe effect checkpoint. MCP and assistant LLM release/lifecycle tools
-refuse before dispatch rather than manufacturing an unsigned event from an
-authenticated transport principal; operators submit the signed Nostr intent
-directly.
+the signed envelope. A local request alone is neither a relay ACK nor effect
+authority: exact service-signed accepted `30315` statuses must have historical
+target/quorum relay-OK receipts. Release registration publishes an encrypted
+canonical release event and verifies its own quorum receipt before reporting
+success; a SQL row or route update is not a release receipt. The SQL-based LLM
+coordinator is not started by the app. The external-API route effect uses the
+same local-store receipt and filesystem fence as auto-apply; its snapshot binds
+canonical route/release/environment revisions, request/decision events,
+versioned Signet credential references, and the gateway admin endpoint
+revision. Approval-gated requests have no effect until an operator decision;
+denials have signed terminal statuses. Runtime-managed model provisioning and
+unversioned gateway-admin auth remain paused with `bahia-4f10q.2.2`. MCP and
+assistant LLM release/lifecycle tools still refuse before dispatch rather than
+manufacturing unsigned intents from a transport principal; operators submit
+the signed Nostr intent directly.
 
 ### 3.5 Canonical state and who signs it
 
