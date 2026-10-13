@@ -125,9 +125,10 @@ a publisher's own write relays.
      (its own delivery then decides) or served by a relay (the coordinate moved
      on without this daemon). A late abandonment report for an older version
      never re-flags a coordinate that has moved on.
-   - The local event store remains a rebuildable cache: when the runner starts,
-     the publisher re-marks the coordinates of every retained failed entry, so a
-     deleted store file loses no flag for as long as the outbox retains the entry.
+   - When the runner starts, the publisher re-marks the coordinates of every
+     retained failed entry. The local event store is not disposable as a whole:
+     assistant checkpoint chains may no longer exist on relays, so a damaged
+     store fails startup rather than being silently replaced.
 
 What is deliberately not done: the marker is not a second retry loop (no
 ticker; the runner and the next publish of the coordinate are the only

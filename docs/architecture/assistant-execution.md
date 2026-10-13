@@ -74,14 +74,16 @@ a denied observation rather than cancelling the run.
 
 Every state change is an encrypted kind-`4903` checkpoint (`domain=assistant`,
 `type=execution-checkpoint`,
-`schema=bahia.audit.assistant-execution-checkpoint.v1`, `session` and `run`
-tags for scoped reads, `revision` and `prev` as untrusted hints, no `d`; the
-authenticated predecessor in plaintext is authoritative). The executor
+`schema=bahia.audit.assistant-execution-checkpoint.v1`, indexed
+`t=assistant-checkpoint:<session_id>`, `session` and `run` metadata, `revision`
+and `prev` as untrusted hints, no `d`; the authenticated predecessor in
+plaintext is authoritative). The executor
 persists `ready`/`dispatching` — with immutable arguments and an
 executor-issued idempotency key — **before** invoking a provider once, then
 persists a sync observation, async receipt, failure or `uncertain`. An
 unconfirmed checkpoint fences the session: no later checkpoint or side effect
-occurs until the identical signed event is accepted by a relay; `Decide`,
+occurs until the identical signed event is accepted by a relay and retained
+in the daemon's local event store; `Decide`,
 `Cancel`, `Reconcile`, `StartTurn` and `Recover` retry it first.
 
 Phases after approval derive from work states: any `uncertain` item blocks;
@@ -125,7 +127,17 @@ preferred), classifies v1 sessions through the pure
 or parked — never dispatch authority), appends the deterministic conversion
 root once, hydrates identity and calls `Recover`. A finished run's checkpoint
 chain is loaded before the next turn so a session-scope cancellation stays
-enforced after restart.
+enforced after restart. `Load` backfills with an indexed `#t` REQ through EOSE,
+recovers pre-topic checkpoints with an author/kind REQ when needed, and merges
+service-signed local checkpoints into one validated predecessor chain. The
+local event store retains every relay-accepted assistant checkpoint,
+including run heads and session-closing checkpoints, and the latest session
+projection despite regular event pruning. A durable acceptance marker
+distinguishes a committed checkpoint from a speculative pre-OK publisher cache
+copy; only marked local checkpoints can authorize recovery. PostgreSQL is not a checkpoint source. When a relay lookup of
+an unknown session ID reaches EOSE without a projection, signed local
+projection or checkpoint evidence refuses creation with
+`session_lookup_unavailable`; absence from relays does not prove a new ID.
 
 ## Transcript and checkpoint keys
 

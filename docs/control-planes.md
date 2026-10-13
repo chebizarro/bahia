@@ -16,6 +16,12 @@ the HTTP routes are in the [HTTP reference](api.md); the relay sidecar in
 | MCP | JSON-RPC over HTTP at `POST /mcp` | agents and tooling with an NIP-98 signer | intent tools (signed in-process by the caller's key) | store-read tools answered from the daemon's local event store |
 | HTTP | `GET /health`, `GET /ready`, `/metrics`, `/v2/*` (OCI), a small set of `/api/v1` routes | probes, Docker clients, browsers downloading blobs, operators | SBOM ingest, maintenance windows, legacy-agent reconciliation | virtualization resources, logs, payments, config-fabric drift, Blossom blobs |
 
+Assistant turns use ContextVM only for the request. Service-signed `4903`
+execution checkpoints use indexed `#t=assistant-checkpoint:<session_id>` reads
+and a validated predecessor chain; the daemon retains relay-accepted
+checkpoints locally when relays prune history. PostgreSQL is not the
+checkpoint source.
+
 The authority model (who may sign what, how the daemon admits an intent) is
 in [intents and authority](architecture/intents-and-authority.md); the
 client designs are in [web store-first](architecture/web-store-first.md)

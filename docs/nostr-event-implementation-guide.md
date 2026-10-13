@@ -56,6 +56,10 @@ A new kind number requires a written justification that its relay behaviour
    alike, and a public/protected classification in
    `internal/relaysidecar/read_auth.go`. Relays index single-letter tags
    only; `domain`, `schema` and `entity` are checked locally.
+   Assistant execution checkpoints (`4903`) use
+   `t=assistant-checkpoint:<session_id>` for their indexed session REQ;
+   `domain`, `type`, `schema`, `session` and `run` are verified after delivery.
+   Pre-topic checkpoints require an author/kind fallback through EOSE.
 3. **An author-minted coordinate.** Entity ids are UUIDv7 chosen by the
    author ([§10](event-spec.md#10-entity-identity)); natural keys stay
    natural. Never derive `d` from a database sequence.
