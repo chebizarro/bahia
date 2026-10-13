@@ -19,6 +19,15 @@ during the rotation, **after** the new identity is active and no reader
 trusts the old pubkey, and **before** the old key is discarded: the
 deletions must be signed by the old key.
 
+During the canonical-state re-assertion under the new service identity
+(bahia-h9n7f.1), republish every secret-registry record with the current
+publisher. It retains each secret's opaque UUID coordinate but places name,
+service ID and environment ID only in OCK ciphertext. Current readers accept
+both historical tagged records and new tagless records, so no relay-side
+migration tool is needed for this format change. Re-assertion does not erase
+plaintext tags from old relay copies; assess historical exposure separately
+from the status-event deletion procedure below.
+
 ## Guarantees
 
 - **Signer pinned to the leaked identity.** The tool signs only through the
