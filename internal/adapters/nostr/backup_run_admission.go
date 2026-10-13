@@ -62,13 +62,13 @@ func (p *BackupCanonicalPublisher) LookupRunAdmission(ctx context.Context, inten
 	return record.StateEventID, true, record.Delivered && record.StatusDelivered && record.StatusOutcome == "accepted", nil
 }
 
-// StageRunAdmission is intentionally disabled until every service-key signing
-// path participates in a cross-process writer fence and complete history proof.
+// StageRunAdmission remains disabled while canonical credential recovery and
+// exactly-once execution are unavailable. Writer policy belongs to the signer.
 func (p *BackupCanonicalPublisher) StageRunAdmission(ctx context.Context, intentID, requestEventID string, run *domain.BackupRun) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	return "", fmt.Errorf("backup run admission paused: cross-process service-key signer fence unavailable")
+	return "", fmt.Errorf("backup run admission paused: credential recovery and exactly-once execution unavailable")
 }
 
 func (p *Publisher) stageBackupRun(ctx context.Context, event gonostr.Event, intentID, coordinate, requestEventID, actor string, runID uuid.UUID) (string, bool, error) {

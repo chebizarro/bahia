@@ -169,6 +169,6 @@ func TestMCPBackupRunRetainedPendingCannotClaimPendingWhileIntakePaused(t *testi
 	require.NoError(t, err)
 	require.True(t, result.IsError)
 	require.Equal(t, "rejected", mcpIntentResult(t, result)["status"])
-	require.Contains(t, mcpIntentResult(t, result)["reason"], "terminal signed status settlement is unavailable")
+	require.Contains(t, mcpIntentResult(t, result)["reason"], "credential recovery and exactly-once execution are unavailable")
 	require.False(t, processor.IsProcessed(intent.IntentID))
 }

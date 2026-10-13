@@ -1432,15 +1432,17 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// pipeline. The cpStateFamilies table is the single envelope source.
 	backupCanonical := nostrAdapter.NewBackupCanonicalPublisher(nostrProjector, logger)
 	backupCanonical.SetRunAdmissionPublisher(controlPlanePub)
+	var backupHistory *nostrAdapter.BackupRunHistoryRunner
 	if enabledDomains["backup"] && localEventStore != nil {
-		backupHistory, err := nostrAdapter.NewBackupRunHistoryRunner(localOutbox, controlPlanePool, localEventStore, logger)
+		var err error
+		backupHistory, err = nostrAdapter.NewBackupRunHistoryRunner(localOutbox, controlPlanePool, localEventStore, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configure backup run history: %w", err)
 		}
 		backupCanonical.SetRunPendingWake(backupHistory.Wake)
 		bgManager.RegisterWithOptions(backupHistory, RunnerRequired(false))
 		healthProvider.RegisterCheck("backup_run_history", func() HealthCheck {
-			message := "backup run admission paused: terminal status, credential recovery and exactly-once execution are not yet available"
+			message := "backup run admission paused: credential recovery and exactly-once execution are not yet available"
 			if last := backupHistory.LastError(); last != "" {
 				message += "; " + last
 			}
@@ -1455,16 +1457,19 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("configure backup run status reconciliation: %w", err)
 		}
+		if backupHistory != nil {
+			backupHistory.SetStatusWake(backupStatus.Wake)
+		}
 		controlPlanePub.OnDelivered(backupStatus.Notify)
 		controlPlanePub.OnDeliveryAbandoned(backupStatus.Notify)
 		bgManager.RegisterWithOptions(backupStatus)
 		healthProvider.RegisterCheck("backup_run_status", func() HealthCheck {
 			if backupStatus.LastError() != "" {
 				return HealthCheck{Name: "backup_run_status", Status: HealthStatusWarn,
-					Message: "backup run accepted-status reconciliation delayed; new run admission paused"}
+					Message: "backup run terminal-status reconciliation delayed; new run admission paused"}
 			}
 			return HealthCheck{Name: "backup_run_status", Status: HealthStatusPass,
-				Message: "backup run accepted-status reconciler available; new run admission paused"}
+				Message: "backup run terminal-status reconciler available; new run admission paused"}
 		})
 	}
 	backupRunReceipts, backupReceiptErr := controlplane.NewLocalBackupRunReceipts(localEventStore, localOutbox, servicePubkey)

@@ -40,7 +40,7 @@ func TestBackupRunAdmissionRequiresCrossProcessFence(t *testing.T) {
 		VerificationStatus: domain.BackupVerificationPending, CreatedAt: now, UpdatedAt: now}
 	stateID, err := canonical.StageRunAdmission(t.Context(), "intent-1", requestID, run)
 	require.Empty(t, stateID)
-	require.ErrorContains(t, err, "cross-process service-key signer fence unavailable")
+	require.ErrorContains(t, err, "credential recovery and exactly-once execution unavailable")
 	_, found, _, err := canonical.LookupRunAdmission(t.Context(), "intent-1", coordinate, requestID)
 	require.NoError(t, err)
 	require.False(t, found, "no service-signed state may exist without a writer fence")

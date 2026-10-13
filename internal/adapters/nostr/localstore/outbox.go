@@ -775,12 +775,12 @@ func recordPublisherProof(tx *bbolt.Tx, entry OutboxEntry, round OutboxRound, at
 
 func isProofEligibleForRound(tx *bbolt.Tx, ev nostr.Event) bool {
 	return isProofEligibleEvent(ev) ||
-		(isBackupRunAcceptedStatusEvent(ev) && tx.Bucket(backupRunStatusEventsBucket).Get([]byte(ev.ID.Hex())) != nil)
+		(isBackupRunTerminalStatusEvent(ev) && tx.Bucket(backupRunStatusEventsBucket).Get([]byte(ev.ID.Hex())) != nil)
 }
 
 func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Time) (DeliveryProof, bool) {
 	ev := entry.Event
-	if !(isProofEligibleEvent(ev) || isBackupRunAcceptedStatusEvent(ev)) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
+	if !(isProofEligibleEvent(ev) || isBackupRunTerminalStatusEvent(ev)) || !ev.CheckID() || !ev.VerifySignature() || outboxTag(ev.Tags, "d") == "" {
 		return DeliveryProof{}, false
 	}
 	relayOK := make(map[string]bool, len(policy.WriteRelays))
@@ -826,6 +826,16 @@ func isBackupRunAcceptedStatusEvent(ev nostr.Event) bool {
 	return ev.Kind == 30315 && outboxTag(ev.Tags, "domain") == "intent" &&
 		outboxTag(ev.Tags, "t") == "intent-status" && outboxTag(ev.Tags, "status") == "accepted" &&
 		strings.HasPrefix(outboxTag(ev.Tags, "d"), "intent-status:")
+}
+
+func isBackupRunRefusedStatusEvent(ev nostr.Event) bool {
+	return ev.Kind == 30315 && outboxTag(ev.Tags, "domain") == "intent" &&
+		outboxTag(ev.Tags, "t") == "intent-status" && outboxTag(ev.Tags, "status") == "rejected" &&
+		strings.HasPrefix(outboxTag(ev.Tags, "d"), "intent-status:")
+}
+
+func isBackupRunTerminalStatusEvent(ev nostr.Event) bool {
+	return isBackupRunAcceptedStatusEvent(ev) || isBackupRunRefusedStatusEvent(ev)
 }
 
 func backupRunStatusClockKey(pubkey nostr.PubKey, actor, coordinate string) []byte {

@@ -2,6 +2,7 @@ package nostr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"maps"
@@ -15,6 +16,8 @@ import (
 )
 
 const backupRunHistoryLimit = 1024
+
+var ErrBackupRunCoordinateExists = errors.New("backup run coordinate already exists")
 
 // BackupRunHistoryStore is the disposable local relay cache. Any matching
 // pre-ledger coordinate vetoes a new admission; absence here is never proof.
@@ -91,7 +94,7 @@ func (proof *BackupRunHistoryProof) StillCurrent() error {
 				return fmt.Errorf("backup run history subscription ended")
 			}
 			if event != nil {
-				return fmt.Errorf("backup run coordinate appeared on canonical relay")
+				return fmt.Errorf("%w on canonical relay", ErrBackupRunCoordinateExists)
 			}
 		default:
 			goto drained
@@ -99,7 +102,7 @@ func (proof *BackupRunHistoryProof) StillCurrent() error {
 	}
 drained:
 	if backupRunCoordinateInStore(proof.store, proof.ServicePubkey, proof.Coordinate) {
-		return fmt.Errorf("backup run coordinate already exists in local relay cache")
+		return fmt.Errorf("%w in local relay cache", ErrBackupRunCoordinateExists)
 	}
 	if !proof.sub.AllRelaysReachedEOSE() || proof.sub.StoredEventsIncomplete(nil) != nil {
 		return fmt.Errorf("backup run history proof lost complete relay EOSE")
@@ -200,7 +203,7 @@ func (p *RelayPool) InspectBackupRunHistory(ctx context.Context, store BackupRun
 		}
 	}
 	if backupRunCoordinateInStore(store, service, coordinate) {
-		return nil, fmt.Errorf("backup run coordinate already exists in local relay cache")
+		return nil, fmt.Errorf("%w in local relay cache", ErrBackupRunCoordinateExists)
 	}
 	sub, err := p.SubscribeWithOptions(ctx, []nostr.Filter{backupRunCoordinateFilter(service, coordinate)}, SubscribeOptions{Relays: urls, AwaitUnavailableRelays: true})
 	if err != nil {
@@ -215,7 +218,7 @@ func (p *RelayPool) InspectBackupRunHistory(ctx context.Context, store BackupRun
 		select {
 		case event, open := <-sub.Events:
 			if open && event != nil {
-				return nil, fmt.Errorf("backup run coordinate already exists on canonical relay %s", sub.EventSource(event.ID.Hex()))
+				return nil, fmt.Errorf("%w on canonical relay %s", ErrBackupRunCoordinateExists, sub.EventSource(event.ID.Hex()))
 			}
 			if !open {
 				return nil, fmt.Errorf("backup run history subscription ended before a fenced stage")
@@ -231,7 +234,7 @@ func (p *RelayPool) InspectBackupRunHistory(ctx context.Context, store BackupRun
 						return nil, fmt.Errorf("backup run history subscription ended before a fenced stage")
 					}
 					if event != nil {
-						return nil, fmt.Errorf("backup run coordinate already exists on canonical relay %s", sub.EventSource(event.ID.Hex()))
+						return nil, fmt.Errorf("%w on canonical relay %s", ErrBackupRunCoordinateExists, sub.EventSource(event.ID.Hex()))
 					}
 				default:
 					draining = false

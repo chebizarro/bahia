@@ -99,6 +99,22 @@ func TestBackupRunAdmissionScanSkipsMalformedRecordWithoutStarvingLaterACK(t *te
 	require.Equal(t, "intent-z", records[0].IntentID)
 }
 
+func TestBackupRunRefusalScanSkipsMalformedEarlierRecord(t *testing.T) {
+	outbox, _ := openTempOutbox(t)
+	require.NoError(t, outbox.shared.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(backupRunPendingBucket)
+		if err := bucket.Put([]byte("intent-a"), []byte("{malformed")); err != nil {
+			return err
+		}
+		return bucket.Put([]byte("intent-z"), []byte(`{"intent_id":"intent-z","state":"refused"}`))
+	}))
+	records, next, err := outbox.ListBackupRunRefusalsNeedingStatus("", 100)
+	require.ErrorContains(t, err, "intent-a")
+	require.Empty(t, next)
+	require.Len(t, records, 1)
+	require.Equal(t, "intent-z", records[0].IntentID)
+}
+
 func TestBackupRunStatusClockBackfillsRetainedStatusOnUpgrade(t *testing.T) {
 	outbox, path := openTempOutbox(t)
 	service := nostr.Generate()
