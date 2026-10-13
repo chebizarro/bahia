@@ -44,6 +44,12 @@ type BackupRunPendingWriter interface {
 	StagePendingRun(context.Context, string, string, gonostr.Event, string, time.Time) (*localstore.BackupRunPending, error)
 }
 
+// BackupRunCredentialRecords reads the current canonical Signet binding.
+// Admission never accepts a pin inferred from PostgreSQL or a stale request.
+type BackupRunCredentialRecords interface {
+	CurrentReference(context.Context, string) (domain.SecretCredentialRef, error)
+}
+
 // New async intake remains paused until canonical credential recovery and
 // exactly-once execution are available.
 const backupRunAsyncIntakeEnabled = false
@@ -138,6 +144,7 @@ type BackupIntentHandler struct {
 	runReceipts              BackupRunReceiptReader
 	runAdmission             BackupRunAdmissionWriter
 	runPending               BackupRunPendingWriter
+	runCredentialRecords     BackupRunCredentialRecords
 	executors                BackupIntentExecutors
 	status                   *IntentStatusPublisher
 	logger                   *zap.Logger
@@ -152,6 +159,7 @@ type BackupIntentHandlerConfig struct {
 	RunReceipts              BackupRunReceiptReader
 	RunAdmission             BackupRunAdmissionWriter
 	RunPending               BackupRunPendingWriter
+	RunCredentialRecords     BackupRunCredentialRecords
 	Executors                BackupIntentExecutors
 	Status                   *IntentStatusPublisher
 	Logger                   *zap.Logger
@@ -171,6 +179,7 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		runReceipts:              cfg.RunReceipts,
 		runAdmission:             cfg.RunAdmission,
 		runPending:               cfg.RunPending,
+		runCredentialRecords:     cfg.RunCredentialRecords,
 		executors:                cfg.Executors,
 		status:                   cfg.Status,
 		logger:                   logger.Named("backup-intent"),
@@ -433,6 +442,16 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	}
 	if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
 		return fmt.Errorf("backup run request intake paused: %w", err)
+	}
+	if requested.ExecutionSnapshot.CredentialRef == nil || h.runCredentialRecords == nil {
+		return fmt.Errorf("backup run request intake paused: pinned Signet credential proof is unavailable")
+	}
+	currentRef, err := h.runCredentialRecords.CurrentReference(ctx, requested.ExecutionSnapshot.Repository.CredentialProfile)
+	if err != nil {
+		return fmt.Errorf("backup run request intake paused: read canonical Signet credential: %w", err)
+	}
+	if currentRef != *requested.ExecutionSnapshot.CredentialRef {
+		return fmt.Errorf("backup run request intake paused: Signet credential version moved; fresh signed run required")
 	}
 	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
 	if err != nil {

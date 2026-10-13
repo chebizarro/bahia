@@ -1529,6 +1529,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				RunReceipts:              backupRunReceipts,
 				RunAdmission:             backupCanonical,
 				RunPending:               backupCanonical,
+				RunCredentialRecords:     secretText,
 				Status:                   intentStatus,
 				Logger:                   logger,
 			},
