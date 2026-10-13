@@ -89,7 +89,6 @@
       await boot();
     } catch (err) {
       error = err.message || 'Failed to load pending approvals';
-      console.error('Error loading pending approvals:', err);
     } finally {
       loading = false;
     }
@@ -128,7 +127,6 @@
       actionIntent = null;
     } catch (err) {
       actionError = err.message || 'Failed to approve intent';
-      console.error('Error approving intent:', err);
     } finally {
       approving = false;
     }
@@ -146,7 +144,6 @@
       actionIntent = null;
     } catch (err) {
       actionError = err.message || 'Failed to reject intent';
-      console.error('Error rejecting intent:', err);
     } finally {
       rejecting = false;
     }

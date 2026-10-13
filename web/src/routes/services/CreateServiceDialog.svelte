@@ -25,6 +25,7 @@
   // Registry state
   let availableRegistries = $state([]);
   let registriesLoading = $state(true);
+  let registriesError = $state(null);
   let selectedRegistry = $state('custom');
   let repoPath = $state('');
   let registriesInitialized = $state(false);
@@ -68,6 +69,7 @@
   });
 
   async function loadRegistries() {
+    registriesError = null;
     try {
       const info = systemInfo.data || await loadSystemInfo();
       availableRegistries = info?.registries || [];
@@ -76,7 +78,7 @@
         selectedRegistry = defaultReg.id;
       }
     } catch (err) {
-      console.warn('Failed to load registries:', err);
+      registriesError = `Registry choices could not be loaded. Check relay access, then retry or enter a custom registry. ${err?.message || err}`;
     } finally {
       registriesLoading = false;
     }
@@ -238,6 +240,12 @@
           Loading registries...
         </div>
       {:else}
+        {#if registriesError}
+          <div role="alert" class="form-error">
+            {registriesError}
+            <button type="button" onclick={loadRegistries}>Retry</button>
+          </div>
+        {/if}
         <div class="registry-picker">
           <Select
             id="artifact-registry"
@@ -363,6 +371,15 @@
     background: rgba(239, 68, 68, 0.1);
     border-radius: 4px;
   }
+  .form-error {
+    color: var(--error);
+    background: color-mix(in srgb, var(--error) 10%, var(--card-bg));
+    border-left: 3px solid var(--error);
+    border-radius: 4px;
+    padding: 0.5rem;
+    font-size: 0.875rem;
+  }
+  .form-error button { margin-left: 0.5rem; }
 
   .branch-loading {
     display: flex;

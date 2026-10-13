@@ -493,7 +493,7 @@
           provisioningCleanup = trackProvisioningRun(event.id, {
 			expectedAuthor: selectedCapability?.controllerPubkeys?.[0] || '',
 			onComplete: handleProvisioningComplete,
-            onError: (message) => console.error('[souls/new] provisioning failed:', message)
+            onError: (message) => { error = `Provisioning failed. Review the run status before retrying. ${message}`; }
           });
           currentRun = provisioningRuns.get(event.id);
         }
@@ -544,7 +544,7 @@
 		provisioningCleanup = trackProvisioningRun(resume.requestId, {
 		  expectedAuthor: resume.expectedAuthor || '',
 		  onComplete: handleProvisioningComplete,
-		  onError: (message) => console.error('[souls/new] provisioning failed:', message)
+		  onError: (message) => { error = `Provisioning failed. Review the run status before retrying. ${message}`; }
 		});
 		currentRun = provisioningRuns.get(resume.requestId);
 		step = 3;

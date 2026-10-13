@@ -6,6 +6,7 @@
   import ProtectedReadNotice from '$lib/components/ProtectedReadNotice.svelte';
   import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
+  import { toast } from '$lib/components/toast.js';
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
   import { currentRouteDocsRef } from '$lib/components/nav-model.js';
   import { bootstrapControlplane, disconnectControlplane } from '$lib/stores';
@@ -60,6 +61,11 @@
   let historyReadersStarted = $state(false);
   let bootSettled = $state(false);
 
+  function reportBootstrapError(key, action, error) {
+    const reason = error?.message || String(error || 'Unknown error');
+    toast.error(`${action} ${reason}`, { key: `bootstrap:${key}` });
+  }
+
   onMount(() => createVersionReloadWatcher().start());
 
   $effect(() => {
@@ -90,7 +96,7 @@
         initOperatorAllowlistBinding();
         initOpsWidgetWallBinding();
       } catch (err) {
-        console.warn('[layout] boot() failed:', err);
+        reportBootstrapError('store', 'Local event store failed to open. Reload the page; if this persists, check browser storage. Relay-backed views may be incomplete.', err);
       } finally {
         bootSettled = true;
       }
@@ -102,18 +108,20 @@
       // an ordering rule only: nothing here waits for a relay to connect or
       // answer, so the readers start even when every relay is unreachable.
       eagerRelayConnect().catch((error) => {
-        console.error('Eager relay connection failed before controlplane load:', error);
+        reportBootstrapError('relay', 'Relay connection failed. Check the configured relays and reconnect from Settings.', error);
       });
 
       // Connect the single pool in the background; EOSE only updates the badge.
       void bootstrapControlplane().then((result) => {
-        if (!result.ok) console.error('Nostr controlplane bootstrap failed:', result.reason);
+        if (!result.ok) reportBootstrapError('controlplane', 'Control-plane reads could not start. Check relay access and reconnect from Settings.', result.reason);
+      }).catch((error) => {
+        reportBootstrapError('controlplane', 'Control-plane reads could not start. Check relay access and reconnect from Settings.', error);
       }).finally(() => {
         if (active) historyReadersStarted = true;
       });
 
       initializeAuth().catch((error) => {
-        console.error('Auth bootstrap failed before controlplane load:', error);
+        reportBootstrapError('auth', 'Signer session could not be restored. Reconnect your signer from Settings.', error);
       });
     });
 
@@ -167,7 +175,7 @@
     // this session cannot sign, which the readiness signal reports on submit
     // instead of leaving mutation controls disabled as "connecting" forever.
     void resumeIntentClient().catch(error => {
-      if (getEventStore()) console.error('[layout] intent client failed:', error);
+      if (getEventStore()) reportBootstrapError('intent', 'Pending intents could not be resumed. Check signer access and reload before submitting another change.', error);
     });
     return stopIntentClient;
   });
@@ -184,7 +192,7 @@
       let signer;
       try { signer = resolveActiveSigner(); }
       catch (error) {
-        console.warn('[layout] role derivation awaits an available signer:', error);
+        reportBootstrapError('roles', 'Operator roles could not be read. Reconnect your signer to restore role-gated controls.', error);
         return;
       }
       void startRoleDerivation({ store, userPubkey: pubkey, servicePubkey, signer });
@@ -199,7 +207,7 @@
     assistantBootstrappedForPubkey = pubkey;
     bootstrapAssistant({ force: true }).catch((error) => {
       assistantBootstrappedForPubkey = '';
-      console.error('Assistant bootstrap failed:', error);
+      reportBootstrapError('assistant', 'Assistant sessions could not be loaded. Check relay access and reload before using the assistant.', error);
     });
   });
 </script>

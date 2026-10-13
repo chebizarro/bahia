@@ -30,6 +30,7 @@
 
   // Registry artifacts state
   let registryLoading = $state(true);
+  let registryError = $state(null);
   let artifacts = $state([]);
   let serviceList = [];
   let serviceMap = $state({});
@@ -73,11 +74,12 @@
   }
 
   async function loadRegistryArtifacts() {
+    registryError = null;
     try {
       await boot();
       applyRegistryProjection();
     } catch (err) {
-      console.error('Failed to load artifacts:', err);
+      registryError = `Registry artifacts could not be loaded. Check browser storage and relay access, then retry. ${err?.message || err}`;
     } finally {
       registryLoading = false;
     }
@@ -323,7 +325,12 @@
 
   <!-- Registry Tab -->
   {#if activeTab === 'registry'}
-    {#if registryLoading}
+    {#if registryError}
+      <section role="alert" class="registry-error">
+        <p>{registryError}</p>
+        <button type="button" onclick={loadRegistryArtifacts}>Retry</button>
+      </section>
+    {:else if registryLoading}
       <p class="loading">Loading registry artifacts...</p>
     {:else if artifacts.length === 0}
       <EmptyState
@@ -416,6 +423,15 @@
 </div>
 
 <style>
+  .registry-error {
+    border: 1px solid var(--error);
+    border-left-width: 4px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--error) 10%, var(--card-bg));
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+  }
+  .registry-error button { margin-top: 0.5rem; }
   .header {
     display: flex;
     align-items: center;

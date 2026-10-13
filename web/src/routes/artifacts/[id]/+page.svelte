@@ -157,7 +157,6 @@ import Table from '$lib/components/Table.svelte';
     } catch (err) {
       if (sequence !== loadSequence) return;
       error = err.message || 'Failed to load artifact';
-      console.error('Error loading artifact:', err);
     } finally {
       if (sequence === loadSequence) loading = false;
     }
