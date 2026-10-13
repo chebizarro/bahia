@@ -85,6 +85,13 @@ func (p *IntentStatusPublisher) PublishConflictReason(ctx context.Context, inten
 	_ = p.publishStatus(ctx, intent, "conflict", "conflict", reason, nil)
 }
 
+func (p *IntentStatusPublisher) PublishConflictChecked(ctx context.Context, intent *Intent, reason string) error {
+	if p == nil || p.publish == nil || p.signer == nil {
+		return fmt.Errorf("intent conflict status publisher is not configured")
+	}
+	return p.publishStatus(ctx, intent, "conflict", "revision_conflict", reason, nil)
+}
+
 // PublishAcceptedEvaluation carries a computed decision in the same bounded
 // requester/coordinate status used for ordinary intent acknowledgments.
 func (p *IntentStatusPublisher) PublishAcceptedEvaluation(ctx context.Context, intent *Intent) error {

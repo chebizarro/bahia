@@ -792,7 +792,29 @@ func canonicalDeliveryProof(entry OutboxEntry, policy DeliveryPolicy, at time.Ti
 }
 
 func isProofEligibleEvent(ev nostr.Event) bool {
-	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev)
+	return isBackupConfigEvent(ev) || isBackupRunStateEvent(ev) || isDeploymentPolicyEvent(ev) || isVirtualizationStateEvent(ev)
+}
+
+func isVirtualizationStateEvent(ev nostr.Event) bool {
+	if ev.Kind != nostr.Kind(kinds.CASControlState) || outboxTag(ev.Tags, "domain") != kinds.VirtualizationDomain ||
+		outboxTag(ev.Tags, "schema") != kinds.CASControlStateSchema {
+		return false
+	}
+	for _, family := range []struct {
+		kind          kinds.CPStateFamily
+		topic, prefix string
+	}{
+		{kinds.CPStateFamilyVirtualizationHost, kinds.CPStateTopicVirtualizationHost, "virtualization-host:"},
+		{kinds.CPStateFamilyVirtualizationImage, kinds.CPStateTopicVirtualizationImage, "vm-image:"},
+		{kinds.CPStateFamilyVirtualizationVM, kinds.CPStateTopicVirtualizationVM, "persistent-vm:"},
+		{kinds.CPStateFamilyVirtualizationOperation, kinds.CPStateTopicVirtualizationOperation, "vm-operation:"},
+	} {
+		if outboxTag(ev.Tags, "legacy_kind") == family.kind.TagValue() && outboxTag(ev.Tags, "t") == family.topic &&
+			strings.HasPrefix(outboxTag(ev.Tags, "d"), family.prefix) {
+			return outboxTag(ev.Tags, "deleted") == "true" || outboxTag(ev.Tags, "deleted") == "false"
+		}
+	}
+	return false
 }
 
 func isDeploymentPolicyEvent(ev nostr.Event) bool {

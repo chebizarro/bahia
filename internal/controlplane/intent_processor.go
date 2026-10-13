@@ -288,14 +288,30 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	if requiresStrictIntentReplay(intent) && (p.status == nil || p.status.publish == nil || p.status.signer == nil) {
 		return fmt.Errorf("intent outcome status publisher is not configured")
 	}
+	if intent.Domain == kinds.VirtualizationDomain && p.isProcessed(intent.IntentID) {
+		// Strict replay must not turn a new unsigned/mismatched event carrying
+		// the same intent_id into an accepted 30315 before the handler sees it.
+		var err error
+		if intent.Op == "request" {
+			err = validateVirtualizationOperationIntent(intent)
+		} else {
+			err = validateVirtualizationResourceIntent(intent)
+		}
+		if err != nil {
+			return err
+		}
+	}
 
 	// Step 1: Deduplicate by intent_id.
-	// Virtualization and LLM lifecycle are suspended and never mark an intent
-	// processed. Backup run replay is decided by the immutable outbox admission
+	// Backup run replay is decided by the immutable outbox admission
 	// keys, not this separate processed cache.
-	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
+	if !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && intent.Op == "approval-response") && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
-		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content))) {
+		if intent.Domain == kinds.VirtualizationDomain && record == nil {
+			return fmt.Errorf("bahia-4f10q.1: processed virtualization marker is corrupt")
+		}
+		if requiresStrictIntentReplay(intent) && record != nil && (record.Actor != intent.Actor || record.Domain != intent.Domain || record.Op != intent.Op || record.Coordinate != intent.Coordinate || (record.ContentHash != "" && record.ContentHash != intentContentHash(intent.Content)) ||
+			(intent.Domain == kinds.VirtualizationDomain && (record.ContentHash == "" || record.OrgID != intent.OrgID.String() || intent.Event == nil || record.EventID != intent.Event.ID.Hex()))) {
 			err := &intentReplayConflictError{intentID: intent.IntentID}
 			if p.status != nil {
 				p.status.PublishConflictReason(ctx, intent, err.Error())
@@ -393,6 +409,12 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	// full desired state and reconciles the entity, regardless of whether it
 	// has seen prior events for this coordinate.
 	if err := handler.HandleIntent(ctx, intent); err != nil {
+		if intent.Domain == kinds.VirtualizationDomain && errors.Is(err, ErrVirtualizationPending) {
+			if inProcess {
+				return err
+			}
+			return nil
+		}
 		if errors.Is(err, ErrBackupRunPending) && intent.Domain == "backup" && intent.Op == "run" {
 			// The delivery reconciler owns the sole final 30315 result. A
 			// provisional replaceable status could arrive after acceptance and
@@ -417,6 +439,12 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		if intent.Domain == kinds.VirtualizationDomain || (intent.Domain == "tool" && intent.Op == "approval-response") {
 			if p.status == nil {
 				return fmt.Errorf("%w: rejection status publisher is unavailable", err)
+			}
+			if IsRevisionConflict(err) {
+				if statusErr := p.status.PublishConflictChecked(ctx, intent, err.Error()); statusErr != nil {
+					return fmt.Errorf("%w: conflict status publication failed: %w", err, statusErr)
+				}
+				return err
 			}
 			if statusErr := p.status.PublishRejectionChecked(ctx, intent, err.Error()); statusErr != nil {
 				return fmt.Errorf("%w: rejection status publication failed: %w", err, statusErr)
@@ -591,6 +619,8 @@ func intentContentHash(content map[string]any) string {
 
 func requiresStrictIntentReplay(intent *Intent) bool {
 	switch intent.Domain {
+	case kinds.VirtualizationDomain:
+		return true
 	case "hiveci-policy":
 		return true
 	case "backup":
