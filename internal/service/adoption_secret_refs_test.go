@@ -86,7 +86,7 @@ func TestAdoptionSecretPublishFailureResumesSameCoordinates(t *testing.T) {
 	refs, ids := sensitiveAdoptionRefs()
 	records := &adoptionReferenceRecords{refs: map[uuid.UUID]domain.SecretRef{}, failOnce: true}
 	adoption.ConfigureSecretReferences(AdoptionSecretReferences{Store: adoptionReferenceStore{keys: ids, version: 1}, View: records, Publisher: records})
-	req := localTarget(server)
+	req := sensitiveTarget(server)
 	req.SecretRefs = refs
 	first, err := adoption.Import(context.Background(), req)
 	if !errors.Is(err, ErrAdoptionIncomplete) || len(first) != 1 || !first[0].Incomplete || first[0].Step != adoptionStepSecret {
@@ -110,7 +110,7 @@ func TestAdoptionImportsReferenceOnlySecretsAndReplays(t *testing.T) {
 	records := &adoptionReferenceRecords{refs: map[uuid.UUID]domain.SecretRef{}}
 	index := &adoptionReferenceIndex{refs: map[uuid.UUID]domain.SecretRef{}}
 	adoption.ConfigureSecretReferences(AdoptionSecretReferences{Store: adoptionReferenceStore{keys: ids, version: 1}, View: records, Publisher: records, Index: index})
-	req := localTarget(server)
+	req := sensitiveTarget(server)
 	req.SecretRefs = refs
 	for attempt := 0; attempt < 2; attempt++ {
 		results, err := adoption.Import(context.Background(), req)
@@ -166,7 +166,7 @@ func TestAdoptionSecretReferenceRefusalsNameKeysNotValues(t *testing.T) {
 			}
 			records := &adoptionReferenceRecords{refs: map[uuid.UUID]domain.SecretRef{}}
 			adoption.ConfigureSecretReferences(AdoptionSecretReferences{Store: adoptionReferenceStore{keys: ids, version: tc.version, wrongLabel: tc.wrongLabel}, View: records, Publisher: records})
-			req := localTarget(server)
+			req := sensitiveTarget(server)
 			req.SecretRefs = refs
 			results, err := adoption.Import(context.Background(), req)
 			if err != nil || len(results) != 1 || results[0].Status != adoptionStatusFailed {

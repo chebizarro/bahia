@@ -274,6 +274,7 @@ type AdoptionTarget struct {
 	EndpointRef     string
 	Endpoint        config.RuntimeEndpointConfig
 	EnvironmentName string
+	EnvironmentID   uuid.UUID
 }
 
 // AdoptionImportRequest imports selected discovered containers.
@@ -299,6 +300,7 @@ type AdoptionSelection struct {
 	TargetName          string
 	ContainerID         string
 	ServiceNameOverride string
+	ServiceID           uuid.UUID
 }
 
 // AdoptionPreview groups discovered containers for one target.
@@ -417,6 +419,14 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 		s.logger.Warn("adoption import rejected", zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
 		return nil, err
 	}
+	if req.ImportAll {
+		return nil, fmt.Errorf("adoption import requires explicit selections with author-minted service IDs")
+	}
+	for _, target := range targets {
+		if target.EnvironmentID == uuid.Nil || target.EnvironmentID.Version() != 7 {
+			return nil, fmt.Errorf("target %s requires author-minted UUIDv7 environment_id", target.Name)
+		}
+	}
 	selectionSet, err := normalizeAdoptionSelections(req)
 	if err != nil {
 		s.logger.Warn("adoption import selections rejected", zap.Int("target_count", len(targets)), zap.String("result", "failed"), zap.Error(err), zap.Int64("duration_ms", time.Since(start).Milliseconds()))
@@ -466,7 +476,7 @@ func (s *AdoptionService) Import(ctx context.Context, req AdoptionImportRequest)
 			if selected && selection.ServiceNameOverride != "" {
 				serviceName = normalizeResourceName(selection.ServiceNameOverride)
 			}
-			imported = append(imported, s.importCandidate(ctx, req.RequestID, req.Actor, orgID, preview.Target, container, serviceName, req.NonSecretEnvKeys, req.SecretRefs))
+			imported = append(imported, s.importCandidate(ctx, req.RequestID, req.Actor, orgID, preview.Target, container, selection, serviceName, req.NonSecretEnvKeys, req.SecretRefs))
 		}
 	}
 	if !req.ImportAll {
@@ -697,7 +707,7 @@ type adoptionPlan struct {
 	secrets        []domain.SecretRef
 }
 
-func (s *AdoptionService) importCandidate(ctx context.Context, requestID, actor string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, serviceName string, nonSecretEnvKeys []string, secretRefs map[string]domain.SecretCredentialRef) AdoptionImportResult {
+func (s *AdoptionService) importCandidate(ctx context.Context, requestID, actor string, orgID uuid.UUID, target AdoptionTarget, candidate AdoptionPreviewContainer, selection AdoptionSelection, serviceName string, nonSecretEnvKeys []string, secretRefs map[string]domain.SecretCredentialRef) AdoptionImportResult {
 	discovered := candidate.Discovered
 	result := AdoptionImportResult{
 		TargetName:              target.Name,
@@ -711,7 +721,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID, actor 
 	if candidate.ExistingServiceID != nil {
 		result.ServiceID = candidate.ExistingServiceID
 	} else {
-		id := adoptionEntityID("service", orgID.String(), target.Name, discovered.TargetName)
+		id := selection.ServiceID
 		result.ServiceID = &id
 	}
 	fail := func(err error) AdoptionImportResult {
@@ -754,7 +764,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID, actor 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	plan, err := s.planCandidate(ctx, requestID, orgID, target, discovered, classified, serviceName)
+	plan, err := s.planCandidate(ctx, requestID, orgID, target, discovered, classified, selection, serviceName)
 	if err != nil {
 		return fail(err)
 	}
@@ -813,7 +823,7 @@ func (s *AdoptionService) importCandidate(ctx context.Context, requestID, actor 
 // planCandidate derives every record of a candidate from the request and the
 // canonical records already published, refusing ambiguous or conflicting
 // evidence before anything is written.
-func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, serviceName string) (*adoptionPlan, error) {
+func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, orgID uuid.UUID, target AdoptionTarget, discovered runtime.DiscoveredContainer, classified sensitiveDataClassification, selection AdoptionSelection, serviceName string) (*adoptionPlan, error) {
 	known, err := s.loadKnownServices(ctx)
 	if err != nil {
 		return nil, err
@@ -824,7 +834,7 @@ func (s *AdoptionService) planCandidate(ctx context.Context, requestID string, o
 	if err := s.planEnvironment(ctx, plan, now); err != nil {
 		return nil, err
 	}
-	if err := planService(plan, known, requestID, serviceName, now); err != nil {
+	if err := planService(plan, known, requestID, selection.ServiceID, serviceName, now); err != nil {
 		return nil, err
 	}
 	planDeploymentUnit(plan, now)
@@ -943,6 +953,14 @@ func (s *AdoptionService) planEnvironment(ctx context.Context, plan *adoptionPla
 	if err != nil {
 		return err
 	}
+	if existing == nil {
+		// Older adoption publications used this UUIDv5 coordinate. Read it
+		// before creating a new UUIDv7 record for the same environment.
+		existing, err = s.environmentByID(ctx, adoptionEntityID("environment", plan.orgID.String(), target.EnvironmentName))
+		if err != nil {
+			return err
+		}
+	}
 	config := map[string]any{
 		"type":            string(domain.RuntimeTypeDocker),
 		"host_alias":      target.Name,
@@ -954,7 +972,7 @@ func (s *AdoptionService) planEnvironment(ctx context.Context, plan *adoptionPla
 		config["docker_host"] = target.DockerHost
 	}
 	if existing == nil {
-		id := adoptionEntityID("environment", plan.orgID.String(), target.EnvironmentName)
+		id := target.EnvironmentID
 		if occupant, err := s.environmentByID(ctx, id); err != nil {
 			return err
 		} else if occupant != nil {
@@ -975,6 +993,9 @@ func (s *AdoptionService) planEnvironment(ctx context.Context, plan *adoptionPla
 	}
 
 	env := existing.Environment
+	if env.ID != target.EnvironmentID && env.ID.Version() == 7 {
+		return fmt.Errorf("environment %q already has canonical UUIDv7 id %s, not signed id %s", target.EnvironmentName, env.ID, target.EnvironmentID)
+	}
 	if env.OrgID != uuid.Nil && env.OrgID != plan.orgID {
 		return fmt.Errorf("environment %q belongs to different org %s", target.EnvironmentName, env.OrgID)
 	}
@@ -1051,7 +1072,7 @@ func (s *AdoptionService) environmentByName(ctx context.Context, name string) (*
 	return nil, nil
 }
 
-func planService(plan *adoptionPlan, known *knownServices, requestID, serviceName string, now time.Time) error {
+func planService(plan *adoptionPlan, known *knownServices, requestID string, requestedID uuid.UUID, serviceName string, now time.Time) error {
 	target, discovered := plan.target, plan.discovered
 	adopted := adoptedRuntimeConfig(target, discovered, plan.classified)
 	byIdentity, err := known.byAdoptedTarget(plan.orgID, target, discovered)
@@ -1075,7 +1096,15 @@ func planService(plan *adoptionPlan, known *knownServices, requestID, serviceNam
 		existing = byName
 	}
 	if existing == nil {
-		id := adoptionEntityID("service", plan.orgID.String(), target.Name, discovered.TargetName)
+		// Preserve the coordinate of a previously published UUIDv5
+		// adoption record even when no binding or name match survived.
+		legacy := known.byID(adoptionEntityID("service", plan.orgID.String(), target.Name, discovered.TargetName))
+		if legacy != nil && sameAdoptedTarget(legacy, target, discovered) {
+			existing = legacy
+		}
+	}
+	if existing == nil {
+		id := requestedID
 		if occupant := known.byID(id); occupant != nil {
 			// The derived coordinate names a record this adoption does not
 			// own (it matched neither by identity nor by name): never replace it.
@@ -1096,6 +1125,9 @@ func planService(plan *adoptionPlan, known *knownServices, requestID, serviceNam
 		plan.svc = svc
 		plan.createdService = true
 		return nil
+	}
+	if existing.ID != requestedID && existing.ID.Version() == 7 {
+		return fmt.Errorf("service %q already has canonical UUIDv7 id %s, not signed id %s", existing.Name, existing.ID, requestedID)
 	}
 	if existing.OrgID != uuid.Nil && existing.OrgID != plan.orgID {
 		return fmt.Errorf("service %q belongs to different org %s", existing.Name, existing.OrgID)
@@ -1852,7 +1884,14 @@ func normalizeAdoptionSelections(req AdoptionImportRequest) (map[string]Adoption
 				return nil, fmt.Errorf("selection service_name_override is invalid")
 			}
 		}
-		out[selectionKey(selection.TargetName, selection.ContainerID)] = selection
+		if selection.ServiceID == uuid.Nil || selection.ServiceID.Version() != 7 {
+			return nil, fmt.Errorf("selection %s/%s requires author-minted UUIDv7 service_id", selection.TargetName, selection.ContainerID)
+		}
+		key := selectionKey(selection.TargetName, selection.ContainerID)
+		if _, duplicate := out[key]; duplicate {
+			return nil, fmt.Errorf("selection %s is duplicated", key)
+		}
+		out[key] = selection
 	}
 	return out, nil
 }

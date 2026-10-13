@@ -265,6 +265,8 @@ func draftLegacyExport(adoptions []exportAdoption, policies []exportPolicy, targ
 		orgIDs = append(orgIDs, id.String())
 	}
 	sort.Strings(orgIDs)
+	serviceIDs := map[uuid.UUID]string{}
+	environmentIDs := map[uuid.UUID]string{}
 	for _, orgText := range orgIDs {
 		orgID := uuid.MustParse(orgText)
 		intentID, err := mintExportID()
@@ -277,7 +279,7 @@ func draftLegacyExport(adoptions []exportAdoption, policies []exportPolicy, targ
 		for _, row := range orgs[orgID] {
 			binding := "adoption:binding:" + row.ServiceID.String() + ":" + row.EnvironmentID.String()
 			entry := exportIndexRow{Family: "adoption", LegacyRowID: row.ID.String(), Coordinate: binding,
-				Status: "needs_live_docker_and_signet_review", Notes: []string{"Check Docker host liveness and candidate identity before signing.", "Replace endpoint_ref with a configured Signet-backed endpoint reference (bahia-2o3on); no SQL secret is exported.", "The adoption handler, not this draft, derives resource IDs; verify existing service/environment ownership."}}
+				Status: "needs_live_docker_and_signet_review", Notes: []string{"Check Docker host liveness and candidate identity before signing.", "Replace endpoint_ref with a configured Signet-backed endpoint reference (bahia-2o3on); no SQL secret is exported.", "New UUIDv7 service and environment IDs are fixed in the draft; verify existing canonical ownership before signing."}}
 			if head, found := heads[binding]; found {
 				entry.Status = "canonical_duplicate"
 				entry.Notes = append(entry.Notes, "Canonical binding already present: "+head+"; omitted from draft.")
@@ -285,9 +287,25 @@ func draftLegacyExport(adoptions []exportAdoption, policies []exportPolicy, targ
 				entry.Status = "manual_review_no_container_id"
 				entry.Notes = append(entry.Notes, "No container ID for a valid adoption selection; omitted from draft.")
 			} else {
+				serviceID := serviceIDs[row.ServiceID]
+				if serviceID == "" {
+					serviceID, err = mintExportID()
+					if err != nil {
+						return index, nil, err
+					}
+					serviceIDs[row.ServiceID] = serviceID
+				}
+				environmentID := environmentIDs[row.EnvironmentID]
+				if environmentID == "" {
+					environmentID, err = mintExportID()
+					if err != nil {
+						return index, nil, err
+					}
+					environmentIDs[row.EnvironmentID] = environmentID
+				}
 				name := "legacy-" + strings.ReplaceAll(row.ID.String(), "-", "")[:12]
-				targetList = append(targetList, map[string]any{"name": name, "endpoint_ref": "REPLACE_WITH_SIGNET_ENDPOINT_REF", "environment_name": row.EnvironmentName})
-				selections = append(selections, map[string]any{"target_name": name, "container_id": row.ContainerID, "service_name_override": row.ServiceName})
+				targetList = append(targetList, map[string]any{"name": name, "endpoint_ref": "REPLACE_WITH_SIGNET_ENDPOINT_REF", "environment_name": row.EnvironmentName, "environment_id": environmentID})
+				selections = append(selections, map[string]any{"target_name": name, "container_id": row.ContainerID, "service_name_override": row.ServiceName, "service_id": serviceID})
 				entry.DraftFile = file
 			}
 			entries = append(entries, entry)

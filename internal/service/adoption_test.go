@@ -20,6 +20,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/events"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -380,11 +381,20 @@ func newTestAdoption(canonical *fakeAdoptionCanonical, publisher events.Publishe
 	return NewAdoptionService(canonical, canonical, publisher, zap.NewNop(), opts...)
 }
 
+var testAdoptionServiceID = uuid.MustParse("018f6a60-0000-7000-8000-000000000112")
+var testAdoptionEnvironmentID = uuid.MustParse("018f6a60-0000-7000-8000-000000000113")
+
+func sensitiveTarget(server *httptest.Server) AdoptionImportRequest {
+	req := localTarget(server)
+	req.Selections[0].ContainerID = "container-secret"
+	return req
+}
+
 func localTarget(server *httptest.Server) AdoptionImportRequest {
 	return AdoptionImportRequest{
-		Targets:   []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
-		ImportAll: true,
-		RequestID: "intent-1",
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "container-123"}},
+		RequestID:  "intent-1",
 	}
 }
 
@@ -770,8 +780,8 @@ func TestAdoptionBackfillPublishesSQLEraIdentitiesAsBindingsOnce(t *testing.T) {
 	server := newAdoptionDockerServer(t)
 	defer server.Close()
 	req := AdoptionImportRequest{
-		Targets:    []AdoptionTarget{{Name: "local", EndpointRef: "prod-docker", EnvironmentName: "prod"}},
-		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "renamed"}},
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", EndpointRef: "prod-docker", EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "renamed"}},
 		OrgID:      orgID,
 		RequestID:  "intent-3",
 	}
@@ -852,8 +862,8 @@ func TestAdoptionServiceImportRequiresOrgWhenMultipleOrgsAreAvailable(t *testing
 	}}
 	adoption := newTestAdoption(newFakeAdoptionCanonical(), &events.NoopPublisher{}, WithAdoptionOrganizations(orgRepo))
 	_, err := adoption.Import(context.Background(), AdoptionImportRequest{
-		Targets:   []AdoptionTarget{{Name: "local", DockerHost: "http://docker.example", EnvironmentName: "prod"}},
-		ImportAll: true,
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", DockerHost: "http://docker.example", EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "container-123"}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "requires org_id") {
 		t.Fatalf("Import error = %v, want org_id requirement", err)
@@ -939,7 +949,7 @@ func TestAdoptionServiceImportRefusesInlineSecretValues(t *testing.T) {
 	canonical := newFakeAdoptionCanonical()
 	adoption := newTestAdoption(canonical, &events.NoopPublisher{})
 
-	results, err := adoption.Import(ctx, localTarget(server))
+	results, err := adoption.Import(ctx, sensitiveTarget(server))
 	if err != nil {
 		t.Fatalf("Import returned error: %v", err)
 	}
@@ -973,7 +983,7 @@ func TestAdoptionServiceUsesManagedEndpointRefAndDoesNotPublishDockerHost(t *tes
 		Endpoints: map[string]config.RuntimeEndpointConfig{"prod-docker": {DockerHost: server.URL}},
 	}, false))
 
-	results, err := adoption.Import(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{Name: "prod", EndpointRef: "prod-docker"}}, ImportAll: true})
+	results, err := adoption.Import(ctx, AdoptionImportRequest{Targets: []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "prod", EndpointRef: "prod-docker"}}, Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "prod", ContainerID: "container-123"}}})
 	if err != nil || len(results) != 1 || results[0].Status != adoptionStatusCreated {
 		t.Fatalf("unexpected import result: %#v err=%v", results, err)
 	}
@@ -1009,16 +1019,16 @@ func TestAdoptionServiceImportUsesExistingAdoptedIdentityDespiteNewOverride(t *t
 	adoption := newTestAdoption(canonical, &events.NoopPublisher{})
 
 	first, err := adoption.Import(ctx, AdoptionImportRequest{
-		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
-		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "first-name"}},
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "first-name"}},
 		RequestID:  "intent-1",
 	})
 	if err != nil || len(first) != 1 || first[0].Status != adoptionStatusCreated {
 		t.Fatalf("first import failed: results=%#v err=%v", first, err)
 	}
 	second, err := adoption.Import(ctx, AdoptionImportRequest{
-		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
-		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "second-name"}},
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "container-123", ServiceNameOverride: "second-name"}},
 		RequestID:  "intent-2",
 	})
 	if err != nil || len(second) != 1 || second[0].Status != adoptionStatusUpdated {
@@ -1110,8 +1120,8 @@ func TestAdoptionServiceImportSelectionReportsScanFailure(t *testing.T) {
 	adoption := newTestAdoption(newFakeAdoptionCanonical(), &events.NoopPublisher{})
 
 	results, err := adoption.Import(ctx, AdoptionImportRequest{
-		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
-		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "container-123"}},
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "container-123"}},
 	})
 	if err != nil {
 		t.Fatalf("Import returned error: %v", err)
@@ -1128,8 +1138,8 @@ func TestAdoptionServiceImportSelectionReportsUndiscoveredContainer(t *testing.T
 	adoption := newTestAdoption(newFakeAdoptionCanonical(), &events.NoopPublisher{})
 
 	results, err := adoption.Import(ctx, AdoptionImportRequest{
-		Targets:    []AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
-		Selections: []AdoptionSelection{{TargetName: "local", ContainerID: "missing-container"}},
+		Targets:    []AdoptionTarget{{EnvironmentID: testAdoptionEnvironmentID, Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
+		Selections: []AdoptionSelection{{ServiceID: testAdoptionServiceID, TargetName: "local", ContainerID: "missing-container"}},
 	})
 	if err != nil {
 		t.Fatalf("Import returned error: %v", err)
@@ -1588,7 +1598,7 @@ func TestAdoptionServiceImportHonoursNonSecretEnvKeys(t *testing.T) {
 	defer server.Close()
 	canonical := newFakeAdoptionCanonical()
 	adoption := newTestAdoption(canonical, &events.NoopPublisher{})
-	req := localTarget(server)
+	req := sensitiveTarget(server)
 	req.NonSecretEnvKeys = []string{"DB_PASSWORD"}
 	results, err := adoption.Import(ctx, req)
 	if err != nil {
@@ -1597,4 +1607,56 @@ func TestAdoptionServiceImportHonoursNonSecretEnvKeys(t *testing.T) {
 	if len(results) != 1 || results[0].Status != adoptionStatusFailed || strings.Contains(results[0].Error, "DB_PASSWORD") || !strings.Contains(results[0].Error, "AWS_SECRET_ACCESS_KEY") {
 		t.Fatalf("partial exemption = %#v", results)
 	}
+}
+
+func TestAdoptionImportHonorsSignedIDsAndReadsPublishedUUIDv5Identity(t *testing.T) {
+	ctx := context.Background()
+	server := newAdoptionDockerServer(t)
+	defer server.Close()
+	canonical := newFakeAdoptionCanonical()
+	adoption := newTestAdoption(canonical, &events.NoopPublisher{})
+	req := localTarget(server)
+	first, err := adoption.Import(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, first, 1)
+	require.Equal(t, testAdoptionServiceID, *first[0].ServiceID)
+	require.Equal(t, testAdoptionEnvironmentID, *first[0].EnvironmentID)
+	second, err := adoption.Import(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, first[0].ServiceID, second[0].ServiceID)
+	require.Equal(t, first[0].EnvironmentID, second[0].EnvironmentID)
+
+	changedService := req
+	changedService.Selections = append([]AdoptionSelection(nil), req.Selections...)
+	changedService.Selections[0].ServiceID = uuid.Must(uuid.NewV7())
+	mismatch, err := adoption.Import(ctx, changedService)
+	require.NoError(t, err)
+	require.Len(t, mismatch, 1)
+	require.Equal(t, adoptionStatusFailed, mismatch[0].Status)
+	require.Contains(t, mismatch[0].Error, "canonical UUIDv7 id")
+	changedEnvironment := req
+	changedEnvironment.Targets = append([]AdoptionTarget(nil), req.Targets...)
+	changedEnvironment.Targets[0].EnvironmentID = uuid.Must(uuid.NewV7())
+	mismatch, err = adoption.Import(ctx, changedEnvironment)
+	require.NoError(t, err)
+	require.Len(t, mismatch, 1)
+	require.Equal(t, adoptionStatusFailed, mismatch[0].Status)
+	require.Contains(t, mismatch[0].Error, "canonical UUIDv7 id")
+	require.Len(t, canonical.services, 1)
+	require.Len(t, canonical.environments, 1)
+
+	legacy := newFakeAdoptionCanonical()
+	legacyServiceID := adoptionEntityID("service", uuid.Nil.String(), "local", "demo-web-1")
+	legacyEnvironmentID := adoptionEntityID("environment", uuid.Nil.String(), "prod")
+	legacy.services[legacyServiceID] = domain.Service{ID: legacyServiceID, Name: "legacy-service", RuntimeType: domain.RuntimeTypeDocker,
+		RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{TargetName: "demo-web-1", HostAlias: "local"}}}
+	legacy.environments[legacyEnvironmentID] = AdoptionEnvironment{Environment: domain.Environment{ID: legacyEnvironmentID, Name: "prod"}}
+	resolver := newTestAdoption(legacy, &events.NoopPublisher{})
+	result, err := resolver.Import(ctx, req)
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Equal(t, legacyServiceID, *result[0].ServiceID)
+	require.Equal(t, legacyEnvironmentID, *result[0].EnvironmentID)
+	require.Len(t, legacy.services, 1)
+	require.Len(t, legacy.environments, 1)
 }

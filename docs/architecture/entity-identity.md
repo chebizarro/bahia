@@ -30,7 +30,11 @@ Rules:
 - Daemon-authored records (backup jobs, package publications, ML versions,
   security runs, adoption bindings) are minted the same way in code; where the
   id derives from the request (security runs from schedule id and due time,
-  adoption from the import request) a retry re-addresses the same coordinate.
+  adoption observations from the import request) a retry re-addresses the same
+  coordinate. Adoption service and environment creates instead use the UUIDv7
+  ids carried by the signed import selection and target. Previously published
+  UUIDv5 adoption records remain readable and keep their coordinates; a new
+  import never rekeys an existing record.
 
 Producers that implement the rule end to end: web dialogs mint once per
 attempt, the CLI accepts `--id` / `--idempotency-key`, MCP create tools mint

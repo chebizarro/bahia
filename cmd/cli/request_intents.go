@@ -105,6 +105,9 @@ func adoptionPayloadTargets(targets []client.AdoptionTarget) ([]map[string]strin
 		if target.EnvironmentName != "" {
 			entry["environment_name"] = target.EnvironmentName
 		}
+		if target.EnvironmentID != "" {
+			entry["environment_id"] = target.EnvironmentID
+		}
 		result = append(result, entry)
 	}
 	return result, nil

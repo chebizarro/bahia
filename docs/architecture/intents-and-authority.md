@@ -172,6 +172,13 @@ or update without `credential_ref`. Without a configured store every create
 and update is rejected with `secret store is not configured`; deletes still
 apply (tombstone, and the PostgreSQL index row when configured).
 
+An adoption `import` intent selects each workload explicitly. Each target carries
+an author-minted UUIDv7 `environment_id`, and each selection carries a
+`service_id` UUIDv7; the daemon uses these on create, without deriving a new
+service or environment ID. `import_all` cannot fix IDs for unknown discoveries
+and is rejected. An existing UUIDv5-identified adoption is read and retained
+rather than rekeyed. The operator keeps the same IDs and `intent_id` on retries.
+
 An adoption `import` intent may likewise carry `secret_refs`, mapping inline
 environment key names to `{store:"signet",credential_id,version}`. It carries
 no values. Adoption checks each credential against the exact

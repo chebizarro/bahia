@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
@@ -182,8 +183,18 @@ func runAdoptionImportIntent(cmd *cobra.Command, req client.AdoptionImportReques
 	if err != nil {
 		return nil, err
 	}
-	if !req.ImportAll && len(req.Selections) == 0 {
-		return nil, fmt.Errorf("import requires --all or at least one selection")
+	if req.ImportAll || len(req.Selections) == 0 {
+		return nil, fmt.Errorf("signed import requires selected workloads with author-minted UUIDv7 IDs")
+	}
+	for _, target := range req.Targets {
+		if err := requireAdoptionUUIDv7("environment_id", target.EnvironmentID); err != nil {
+			return nil, err
+		}
+	}
+	for _, selection := range req.Selections {
+		if err := requireAdoptionUUIDv7("service_id", selection.ServiceID); err != nil {
+			return nil, err
+		}
 	}
 	org, err := requireIntentOrg(req.OrgID)
 	if err != nil {
@@ -208,4 +219,12 @@ func runAdoptionImportIntent(cmd *cobra.Command, req client.AdoptionImportReques
 		result["candidate_count"] = count
 	}
 	return result, nil
+}
+
+func requireAdoptionUUIDv7(field, raw string) error {
+	id, err := uuid.Parse(raw)
+	if err != nil || id.Version() != 7 || id.String() != raw || id.Variant() != uuid.RFC4122 {
+		return fmt.Errorf("%s must be a canonical UUIDv7", field)
+	}
+	return nil
 }

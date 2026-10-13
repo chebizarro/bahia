@@ -183,8 +183,10 @@ func localAdoptionService(t *testing.T, d *localHistoryDaemon, canonical service
 
 func adoptionImportRequest(server *httptest.Server, requestID string) service.AdoptionImportRequest {
 	return service.AdoptionImportRequest{
-		Targets:   []service.AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod"}},
-		ImportAll: true,
+		Targets: []service.AdoptionTarget{{Name: "local", DockerHost: server.URL, EnvironmentName: "prod",
+			EnvironmentID: uuid.MustParse("018f6a60-0000-7000-8000-000000000113")}},
+		Selections: []service.AdoptionSelection{{TargetName: "local", ContainerID: "container-123",
+			ServiceID: uuid.MustParse("018f6a60-0000-7000-8000-000000000112")}},
 		RequestID: requestID,
 	}
 }
