@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { base64Decode, decryptConfidentialContent } from '../../src/lib/nostr/confidential.js';
 
 const fixture = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/paysec-confidential.json'), 'utf8'));
@@ -50,7 +50,27 @@ function encryptedEvent(record, created_at = 1) {
     created_at, tags: [['legacy_kind', String(record.legacy_kind)]] });
 }
 
-beforeEach(() => { mock.events.clear(); mock.listeners.clear(); mock.key = null; });
+beforeAll(async () => {
+  // Warm Vite's transform cache outside the per-test timeout, then discard any
+  // collection modules imported by earlier files before these boot mocks apply.
+  vi.resetModules();
+  for (const path of [
+    '../../src/lib/stores/collections/ml.svelte.js',
+    '../../src/lib/stores/collections/backup.svelte.js',
+    '../../src/lib/stores/collections/sbom.svelte.js',
+    '../../src/lib/stores/collections/activity.svelte.js',
+    '../../src/lib/stores/payments.svelte.js',
+    '../../src/lib/stores/security.svelte.js'
+  ]) await import(path);
+  vi.resetModules();
+}, 60_000);
+
+beforeEach(() => {
+  vi.resetModules();
+  mock.events.clear();
+  mock.listeners.clear();
+  mock.key = null;
+});
 
 describe('Store queries', () => {
   it('projects ML and backup latest winners and tombstones by t topic', async () => {
