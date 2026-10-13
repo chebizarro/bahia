@@ -30,6 +30,8 @@ const (
 	// a fresh joiner holding only the newest root derives the same one
 	// (CORD-04 §1).
 	concordLabelGrant = "concord/grant"
+	// concordLabelPins derives one Pin List coordinate from its Channel id.
+	concordLabelPins = "concord/pins"
 )
 
 // concordEditionLabel is CORD-04 §1's edition-hash domain separator. It is a
@@ -163,6 +165,11 @@ func concordEditionHash(entity [32]byte, version uint64, prev []byte, content []
 // community_id, the id is the member, and there is no epoch.
 func concordGrantLocator(communityID, member [32]byte) ([32]byte, error) {
 	return concordHKDF(communityID[:], concordLabelGrant, member, nil, nil)
+}
+
+// concordPinsLocator implements CORD-02 A.6's epochless Pin List coordinate.
+func concordPinsLocator(communityID, channelID [32]byte) ([32]byte, error) {
+	return concordHKDF(communityID[:], concordLabelPins, channelID, nil, nil)
 }
 
 // concordControlReadKey derives the Control Plane read key (CORD-02 §5). Its

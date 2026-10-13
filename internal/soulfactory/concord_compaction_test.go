@@ -96,6 +96,57 @@ func TestConcordCompactionRewrapsStructuralHeads(t *testing.T) {
 	}
 }
 
+// A deleted Channel retains its terminal metadata but not its Pin List. A
+// live Channel's Pin List remains, including when the lists are interleaved
+// in the folded map rather than arriving in Channel order.
+func TestConcordCompactionOmitsDeletedChannelPins(t *testing.T) {
+	fixture := newConcordRotationFixture(t, 3)
+	actor := fixture.staff.fakeSigner
+	communityID, err := concordID32(fixture.communityID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletedChannel := concordTestBytes32(t, 0x71)
+	liveChannel := concordTestBytes32(t, 0x72)
+	deletedPins, err := concordPinsLocator(communityID, deletedChannel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	livePins, err := concordPinsLocator(communityID, liveChannel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	editions := []nostr.Event{
+		*concordTestTypedControlEdition(t, fixture, actor, 11, deletedPins, 1, "", `{"entries":[]}`).wrap,
+		*concordTestTypedControlEdition(t, fixture, actor, 2, liveChannel, 1, "", `{"name":"live","private":false}`).wrap,
+		*concordTestTypedControlEdition(t, fixture, actor, 11, livePins, 1, "", `{"entries":[]}`).wrap,
+		*concordTestTypedControlEdition(t, fixture, actor, 2, deletedChannel, 1, "", `{"deleted":true}`).wrap,
+	}
+	fold := concordFoldRepublished(t, fixture, concordRotatedBundle(t, fixture), editions)
+	if fold.editions != 4 || len(fold.heads) != 4 {
+		t.Fatalf("prior fold = %#v", fold)
+	}
+	plan, next, rotated := concordTestRefoundingPlan(t, fixture)
+	compaction, err := fixture.membership.republishConcordCompaction(t.Context(), next, fold,
+		plan.communityID32, plan.nextRoot[:], plan.nextControlRoot[:], plan.receipt.RootEpoch, plan.nextControlPK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compaction.Entities != 3 || compaction.Editions != 4 {
+		t.Fatalf("compaction = %#v", compaction)
+	}
+	joined := concordFoldRepublished(t, fixture, rotated, fixture.endpoint.published)
+	if _, ok := joined.head(deletedPins); ok {
+		t.Fatal("deleted Channel's Pin List crossed the epoch")
+	}
+	if _, ok := joined.head(deletedChannel); !ok {
+		t.Fatal("terminal Channel metadata was lost")
+	}
+	if _, ok := joined.head(livePins); !ok {
+		t.Fatal("live Channel's Pin List was lost")
+	}
+}
+
 // The structural guard still rejects forks; it is not an authority check.
 func TestConcordCompactabilityRejectsForkedChains(t *testing.T) {
 	fixture := newConcordRotationFixture(t, 0)
@@ -126,6 +177,9 @@ func TestConcordGuestbookSnapshotPublication(t *testing.T) {
 	}
 	if snapshot.Members != 2 || snapshot.Chunks != 1 || snapshot.Epoch != 4 {
 		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if !strings.Contains(snapshot.Warning, "Recipients") || !strings.Contains(snapshot.Warning, "prior Guestbook") {
+		t.Fatalf("receipt conceals recipient-only membership seed: %#v", snapshot)
 	}
 
 	guestbook := concordTestGuestbookAddress(t, rotated.CommunityRoot, fixture.communityID, 4)
