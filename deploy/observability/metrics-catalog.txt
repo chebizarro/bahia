@@ -10,6 +10,18 @@
 #     deploy/observability/bahia-alerts.yml still exists. An alert on a metric
 #     that no longer exists never fires, which is worse than a noisy one.
 #
+# Runtime signal cardinality: bahia_runtime_unit_state has one series per
+# service/environment/unit identity, with numeric health codes 0 unknown,
+# 1 starting, 2 healthy, 3 unhealthy, 4 stopped. A replaced unit is recorded
+# as code 0. bahia_runtime_transitions_total adds bounded from.state and
+# to.state labels (five values each); no reason, deployment id, timestamps,
+# trace ids, hostnames, image names or observation metadata are metric labels.
+# Retention batch metrics have only success/failure outcome labels. Unit IDs
+# are the only fleet-scaled dimension; configure 30-day VictoriaMetrics and
+# VictoriaLogs retention in the collector backends. Logs carry the stable IDs,
+# bounded states, reason codes, observed_at and trace/span IDs instead.
+#
+
 
 
 bahia_adoption_candidates_total
@@ -85,6 +97,10 @@ bahia_reconcile_total
 bahia_release_outcomes_total
 bahia_runtime_action_duration_seconds
 bahia_runtime_actions_total
+bahia_runtime_observation_retention_batches_total
+bahia_runtime_observation_rows_retired_total
+bahia_runtime_transitions_total
+bahia_runtime_unit_state
 bahia_tier_rejections_total
 bahia_virtualization_capacity
 bahia_virtualization_checkpoint_age_seconds

@@ -456,6 +456,8 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 	if err := r.state.Upsert(ctx, currentState); err != nil {
 		return err
 	}
+	telemetry.RecordRuntimeUnitState(ctx, currentState.ServiceID.String(), currentState.EnvironmentID.String(),
+		uuidPtrString(currentState.DeploymentUnitID), string(persistedObservation.HealthStatus))
 	if newDrift != domain.DriftStatusInSync && newDrift != previousDrift {
 		if desiredDigest == "" && currentState.DesiredArtifactID != nil {
 			desiredDigest = driftdecision.DesiredArtifactDigest(ctx, r.artifacts, currentState.DesiredArtifactID, r.logger)
@@ -497,6 +499,14 @@ func (r *Reconciler) reconcileOne(ctx context.Context, currentState *domain.Envi
 		// Publish the canonical cp-state record directly to relays; the
 		// projector does not re-project it from bus events.
 		r.publishStateToRelay(ctx, currentState, persistedObservation)
+		telemetry.RecordRuntimeTransition(ctx, telemetry.RuntimeTransition{
+			ServiceID: currentState.ServiceID.String(), EnvironmentID: currentState.EnvironmentID.String(),
+			UnitID: newMaterial.DeploymentUnitID, PreviousUnitID: previousMaterial.DeploymentUnitID,
+			DeploymentID: uuidPtrString(currentState.LastSuccessfulRunID),
+			FromState:    previousMaterial.Health, ToState: newMaterial.Health,
+			FromDrift: previousMaterial.DriftStatus, ToDrift: newMaterial.DriftStatus,
+			Reason: changeReasonString(reasons), ObservedAt: persistedObservation.ObservedAt,
+		})
 	} else {
 		failureMetadata, _ := json.Marshal(currentState.ReconcileFailureMetadata)
 		if !bytes.Equal(previousFailureMetadata, failureMetadata) {
@@ -556,6 +566,17 @@ func (r *Reconciler) repairStuckRouteOnlyState(ctx context.Context, currentState
 	}
 	// Publish the repaired state directly to relays.
 	r.publishStateToRelay(ctx, state, linkedObservation)
+	transition := telemetry.RuntimeTransition{
+		ServiceID: state.ServiceID.String(), EnvironmentID: state.EnvironmentID.String(),
+		UnitID: uuidPtrString(state.DeploymentUnitID), DeploymentID: latest.ID.String(),
+		FromState: "unknown", ToState: "unknown", FromDrift: string(domain.DriftStatusDeploying),
+		ToDrift: string(domain.DriftStatusInSync), Reason: changeReasonDriftStatus,
+	}
+	if linkedObservation != nil {
+		transition.FromState = string(linkedObservation.HealthStatus)
+		transition.ToState = string(linkedObservation.HealthStatus)
+	}
+	telemetry.RecordRuntimeTransition(ctx, transition)
 	r.publisher.Publish(ctx, events.Event{
 		Type:     events.EventEnvironmentServiceStateChanged,
 		EntityID: state.ServiceID.String() + ":" + state.EnvironmentID.String(),

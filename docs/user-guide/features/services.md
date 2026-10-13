@@ -57,6 +57,10 @@ Runtime supervision publishes managed instance health, recovery attempts, and ma
 
 Reconciliation retains a runtime observation when the service is first observed or its runtime identity, placement, image, health, or normalized configuration changes. A retained transition publishes a state-change record even if health remains the same. Repeated samples with only a new timestamp or diagnostic metadata update the reconciliation bookkeeping without adding observation history or publishing another state-change event. The current observation link continues to identify the last retained sample.
 
+Each material transition also emits an OpenTelemetry incident log and per-unit state/transition metrics when telemetry is enabled. The log contains service, environment, unit and deployment-run IDs, previous and next health/drift states, bounded reason codes, observation time and trace/span IDs; it never carries observation metadata, image names, hostnames or secrets. PostgreSQL `runtime_observations` is a derived rolling 30-day store: a non-required background runner deletes expired, unlinked rows in paced batches. The current state-linked row remains until another material observation replaces it, and relay state remains authoritative if PostgreSQL is absent.
+
+Successful unchanged observations refresh the per-unit state gauge after daemon restart without incrementing the transition counter or emitting a transition log.
+
 ## Related
 
 - [Builds](builds.md)
