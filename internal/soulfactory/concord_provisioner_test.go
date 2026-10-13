@@ -3,9 +3,10 @@ package soulfactory
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -35,7 +36,7 @@ func (a *recordingConcordAssigner) Assign(_ context.Context, pubkey string) ([]s
 
 func TestFullProvisionerAssignsAndRecordsConcordAfterSignet(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	assigner := &recordingConcordAssigner{assigned: []string{strings.Repeat("a", 64)}}
@@ -70,7 +71,7 @@ func TestFullProvisionerAssignsAndRecordsConcordAfterSignet(t *testing.T) {
 
 func TestFullProvisionerFailsClosedWhenConcordAssignmentFails(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, signer, zap.NewNop())
 	attachPublishCapture(reactor)
 	full := NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 	full.concordMembership = &recordingConcordAssigner{err: errors.New("relay rejected direct invite")}
@@ -163,7 +164,7 @@ func TestFullProvisionerRotationFailsClosedWithoutConcord(t *testing.T) {
 
 func newConcordRotationProvisioner(t *testing.T) *FullProvisioner {
 	t.Helper()
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, newFakeSigner(t), slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, scriptedGenerator{}, newFakeSigner(t), zap.NewNop())
 	attachPublishCapture(reactor)
 	return NewFullProvisioner(reactor, FullProvisionerConfig{}, nil)
 }

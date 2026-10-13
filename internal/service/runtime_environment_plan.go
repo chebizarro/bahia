@@ -3,7 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
-	"log/slog"
+
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -71,7 +72,7 @@ type EnvironmentPlanAssembler struct {
 	secrets     secretLister
 	units       deploymentUnitLister
 	builder     *DesiredStateBuilder
-	logger      *slog.Logger
+	logger      *zap.Logger
 }
 
 // EnvironmentPlanAssemblerDeps groups the dependencies needed to construct an
@@ -85,14 +86,14 @@ type EnvironmentPlanAssemblerDeps struct {
 	Secrets     secretLister
 	Units       deploymentUnitLister
 	Builder     *DesiredStateBuilder
-	Logger      *slog.Logger
+	Logger      *zap.Logger
 }
 
 // NewEnvironmentPlanAssembler creates a new assembler.
 func NewEnvironmentPlanAssembler(deps EnvironmentPlanAssemblerDeps) *EnvironmentPlanAssembler {
 	logger := deps.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &EnvironmentPlanAssembler{
 		stateLoader: deps.StateLoader,
@@ -161,11 +162,10 @@ func (a *EnvironmentPlanAssembler) Assemble(
 			return nil, fmt.Errorf("loading service %s: %w", state.ServiceID, err)
 		}
 		if svc == nil {
-			// Service has been deleted; drop from plan.
-			a.logger.Info("dropping deleted service from environment plan",
-				"service_id", state.ServiceID,
-				"environment_id", envID,
-			)
+			a.logger.
+				// Service has been deleted; drop from plan.
+				Info("dropping deleted service from environment plan", zap.Any("service_id", state.ServiceID), zap.Any("environment_id", envID))
+
 			continue
 		}
 
@@ -182,11 +182,8 @@ func (a *EnvironmentPlanAssembler) Assemble(
 		// Legacy sibling — hydrate from service/artifact/runtime config.
 		spec, err := a.hydrateLegacySibling(ctx, svc, &state)
 		if err != nil {
-			a.logger.Warn("failed to hydrate legacy sibling; excluding from plan",
-				"service_id", state.ServiceID,
-				"environment_id", envID,
-				"error", err,
-			)
+			a.logger.Warn("failed to hydrate legacy sibling; excluding from plan", zap.Any("service_id", state.ServiceID), zap.Any("environment_id", envID), zap.Error(err))
+
 			continue
 		}
 
@@ -360,16 +357,10 @@ func (a *EnvironmentPlanAssembler) persistHydratedSpec(
 	state.DesiredHash = spec.DesiredHash
 
 	if err := a.stateWriter.Upsert(ctx, state); err != nil {
-		a.logger.Warn("failed to persist hydrated legacy sibling spec",
-			"service_id", state.ServiceID,
-			"environment_id", state.EnvironmentID,
-			"error", err,
-		)
+		a.logger.Warn("failed to persist hydrated legacy sibling spec", zap.Any("service_id", state.ServiceID), zap.Any("environment_id", state.EnvironmentID), zap.Error(err))
+
 	} else {
-		a.logger.Info("persisted hydrated legacy sibling spec",
-			"service_id", state.ServiceID,
-			"environment_id", state.EnvironmentID,
-			"desired_hash", spec.DesiredHash,
-		)
+		a.logger.Info("persisted hydrated legacy sibling spec", zap.Any("service_id", state.ServiceID), zap.Any("environment_id", state.EnvironmentID), zap.String("desired_hash", spec.DesiredHash))
+
 	}
 }

@@ -3,8 +3,9 @@ package soulfactory
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"go.opentelemetry.io/otel"
@@ -142,7 +143,7 @@ type RelayRead struct {
 // caller is a stable, low-cardinality label for logs and metrics.
 func (b *RelayClient) QueryWithPolicy(ctx context.Context, caller string, policy RelayReadPolicy, filters []nostr.Filter) (RelayRead, error) {
 	events, err := b.Query(ctx, filters)
-	var logger *slog.Logger
+	var logger *zap.Logger
 	if b != nil {
 		logger = b.log()
 	}
@@ -152,7 +153,7 @@ func (b *RelayClient) QueryWithPolicy(ctx context.Context, caller string, policy
 // resolveRelayRead applies policy to what Query or CollectStoredEvents
 // returned. Errors other than *RelayReadIncompleteError, and partial reads the
 // caller cancelled, are returned unchanged.
-func resolveRelayRead(ctx context.Context, logger *slog.Logger, caller string, policy RelayReadPolicy, events []*nostr.Event, err error) (RelayRead, error) {
+func resolveRelayRead(ctx context.Context, logger *zap.Logger, caller string, policy RelayReadPolicy, events []*nostr.Event, err error) (RelayRead, error) {
 	if err == nil {
 		return RelayRead{Events: events}, nil
 	}
@@ -166,12 +167,10 @@ func resolveRelayRead(ctx context.Context, logger *slog.Logger, caller string, p
 	}
 	recordRelayReadPartial(ctx, caller, policy, "accepted")
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
-	logger.Warn("soul factory relay read degraded; accepting partial result",
-		"caller", caller, "policy", policy.String(),
-		"relays", incomplete.Total, "answered", incomplete.Total-len(incomplete.Relays),
-		"events", len(events), "error", incomplete)
+	logger.Warn("soul factory relay read degraded; accepting partial result", zap.String("caller", caller), zap.String("policy", policy.String()), zap.Int("relays", incomplete.Total), zap.Int("answered", incomplete.Total-len(incomplete.Relays)), zap.Int("events", len(events)), zap.NamedError("error", incomplete))
+
 	return RelayRead{Events: events, Degraded: incomplete}, nil
 }
 

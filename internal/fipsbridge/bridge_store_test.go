@@ -2,10 +2,9 @@ package fipsbridge
 
 import (
 	"context"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -91,7 +90,7 @@ type bridgeRun struct {
 
 func startBridge(t *testing.T, cfg Config) *bridgeRun {
 	t.Helper()
-	bridge, err := NewBridge(cfg, slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	bridge, err := NewBridge(cfg, zap.NewNop())
 	require.NoError(t, err)
 	bridge.syncLogger = zap.NewNop()
 	bridge.relayBackoff = func() *nostradapter.Backoff {

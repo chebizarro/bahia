@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -55,7 +56,7 @@ type ProductionGovernedProvisionerConfig struct {
 	SagaPublisher   saga.EventPublisher
 	LedgerEncryptor LedgerEncryptor
 	ServicePubkey   string
-	Logger          *slog.Logger
+	Logger          *zap.Logger
 }
 
 // newSagaStore builds the canonical saga store when the daemon identity and

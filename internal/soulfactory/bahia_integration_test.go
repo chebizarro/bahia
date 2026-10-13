@@ -3,8 +3,7 @@ package soulfactory
 import (
 	"context"
 	"errors"
-	"io"
-	"log/slog"
+
 	"strings"
 	"testing"
 	"time"
@@ -361,8 +360,8 @@ func TestBahiaIntegrationLifecycleUpdatesState(t *testing.T) {
 	}
 }
 
-func slogDefaultLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func slogDefaultLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 func stateKey(serviceID, envID uuid.UUID) string { return serviceID.String() + ":" + envID.String() }

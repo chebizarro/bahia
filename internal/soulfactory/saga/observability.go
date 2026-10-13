@@ -4,18 +4,19 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 type MonitorConfig struct {
 	Store    Store
 	Instance string
 	Build    string
-	Logger   *slog.Logger
+	Logger   *zap.Logger
 	Now      func() time.Time
 }
 
@@ -23,7 +24,7 @@ type Monitor struct {
 	store    Store
 	instance string
 	build    string
-	logger   *slog.Logger
+	logger   *zap.Logger
 	now      func() time.Time
 }
 
@@ -67,7 +68,7 @@ func NewMonitor(config MonitorConfig) (*Monitor, error) {
 		return nil, fmt.Errorf("saga monitor identity contains secret-shaped data")
 	}
 	if config.Logger == nil {
-		config.Logger = slog.Default()
+		config.Logger = zap.NewNop()
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -87,24 +88,8 @@ func (m *Monitor) Collect(ctx context.Context) (ObservabilitySnapshot, error) {
 	for _, run := range runs {
 		observation := observeRun(run, now)
 		snapshot.Runs = append(snapshot.Runs, observation)
-		m.logger.InfoContext(ctx, "openclaw provisioning run observed",
-			"instance", m.instance, "build", m.build,
-			"request_id", observation.RequestID, "run_id", observation.RunID,
-			"agent_id", observation.AgentID, "stage", observation.Stage,
-			"stage_age_seconds", observation.StageAge.Seconds(),
-			"stage_durations", observation.StageDurations,
-			"retry_count", observation.RetryCount,
-			"reconciliation_count", observation.ReconciliationCount,
-			"rollback_count", observation.RollbackCount,
-			"signing_ready", observation.SigningReady,
-			"relay_ready", observation.RelayReady,
-			"dm_gate_passed", observation.DMGatePassed,
-			"terminal_projected", observation.TerminalProjected,
-			"false_running", observation.FalseRunning,
-			"orphan_candidates", observation.OrphanCandidates,
-			"signet_unauthorized_responses", observation.SignetUnauthorized,
-			"correlation_mismatches", observation.CorrelationMismatches,
-		)
+		m.logger.Info("openclaw provisioning run observed", zap.String("instance", m.instance), zap.String("build", m.build), zap.String("request_id", observation.RequestID), zap.String("run_id", observation.RunID), zap.String("agent_id", observation.AgentID), zap.Any("stage", observation.Stage), zap.Float64("stage_age_seconds", observation.StageAge.Seconds()), zap.Any("stage_durations", observation.StageDurations), zap.Int("retry_count", observation.RetryCount), zap.Int("reconciliation_count", observation.ReconciliationCount), zap.Int("rollback_count", observation.RollbackCount), zap.Bool("signing_ready", observation.SigningReady), zap.Bool("relay_ready", observation.RelayReady), zap.Bool("dm_gate_passed", observation.DMGatePassed), zap.Bool("terminal_projected", observation.TerminalProjected), zap.Bool("false_running", observation.FalseRunning), zap.Int("orphan_candidates", observation.OrphanCandidates), zap.Int("signet_unauthorized_responses", observation.SignetUnauthorized), zap.Int("correlation_mismatches", observation.CorrelationMismatches))
+
 	}
 	return snapshot, nil
 }

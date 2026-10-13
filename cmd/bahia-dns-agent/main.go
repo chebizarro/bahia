@@ -8,7 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
+
 	"net/http"
 	"os"
 	"os/signal"
@@ -84,7 +84,7 @@ func run(args []string) error {
 	if cfg.PreReloadCheck != "" {
 		reload.PreReloadCheck = []string{"sh", "-c", cfg.PreReloadCheck}
 	}
-	eng := engine.New(engine.Config{IncludeDir: cfg.IncludeDir, FilePrefix: cfg.FilePrefix, Reload: reload, Logger: slog.Default()})
+	eng := engine.New(engine.Config{IncludeDir: cfg.IncludeDir, FilePrefix: cfg.FilePrefix, Reload: reload, Logger: zap.NewNop()})
 	if len(eng.SelectedReloadStrategy()) == 0 {
 		return fmt.Errorf("no dnsmasq reload strategy detected; set --reload-command")
 	}
@@ -134,6 +134,7 @@ func run(args []string) error {
 		authorPubKey, pkErr := nostrutil.PubKeyFromHex(cfg.AuthorizedPubkey)
 		if pkErr != nil {
 			logger.Error("invalid daemon pubkey for zone sync", zap.Error(pkErr))
+
 			return
 		}
 		filter := nostr.Filter{
@@ -148,6 +149,7 @@ func run(args []string) error {
 					return
 				}
 				logger.Error("zone sync subscription failed", zap.Error(err))
+
 				return
 			}
 			for ev := range sub.Events {
@@ -162,6 +164,7 @@ func run(args []string) error {
 			}
 			if gaveUp := sub.GaveUp(); gaveUp != nil {
 				logger.Error("zone sync subscription gave up â waiting for topology change", zap.Error(gaveUp))
+
 				if err := pool.WaitForTopologyChange(ctx); err != nil {
 					return
 				}
@@ -174,6 +177,7 @@ func run(args []string) error {
 	go func() {
 		if err := zoneSubscriber.Run(ctx); err != nil {
 			logger.Error("zone subscriber stopped", zap.Error(err))
+
 		}
 	}()
 
@@ -192,11 +196,13 @@ func run(args []string) error {
 		go func() {
 			if err := healthPub.Run(ctx); err != nil {
 				logger.Error("health publisher stopped", zap.Error(err))
+
 			}
 		}()
 		logger.Info("DNS agent health publisher started")
 	} else {
 		logger.Warn("could not create signer for health publisher", zap.Error(signerErr))
+
 	}
 
 	healthServer, healthErr := startHealthServer(ctx, cfg.HealthAddr, service, stop)
@@ -210,6 +216,7 @@ func run(args []string) error {
 
 	err = supervise(ctx, transport.Run, defaultRestartPolicy(), func(runErr error, wait time.Duration) {
 		logger.Warn("ContextVM transport stopped; restarting subscription", zap.Error(runErr), zap.Duration("backoff", wait))
+
 	})
 	select {
 	case healthServerErr := <-healthErr:

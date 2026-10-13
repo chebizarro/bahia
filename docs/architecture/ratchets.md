@@ -13,6 +13,7 @@ Run all gates with `make lint-arch`. They also run as part of
 
 | Test | What it bans | Baseline |
 |---|---|---|
+| `TestProductionLoggingImportsUseZap` | `log/slog` and stdlib `log` imports in non-test, non-generated Go sources. Third-party stdlib logger APIs use the existing zap logger through `zap.NewStdLog` | none (zero violations required) |
 | `TestNoNewLegacyKindUsage` | References to retired per-family kind constants, or their literals, outside `internal/nostrmigration`. Values typed `kinds.CPStateFamily` are the sanctioned discriminator contract and are exempt | `testdata/legacy_kinds.baseline` |
 | `TestNoNewDirectLibraryRelaySubscriptions` | `Subscribe*`/`FetchMany`/`QuerySingle` on `fiatjaf.com/nostr` `Relay`/`Pool` values outside the relay pool (`internal/adapters/nostr`) and the SoulFactory bus | `testdata/relay_subscribe.baseline` |
 | `TestNoNewUnannotatedPollTickers` | `time.NewTicker`/`time.Tick` in `internal/service`, `internal/reconcile` and `internal/app` without a `//nostr:allow-poll <reason>` annotation on the same or preceding line (reconnect backoff, heartbeats, housekeeping are the legitimate reasons) | `testdata/poll_tickers.baseline` |

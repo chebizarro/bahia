@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -76,7 +76,7 @@ func TestOperationalViewProjectionMatchesSource(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	client := blossom.NewClient(blossom.Config{Servers: []string{server.URL}, MaxRetries: 1}, slog.Default())
+	client := blossom.NewClient(blossom.Config{Servers: []string{server.URL}, MaxRetries: 1}, zap.NewNop())
 	servers := client.Servers()
 	healthResults := client.HealthCheck(context.Background())
 	health := make(map[string]string, len(healthResults))

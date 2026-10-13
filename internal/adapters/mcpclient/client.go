@@ -8,12 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/httpclient"
 )
@@ -43,7 +44,7 @@ type Client struct {
 	toolPrefix  string
 	authHeaders map[string]string
 	httpClient  *http.Client
-	logger      *slog.Logger
+	logger      *zap.Logger
 	nextID      atomic.Int64
 }
 
@@ -112,7 +113,7 @@ type Content struct {
 
 // NewClient creates a configured MCP client. Empty URLs are allowed so callers
 // can construct optional clients and get ErrNotConfigured on use.
-func NewClient(config Config, logger *slog.Logger) *Client {
+func NewClient(config Config, logger *zap.Logger) *Client {
 	name := strings.TrimSpace(config.Name)
 	endpoint := normalizeEndpoint(config.URL)
 	prefix := strings.TrimSpace(config.ToolPrefix)
@@ -120,7 +121,7 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 		config.Timeout = defaultTimeout
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	httpClient := httpclient.Harden(config.HTTPClient, config.Timeout)
 	headers := make(map[string]string, len(config.AuthHeaders))
@@ -137,7 +138,7 @@ func NewClient(config Config, logger *slog.Logger) *Client {
 		toolPrefix:  prefix,
 		authHeaders: headers,
 		httpClient:  httpClient,
-		logger:      logger.With("component", "mcpclient", "server", name),
+		logger:      logger.With(zap.String("component", "mcpclient"), zap.String("server", name)),
 	}
 }
 

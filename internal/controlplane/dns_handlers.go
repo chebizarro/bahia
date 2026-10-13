@@ -126,7 +126,10 @@ func (r *Reactor) handleDNSRequest(ctx context.Context, event *nostr.Event) {
 	case KindDNSOverrideRetireRequest:
 		r.handleDNSOverrideRetire(ctx, event)
 	default:
-		r.logger.Warn("unexpected DNS control-plane kind", "kind", event.Kind, "event_id", event.ID)
+		r.logger.Warn("unexpected DNS control-plane kind", zap.Any("kind", event.
+			Kind), zap.Any("event_id", event.
+			ID),
+		)
 	}
 }
 
@@ -144,7 +147,11 @@ func (r *Reactor) handleDNSDriftRemediate(ctx context.Context, event *nostr.Even
 	result := dnsDriftRemediateOp(ctx, r.dnsOperator, json.RawMessage(event.Content), event.Tags)
 	r.publishDNSOperationResult(ctx, event, KindDNSDriftRemediateResult, result.Action, result.Status, result.Step, result.Message, result.Details)
 	if result.Status == "failed" {
-		r.logger.Warn("DNS drift remediation failed", "event_id", event.ID, "error", result.Message)
+		r.logger.Warn("DNS drift remediation failed", zap.Any("event_id", event.
+			ID), zap.String("error", result.
+			Message,
+		),
+		)
 	}
 }
 
@@ -157,7 +164,11 @@ func (r *Reactor) handleDNSZoneCreate(ctx context.Context, event *nostr.Event) {
 	result := dnsZoneCreateOp(ctx, r.dnsOperator, json.RawMessage(event.Content), event.Tags)
 	r.publishDNSOperationResult(ctx, event, KindDNSZoneCreateResult, result.Action, result.Status, result.Step, result.Message, result.Details)
 	if result.Status == "failed" {
-		r.logger.Warn("DNS zone create failed", "event_id", event.ID, "error", result.Message)
+		r.logger.Warn("DNS zone create failed", zap.Any("event_id", event.
+			ID), zap.String("error", result.
+			Message,
+		),
+		)
 	}
 }
 
@@ -170,7 +181,11 @@ func (r *Reactor) handleDNSRecordOverride(ctx context.Context, event *nostr.Even
 	result := dnsRecordSetOp(ctx, r.dnsOperator, json.RawMessage(event.Content), event.PubKey.Hex())
 	r.publishDNSOperationResult(ctx, event, KindDNSRecordOverrideResult, result.Action, result.Status, result.Step, result.Message, result.Details)
 	if result.Status == "failed" {
-		r.logger.Warn("DNS record override failed", "event_id", event.ID, "error", result.Message)
+		r.logger.Warn("DNS record override failed", zap.Any("event_id", event.
+			ID), zap.String("error", result.
+			Message,
+		),
+		)
 	}
 }
 
@@ -183,7 +198,11 @@ func (r *Reactor) handleDNSOverrideRetire(ctx context.Context, event *nostr.Even
 	result := dnsOverrideRetireOp(ctx, r.dnsOperator, json.RawMessage(event.Content), event.PubKey.Hex())
 	r.publishDNSOperationResult(ctx, event, KindDNSOverrideRetireResult, result.Action, result.Status, result.Step, result.Message, result.Details)
 	if result.Status == "failed" {
-		r.logger.Warn("DNS override retire failed", "event_id", event.ID, "error", result.Message)
+		r.logger.Warn("DNS override retire failed", zap.Any("event_id", event.
+			ID), zap.String("error", result.
+			Message,
+		),
+		)
 	}
 }
 
@@ -197,9 +216,20 @@ func (r *Reactor) handleDNSPolicyApply(ctx context.Context, event *nostr.Event) 
 	r.publishDNSOperationResult(ctx, event, KindDNSPolicyApplyResult, result.Action, result.Status, result.Step, result.Message, result.Details)
 	switch result.Status {
 	case "succeeded":
-		r.logger.Info("persisted DNS policy apply request", "event_id", event.ID, "policy_id", result.Details["policy_id"], "policy", result.Details["policy"], "rules", result.Details["rule_count"])
+		r.logger.Info("persisted DNS policy apply request", zap.Any("event_id", event.
+			ID), zap.Any("policy_id",
+			result.
+				Details["policy_id"]), zap.Any("policy", result.
+			Details["policy"],
+		), zap.Any("rules", result.
+			Details["rule_count"]),
+		)
 	case "failed":
-		r.logger.Warn("DNS policy apply failed", "event_id", event.ID, "error", result.Message)
+		r.logger.Warn("DNS policy apply failed", zap.Any("event_id", event.
+			ID), zap.String("error", result.
+			Message,
+		),
+		)
 	}
 }
 

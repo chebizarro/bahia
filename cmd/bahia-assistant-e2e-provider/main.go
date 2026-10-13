@@ -19,11 +19,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/strutil"
@@ -64,11 +66,12 @@ type Fixtures struct {
 type provider struct {
 	mu     sync.Mutex
 	counts map[string]int
+	logger *zap.Logger
 	// held, when set, receives one value each time an iterative turn is held.
 	held chan<- struct{}
 }
 
-func newProvider() *provider { return &provider{counts: map[string]int{}} }
+func newProvider() *provider { return &provider{counts: map[string]int{}, logger: zap.NewNop()} }
 
 func (p *provider) count(key string) {
 	p.mu.Lock()
@@ -89,13 +92,13 @@ func (p *provider) snapshot() map[string]int {
 func (p *provider) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+		p.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	})
 	mux.HandleFunc("GET /fixtures", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, Fixtures{BatchPrompt: BatchPrompt, IterativePrompt: IterativePrompt, EditedFirstStepArgs: EditedFirstStepArgs, BatchStepCount: len(BatchPlan().Steps)})
+		p.writeJSON(w, http.StatusOK, Fixtures{BatchPrompt: BatchPrompt, IterativePrompt: IterativePrompt, EditedFirstStepArgs: EditedFirstStepArgs, BatchStepCount: len(BatchPlan().Steps)})
 	})
 	mux.HandleFunc("GET /requests", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, p.snapshot())
+		p.writeJSON(w, http.StatusOK, p.snapshot())
 	})
 	mux.HandleFunc("POST /v1/chat/completions", p.chatCompletions)
 	return mux
@@ -130,22 +133,22 @@ func (p *provider) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("batch plan served")
-		writeJSON(w, http.StatusOK, completion(map[string]any{"role": "assistant", "content": string(plan)}, "stop"))
+		p.logger.Info("batch plan served")
+		p.writeJSON(w, http.StatusOK, completion(map[string]any{"role": "assistant", "content": string(plan)}, "stop"))
 	case len(body.ResponseFormat) == 0 && strings.Contains(userText, IterativePrompt):
 		// Hold the model turn open: the run stays `proposing` until the
 		// assistant cancels it (or shuts down), which closes this request.
 		p.count("iterative_held")
-		log.Printf("iterative turn held open")
+		p.logger.Info("iterative turn held open")
 		if p.held != nil {
 			p.held <- struct{}{}
 		}
 		<-r.Context().Done()
 		p.count("iterative_released")
-		log.Printf("iterative turn released: %v", r.Context().Err())
+		p.logger.Info(fmt.Sprintf("iterative turn released: %v", r.Context().Err()))
 	default:
 		p.count("refused")
-		log.Printf("refused unscripted model request (planner=%t)", len(body.ResponseFormat) > 0)
+		p.logger.Info(fmt.Sprintf("refused unscripted model request (planner=%t)", len(body.ResponseFormat) > 0))
 		http.Error(w, "no fixture for this prompt", http.StatusUnprocessableEntity)
 	}
 }
@@ -190,11 +193,11 @@ func completion(message map[string]any, finish string) map[string]any {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, value any) {
+func (p *provider) writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(value); err != nil {
-		log.Printf("write response: %v", err)
+		p.logger.Info(fmt.Sprintf("write response: %v", err))
 	}
 }
 
@@ -202,13 +205,23 @@ func main() {
 	addr := flag.String("addr", strutil.Env("BAHIA_ASSISTANT_E2E_PROVIDER_ADDR", "127.0.0.1:0"), "HTTP listen address")
 	flag.Parse()
 
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
-		log.Fatalf("listen on %s: %v", *addr, err)
+		logger.Sugar().Errorf("listen on %s: %v", *addr, err)
+		os.Exit(1)
 	}
 	// The harness waits for this exact line before configuring the backend.
 	fmt.Printf("bahia assistant e2e provider listening on %s\n", listener.Addr().String())
-	if err := http.Serve(listener, newProvider().routes()); err != nil {
-		log.Fatal(err)
+	p := newProvider()
+	p.logger = logger
+	if err := http.Serve(listener, p.routes()); err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
 	}
 }

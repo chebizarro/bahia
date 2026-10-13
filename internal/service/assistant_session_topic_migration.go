@@ -2,7 +2,8 @@ package service
 
 import (
 	"context"
-	"log/slog"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -24,7 +25,7 @@ type AssistantSessionTopicMigration struct {
 	signer        nostr.Signer
 	publisher     AssistantEventPublisher
 	servicePubkey string
-	logger        *slog.Logger
+	logger        *zap.Logger
 }
 
 // AssistantSessionTopicMigrationConfig holds the wiring for the migration.
@@ -35,7 +36,7 @@ type AssistantSessionTopicMigrationConfig struct {
 	Signer        nostr.Signer
 	Publisher     AssistantEventPublisher
 	ServicePubkey string
-	Logger        *slog.Logger
+	Logger        *zap.Logger
 }
 
 // NewAssistantSessionTopicMigration returns a migration runner. If any required
@@ -43,14 +44,14 @@ type AssistantSessionTopicMigrationConfig struct {
 func NewAssistantSessionTopicMigration(cfg AssistantSessionTopicMigrationConfig) *AssistantSessionTopicMigration {
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &AssistantSessionTopicMigration{
 		local:         cfg.LocalStore,
 		signer:        cfg.Signer,
 		publisher:     cfg.Publisher,
 		servicePubkey: cfg.ServicePubkey,
-		logger:        logger.With("component", "assistant_session_topic_migration"),
+		logger:        logger.With(zap.String("component", "assistant_session_topic_migration")),
 	}
 }
 
@@ -63,7 +64,8 @@ func (m *AssistantSessionTopicMigration) Run(ctx context.Context) error {
 	}
 	author, err := nostr.PubKeyFromHex(m.servicePubkey)
 	if err != nil {
-		m.logger.Warn("assistant session topic migration skipped: invalid service pubkey", "error", err)
+		m.logger.Warn("assistant session topic migration skipped: invalid service pubkey", zap.Error(err))
+
 		return nil
 	}
 
@@ -85,12 +87,14 @@ func (m *AssistantSessionTopicMigration) Run(ctx context.Context) error {
 			continue // Already migrated.
 		}
 		if err := m.republishWithTopic(ctx, ev); err != nil {
-			m.logger.Warn("assistant session topic migration: republish failed", "event_id", ev.ID.Hex(), "error", err)
+			m.logger.Warn("assistant session topic migration: republish failed", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+
 			continue
 		}
 		migrated++
 	}
-	m.logger.Info("assistant session topic migration completed", "records_scanned", scanned, "migrated", migrated)
+	m.logger.Info("assistant session topic migration completed", zap.Int("records_scanned", scanned), zap.Int("migrated", migrated))
+
 	return nil
 }
 

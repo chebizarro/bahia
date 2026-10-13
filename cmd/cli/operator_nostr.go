@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"strings"
+
+	"go.uber.org/zap"
 
 	canonicalnostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/signet"
@@ -77,7 +78,7 @@ var newCLINIP46Signer = func(ctx context.Context, bunkerURI, clientKey string) (
 		BunkerURI:       bunkerURI,
 		ClientSecretKey: clientKey,
 		RequireReal:     true,
-	}, slog.Default())
+	}, zap.NewNop())
 	if err != nil {
 		return nil, "", nil, err
 	}

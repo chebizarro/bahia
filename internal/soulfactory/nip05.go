@@ -4,17 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"go.uber.org/zap"
 )
 
 // NIP05Manager handles NIP-05 registration for agents.
 type NIP05Manager struct {
 	domain       string
 	wellKnownDir string
-	logger       *slog.Logger
+	logger       *zap.Logger
 	mu           sync.Mutex
 }
 
@@ -31,18 +32,18 @@ type NIP05JSON struct {
 }
 
 // NewNIP05Manager creates a new NIP-05 manager.
-func NewNIP05Manager(config NIP05Config, logger *slog.Logger) *NIP05Manager {
+func NewNIP05Manager(config NIP05Config, logger *zap.Logger) *NIP05Manager {
 	if config.Domain == "" {
 		config.Domain = "sharegap.net"
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	return &NIP05Manager{
 		domain:       config.Domain,
 		wellKnownDir: config.WellKnownDir,
-		logger:       logger.With("component", "nip05"),
+		logger:       logger.With(zap.String("component", "nip05")),
 	}
 }
 
@@ -50,18 +51,12 @@ func NewNIP05Manager(config NIP05Config, logger *slog.Logger) *NIP05Manager {
 func (m *NIP05Manager) Register(ctx context.Context, agentID, pubkey string, relays []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.logger.Info("registering NIP-05",
-		"agent_id", agentID,
-		"pubkey", pubkey[:16]+"...",
-		"domain", m.domain,
-	)
+	m.logger.Info("registering NIP-05", zap.String("agent_id", agentID), zap.String("pubkey", pubkey[:16]+"..."), zap.String("domain", m.domain))
 
 	// If no well-known dir configured, just log
 	if m.wellKnownDir == "" {
-		m.logger.Info("NIP-05 registration (simulated - no well-known dir configured)",
-			"nip05", fmt.Sprintf("%s@%s", agentID, m.domain),
-		)
+		m.logger.Info("NIP-05 registration (simulated - no well-known dir configured)", zap.String("nip05", fmt.Sprintf("%s@%s", agentID, m.domain)))
+
 		return nil
 	}
 
@@ -86,10 +81,7 @@ func (m *NIP05Manager) Register(ctx context.Context, agentID, pubkey string, rel
 	if err := m.saveNIP05(nip05); err != nil {
 		return fmt.Errorf("save nostr.json: %w", err)
 	}
-
-	m.logger.Info("NIP-05 registered",
-		"nip05", fmt.Sprintf("%s@%s", agentID, m.domain),
-	)
+	m.logger.Info("NIP-05 registered", zap.String("nip05", fmt.Sprintf("%s@%s", agentID, m.domain)))
 
 	return nil
 }
@@ -98,8 +90,7 @@ func (m *NIP05Manager) Register(ctx context.Context, agentID, pubkey string, rel
 func (m *NIP05Manager) Unregister(ctx context.Context, agentID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	m.logger.Info("unregistering NIP-05", "agent_id", agentID)
+	m.logger.Info("unregistering NIP-05", zap.String("agent_id", agentID))
 
 	if m.wellKnownDir == "" {
 		return nil

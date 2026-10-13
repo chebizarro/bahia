@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"log/slog"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/khatru"
@@ -117,7 +118,7 @@ func TestRelayClientCallersReportPartialWhenRelayNeverSendsEOSE(t *testing.T) {
 			AuthorizedPubkeys:  []string{signer.pubkey},
 			SoulFactoryPubkey:  signer.pubkey,
 			FleetConfigEnabled: true,
-		}, nil, signer, slog.Default())
+		}, nil, signer, zap.NewNop())
 		reactor.relayClient = bus
 		return reactor
 	}
@@ -167,7 +168,7 @@ func TestRelayClientCallersReportPartialWhenRelayNeverSendsEOSE(t *testing.T) {
 			return err
 		},
 		"runtime adapter collect": func(ctx context.Context, bus *RelayClient) error {
-			_, err := collectRuntimeAdapterEvents(ctx, slog.Default(), "test", bus, []nostr.Filter{{Kinds: []nostr.Kind{1}}})
+			_, err := collectRuntimeAdapterEvents(ctx, zap.NewNop(), "test", bus, []nostr.Filter{{Kinds: []nostr.Kind{1}}})
 			return err
 		},
 		"runtime validation load": func(ctx context.Context, bus *RelayClient) error {

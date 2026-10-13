@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
@@ -69,13 +71,20 @@ func main() {
 	var admitted stringList
 	flag.Var(&admitted, "admit", "another 64-hex pubkey admitted to read protected kinds (repeatable), such as a harness's own service identity")
 	flag.Parse()
+	logger, err := zap.NewDevelopment()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
 	readAuthMode := config.RelaySidecarConfig{ReadAuthMode: *readAuth}.NormalizedReadAuthMode()
 
 	serviceKey := nostr.MustSecretKeyFromHex(serviceSecretHex)
 	operatorPubkey := nostr.MustSecretKeyFromHex(operatorSecretHex).Public().Hex()
 	store := &slicestore.SliceStore{}
 	if err := store.Init(); err != nil {
-		log.Fatalf("init slicestore: %v", err)
+		logger.Sugar().Errorf("init slicestore: %v", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
@@ -100,7 +109,8 @@ func main() {
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
-		log.Fatalf("listen on %s: %v", *addr, err)
+		logger.Sugar().Errorf("listen on %s: %v", *addr, err)
+		os.Exit(1)
 	}
 	defer func() { _ = listener.Close() }()
 
@@ -108,22 +118,24 @@ func main() {
 	wsURL := "ws://" + actualAddr
 	seedEvents, err := seedCorpus(wsURL)
 	if err != nil {
-		log.Fatalf("build seed corpus: %v", err)
+		logger.Sugar().Errorf("build seed corpus: %v", err)
+		os.Exit(1)
 	}
 	for _, evt := range seedEvents {
 		if err := store.SaveEvent(evt); err != nil {
-			log.Fatalf("seed event kind %d id %s: %v", evt.Kind, evt.ID, err)
+			logger.Sugar().Errorf("seed event kind %d id %s: %v", evt.Kind, evt.ID, err)
+			os.Exit(1)
 		}
 	}
 
 	relay.OnEventSaved = func(ctx context.Context, event nostr.Event) {
-		log.Printf("accepted EVENT kind=%d id=%s pubkey=%s", event.Kind, event.ID, event.PubKey)
+		logger.Sugar().Infof("accepted EVENT kind=%d id=%s pubkey=%s", event.Kind, event.ID, event.PubKey)
 		response, ok := contextVMResultForRequest(event, serviceKey)
 		if !ok {
 			return
 		}
 		if err := store.SaveEvent(response); err != nil {
-			log.Printf("failed to store ContextVM result for %s: %v", event.ID, err)
+			logger.Sugar().Infof("failed to store ContextVM result for %s: %v", event.ID, err)
 			return
 		}
 		relay.BroadcastEvent(response)
@@ -133,13 +145,14 @@ func main() {
 	router.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		if _, err := fmt.Fprintf(w, `{"ok":true,"relay":"%s","service_pubkey":"%s","events":%d}`+"\n", wsURL, serviceKey.Public().Hex(), len(seedEvents)); err != nil {
-			log.Printf("write health response: %v", err)
+			logger.Sugar().Infof("write health response: %v", err)
 		}
 	})
 
-	log.Printf("bahia test relay listening on %s service_pubkey=%s events=%d read_auth=%s", actualAddr, serviceKey.Public().Hex(), len(seedEvents), readAuthMode)
+	logger.Sugar().Infof("bahia test relay listening on %s service_pubkey=%s events=%d read_auth=%s", actualAddr, serviceKey.Public().Hex(), len(seedEvents), readAuthMode)
 	if err := http.Serve(listener, relay); err != nil {
-		log.Fatal(err)
+		logger.Error(err.Error())
+		os.Exit(1)
 	}
 }
 

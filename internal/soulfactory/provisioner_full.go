@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/agentmemory"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
@@ -77,15 +78,15 @@ func NewFullProvisioner(reactor *Reactor, config FullProvisionerConfig, bahiaInt
 	logger := reactor.logger
 	nip29Membership, nip29Err := newNIP29Membership(config.NIP29Groups, reactor.signer)
 	if nip29Err != nil {
-		logger.Error("NIP-29 membership configuration is invalid", "error", nip29Err)
+		logger.Error("NIP-29 membership configuration is invalid", zap.Error(nip29Err))
 	}
 	communikeysMembership, communikeysErr := newCommunikeysMembership(config.CommunikeysCommunities, reactor.signer, reactor.relayClient)
 	if communikeysErr != nil {
-		logger.Error("Communikeys membership configuration is invalid", "error", communikeysErr)
+		logger.Error("Communikeys membership configuration is invalid", zap.Error(communikeysErr))
 	}
 	concordMembership, concordErr := newConcordMembership(config.ConcordCommunities, reactor.signer, reactor.relayClient)
 	if concordErr != nil {
-		logger.Error("Concord membership configuration is invalid", "error", concordErr)
+		logger.Error("Concord membership configuration is invalid", zap.Error(concordErr))
 	}
 	p := &FullProvisioner{
 		reactor:                  reactor,
@@ -139,7 +140,12 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	if err != nil {
 		return nil, err
 	}
-	logger := p.reactor.logger.With("agent_id", resolved.AgentID, "run_id", run.ID)
+	logger := p.reactor.logger.With(zap.String("agent_id",
+		resolved.
+			AgentID,
+	), zap.Any("run_id", run.
+		ID),
+	)
 	run.AgentID = resolved.AgentID
 	run.DraftRef = resolved.DraftRef
 	run.DraftEventID = resolved.DraftEventID
@@ -489,7 +495,11 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 
 	var runtimeResult *RuntimeControlResultEnvelope
 	if resolved.Runtime.Target != "" {
-		logger.Info("binding runtime through SoulFactory runtime adapter", "runtime", resolved.Runtime.Target)
+		logger.Info("binding runtime through SoulFactory runtime adapter", zap.Any("runtime", resolved.
+			Runtime.
+			Target,
+		),
+		)
 		var err error
 		runtimeResult, err = p.executeRuntimeProvision(ctx, soul, resolved, run)
 		if err != nil {
@@ -586,12 +596,19 @@ func (p *FullProvisioner) ProvisionFull(ctx context.Context, req *domain.Provisi
 	}, nil, time.Since(stepStart))
 
 	run.SoulID = &soul.ID
-	logger.Info("provisioning complete",
-		"soul_id", soul.ID,
-		"npub", soul.NostrNpub,
-		"avatar", soul.AvatarURL,
-		"workspace", soul.WorkspaceRepoURL,
-		"bahia_service", soul.BahiaServiceID,
+	logger.Info("provisioning complete", zap.Any("soul_id", soul.
+		ID), zap.String("npub", soul.
+		NostrNpub,
+	), zap.String("avatar", soul.
+		AvatarURL,
+	), zap.String("workspace",
+
+		soul.WorkspaceRepoURL,
+	), zap.Any("bahia_service",
+
+		soul.
+			BahiaServiceID,
+	),
 	)
 
 	return soul, nil
@@ -747,7 +764,7 @@ func (p *FullProvisioner) RedeploySoul(ctx context.Context, soulRef string) erro
 
 func (p *FullProvisioner) publishProgress(ctx context.Context, requestEvent *nostr.Event, step domain.ProvisioningStep, current, total int, message string, runID ...string) error {
 	if err := p.reactor.PublishStatus(ctx, requestEvent, step, current, total, message, runID...); err != nil {
-		p.reactor.logger.Error("failed to publish progress", "step", step, "error", err)
+		p.reactor.logger.Error("failed to publish progress", zap.Any("step", step), zap.Error(err))
 		return fmt.Errorf("publish progress %s: %w", step, err)
 	}
 	return nil
@@ -901,14 +918,31 @@ func (p *FullProvisioner) RotateConcordCommunity(ctx context.Context, rotation C
 	}
 	receipt, err := rotator.Rotate(ctx, rotation)
 	if receipt != nil {
-		p.reactor.logger.Info("rotated Concord community",
-			"community_id", receipt.CommunityID,
-			"refounded", receipt.Refounded,
-			"root_epoch", receipt.RootEpoch,
-			"rotated_channels", len(receipt.Channels),
-			"recipients", len(receipt.Recipients),
-			"direct_invites", len(receipt.DirectInvites),
-			"rekey_scopes", len(receipt.Rekeys),
+		p.reactor.logger.Info("rotated Concord community", zap.String("community_id",
+
+			receipt.
+				CommunityID,
+		), zap.Bool("refounded",
+
+			receipt.Refounded,
+		), zap.Uint64("root_epoch",
+
+			receipt.
+				RootEpoch), zap.Int("rotated_channels",
+
+			len(receipt.Channels)), zap.Int("recipients",
+
+			len(receipt.
+				Recipients,
+			)), zap.Int("direct_invites",
+
+			len(
+				receipt.DirectInvites,
+			)), zap.Int("rekey_scopes",
+
+			len(receipt.
+				Rekeys,
+			)),
 		)
 	}
 	return receipt, err

@@ -2,8 +2,7 @@ package mcp
 
 import (
 	"context"
-	"io"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,7 +104,7 @@ func newTestMCPRunLogServer(t *testing.T, stdoutContent, stderrContent string, r
 		events.NewInProcessPublisher(zap.NewNop()),
 		zap.NewNop(),
 	)
-	blossomClient := blossom.NewClient(blossom.Config{Servers: []string{blossomServer.URL}}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	blossomClient := blossom.NewClient(blossom.Config{Servers: []string{blossomServer.URL}}, zap.NewNop())
 	logService := adapterruntime.NewLogService(blossomClient, nil, zap.NewNop())
 
 	server := newTestServerWithOptions(registry, zap.NewNop(), ServerDeps{LogService: logService})

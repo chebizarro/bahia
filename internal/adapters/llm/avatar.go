@@ -11,13 +11,14 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -54,7 +55,7 @@ const (
 type AvatarGenerator struct {
 	registry        *AvatarProviderRegistry
 	defaultProvider string
-	logger          *slog.Logger
+	logger          *zap.Logger
 }
 
 // AvatarConfig holds avatar generator configuration.
@@ -262,16 +263,17 @@ func ExpandAvatarStylePreset(prompt, presetID string) (expandedPrompt string, ne
 }
 
 // NewAvatarGenerator creates a new provider-based avatar generator.
-func NewAvatarGenerator(config AvatarConfig, logger *slog.Logger) *AvatarGenerator {
+func NewAvatarGenerator(config AvatarConfig, logger *zap.Logger) *AvatarGenerator {
 	config.LemmyURL = strings.TrimRight(strings.TrimSpace(config.LemmyURL), "/")
 	if config.Timeout == 0 {
 		config.Timeout = 60 * time.Second
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
-	componentLogger := logger.With("component", "avatar")
+	componentLogger := logger.With(zap.String("component", "avatar"))
+
 	client := &http.Client{Timeout: config.Timeout}
 	registry := NewAvatarProviderRegistry()
 	if config.LemmyURL != "" {
@@ -341,8 +343,8 @@ func (g *AvatarGenerator) GenerateWithSpec(ctx context.Context, spec domain.Soul
 		emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressFailed, Percent: 100, Error: err.Error()})
 		return nil, err
 	}
+	g.logger.Info("generating avatar", zap.String("provider", req.Provider), zap.Int("prompt_length", len(req.Prompt)), zap.String("style_preset", req.StylePreset))
 
-	g.logger.Info("generating avatar", "provider", req.Provider, "prompt_length", len(req.Prompt), "style_preset", req.StylePreset)
 	emitAvatarProgress(progress, AvatarProgressEvent{Provider: req.Provider, Stage: AvatarProgressDispatching, Percent: 10, Message: "dispatching avatar generation to provider"})
 
 	result, err := provider.GenerateAvatar(ctx, req, func(event AvatarProgressEvent) {
@@ -457,21 +459,21 @@ func (g *AvatarGenerator) requestFromSpec(spec domain.SoulAvatarGenerationSpec) 
 type FluxComfyUIAvatarProvider struct {
 	baseURL    string
 	httpClient *http.Client
-	logger     *slog.Logger
+	logger     *zap.Logger
 }
 
 // NewFluxComfyUIAvatarProvider creates a FLUX/ComfyUI provider.
-func NewFluxComfyUIAvatarProvider(baseURL string, httpClient *http.Client, logger *slog.Logger) *FluxComfyUIAvatarProvider {
+func NewFluxComfyUIAvatarProvider(baseURL string, httpClient *http.Client, logger *zap.Logger) *FluxComfyUIAvatarProvider {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 60 * time.Second}
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &FluxComfyUIAvatarProvider{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		httpClient: httpClient,
-		logger:     logger.With("provider", AvatarProviderFluxComfyUI),
+		logger:     logger.With(zap.String("provider", AvatarProviderFluxComfyUI)),
 	}
 }
 

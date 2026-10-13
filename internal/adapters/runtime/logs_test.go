@@ -2,8 +2,7 @@ package runtime
 
 import (
 	"context"
-	"io"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,8 +16,8 @@ import (
 )
 
 // testSlogLogger returns an slog logger for blossom client tests
-func testSlogLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+func testSlogLogger() *zap.Logger {
+	return zap.NewNop()
 }
 
 func TestTailLogs(t *testing.T) {

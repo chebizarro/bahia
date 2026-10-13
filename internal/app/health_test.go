@@ -2,7 +2,7 @@ package app
 
 import (
 	"context"
-	"log/slog"
+
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,7 +25,7 @@ func TestHealthProviderLivenessAlwaysHealthy(t *testing.T) {
 }
 
 func TestSignetRecoveryFlipsReadinessHealthyWithoutRestart(t *testing.T) {
-	client, err := signetAdapter.NewClient(signetAdapter.Config{AllowMock: true, ConnectTimeout: 50 * time.Millisecond}, slog.Default())
+	client, err := signetAdapter.NewClient(signetAdapter.Config{AllowMock: true, ConnectTimeout: 50 * time.Millisecond}, zap.NewNop())
 	require.NoError(t, err)
 	manager := signetAdapter.NewConnectionManager(client, signetAdapter.ConnectionManagerConfig{Name: "test", HeartbeatInterval: time.Hour})
 	provider := NewHealthProvider(nil, nil)

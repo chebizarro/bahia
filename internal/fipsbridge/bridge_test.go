@@ -3,13 +3,13 @@ package fipsbridge
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"maps"
-	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
@@ -79,7 +79,7 @@ func TestBridgeSubscriptionFilterScopesToAuthorAndDNSEndpointTopic(t *testing.T)
 		RelayURLs:         []string{"wss://relay.example.test"},
 		CapabilityFilter:  []string{"llm"},
 		EnvironmentFilter: []string{"prod"},
-	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	}, nil, zap.NewNop())
 
 	filter := bridge.endpointFilter()
 	require.Equal(t, []nostr.Kind{nostr.Kind(kinds.CASControlState)}, filter.Kinds, "must read canonical 30900, not legacy 31976")
@@ -197,7 +197,7 @@ func TestBridgeSubscriptionFiltersIncludeKind5(t *testing.T) {
 	bridge := newBridgeWithPool(Config{
 		BahiaPubkey: pubkey,
 		RelayURLs:   []string{"wss://relay.example.test"},
-	}, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	}, nil, zap.NewNop())
 
 	filters := bridge.subscriptionFilters()
 	require.Len(t, filters, 2, "should have endpoint + deletion filters")
@@ -392,7 +392,7 @@ func newTestBridge(t *testing.T, pubkey string, configure func(*Config)) (*Bridg
 	if configure != nil {
 		configure(&cfg)
 	}
-	bridge := newBridgeWithPool(cfg, nil, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	bridge := newBridgeWithPool(cfg, nil, zap.NewNop())
 	writer := recordingWriter{writes: make(chan map[string]string, 32)}
 	bridge.writer = writer
 	return bridge, writer

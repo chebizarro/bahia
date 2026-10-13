@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -68,13 +67,13 @@ func (t openClawSagaRetention) Retire(ctx context.Context, now time.Time) (int64
 }
 
 var (
-	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *slog.Logger) (soulFactorySignerClient, error) {
+	newSoulFactorySignetClient = func(cfg signetAdapter.Config, logger *zap.Logger) (soulFactorySignerClient, error) {
 		return signetAdapter.NewClient(cfg, logger)
 	}
 	newSoulFactoryRuntimeAdapter = func(cfg soulfactory.RuntimeAdapterConfig) (soulfactory.RuntimeAdapter, error) {
 		return soulfactory.NewRuntimeAdapter(cfg)
 	}
-	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *slog.Logger) soulfactory.SoulGenerator {
+	newSoulFactorySoulGenerator = func(cfg llm.Config, logger *zap.Logger) soulfactory.SoulGenerator {
 		return llm.NewSoulGenerator(cfg, logger)
 	}
 	newSoulFactoryBahiaIntegration = soulfactory.NewBahiaIntegration
@@ -102,7 +101,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	slogLogger := slog.Default()
+	componentLogger := logger.With(zap.String("component", "soulfactory"))
 	sf := cfg.SoulFactory
 	// Soul read models and drafts are browser-facing state. Always include the
 	// configured browser relays in the SoulFactory publish set so a valid
@@ -117,7 +116,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		ConnectTimeout:  sf.StartupTimeout,
 		RequireReal:     !cfg.DevMode,
 		AllowMock:       cfg.DevMode,
-	}, slogLogger)
+	}, componentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("creating SoulFactory Signet client: %w", err)
 	}
@@ -125,7 +124,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	// reads and publishes and the runtime adapters share it.
 	var relayClient *soulfactory.RelayClient
 	if len(allRelays) > 0 {
-		relayClient, err = soulfactory.NewRelayClient(allRelays, soulfactory.WithRelaySigner(signer), soulfactory.WithRelayLogger(slogLogger))
+		relayClient, err = soulfactory.NewRelayClient(allRelays, soulfactory.WithRelaySigner(signer), soulfactory.WithRelayLogger(componentLogger))
 		if err != nil {
 			_ = signer.Close()
 			return nil, fmt.Errorf("creating SoulFactory relay client: %w", err)
@@ -145,7 +144,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	if relayClient != nil {
 		runtimeTransports = relayClient.RuntimeTransports()
 	}
-	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, runtimeTransports, sf.RuntimeResultTimeout, slogLogger)
+	runtimeAdapters, err := buildSoulFactoryRuntimeAdapters(sf.AgentRuntimes, sf.RuntimePubkeys, controllerPubkey, signer, allRelays, runtimeTransports, sf.RuntimeResultTimeout, componentLogger)
 	if err != nil {
 		_ = closeSigner()
 		return nil, err
@@ -156,7 +155,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		APIURL:  sf.LLMBaseURL,
 		Model:   sf.LLMModel,
 		Timeout: sf.LLMTimeout,
-	}, slogLogger)
+	}, componentLogger)
 	if generator == nil {
 		_ = closeSigner()
 		return nil, fmt.Errorf("creating SoulFactory generator: generator is not configured")
@@ -191,7 +190,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	bahiaIntegration, err := newSoulFactoryBahiaIntegration(registry, soulfactory.BahiaIntegrationConfig{
 		OrganizationID:     sf.OrganizationID,
 		AgentEnvironmentID: sf.AgentEnvironmentID,
-	}, slogLogger)
+	}, componentLogger)
 	if err != nil {
 		_ = closeSigner()
 		return nil, fmt.Errorf("configuring SoulFactory Bahia integration: %w", err)
@@ -206,7 +205,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		SignetBunkerURI:    sf.SignetBunkerURI,
 		BlossomURL:         firstConfiguredBlossomServer(cfg.Blossom),
 		QdrantURL:          cfg.Qdrant.URL,
-	}, generator, signer, slogLogger, soulfactory.WithRelayClient(relayClient))
+	}, generator, signer, componentLogger, soulfactory.WithRelayClient(relayClient))
 	blossomAuth, err := blossomSigner(cfg.Blossom)
 	if err != nil {
 		return nil, err
@@ -254,7 +253,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 		SagaPublisher:   sagaSeams.Publisher,
 		LedgerEncryptor: sagaSeams.LedgerEncryptor,
 		ServicePubkey:   sagaSeams.ServicePubkey,
-		Logger:          slogLogger,
+		Logger:          componentLogger,
 	})
 	if err != nil {
 		_ = closeSigner()
@@ -275,7 +274,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 	}
 
 	connection := signetAdapter.NewConnectionManager(signer, signetAdapter.ConnectionManagerConfig{
-		Name: "soulfactory", AttemptTimeout: sf.StartupTimeout, Logger: slogLogger,
+		Name: "soulfactory", AttemptTimeout: sf.StartupTimeout, Logger: componentLogger,
 	})
 	logger.Info("SoulFactory runtime reactor configured; Signet connection will start asynchronously", zap.Strings("relays", sf.Relays), zap.Strings("additional_relays", sf.AdditionalRelays), zap.Strings("agent_runtimes", sf.AgentRuntimes), zap.String("controller_pubkey", controllerPubkey))
 	return &soulFactoryRuntime{
@@ -294,7 +293,7 @@ func buildSoulFactoryRuntime(ctx context.Context, cfg *config.Config, registry *
 // adapter for every administratively enabled agent runtime target. Startup
 // fails on any invalid or failing target; enabled targets are never silently
 // omitted from the registry. resultTimeout is soul_factory.runtime_result_timeout.
-func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, transports soulfactory.RuntimeAdapterTransportFactory, resultTimeout time.Duration, logger *slog.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
+func buildSoulFactoryRuntimeAdapters(targets []string, runtimePubkeys map[string][]string, controllerPubkey string, signer soulFactorySignerClient, relays []string, transports soulfactory.RuntimeAdapterTransportFactory, resultTimeout time.Duration, logger *zap.Logger) (map[domain.RuntimeTarget]soulfactory.RuntimeAdapter, error) {
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("soul_factory.agent_runtimes is empty; configuration validation must default or reject it before startup")
 	}

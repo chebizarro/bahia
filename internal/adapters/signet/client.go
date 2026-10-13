@@ -10,11 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/nip19"
@@ -83,7 +84,7 @@ type Client struct {
 	admission         *nostrout.Admission
 	managementRelays  []string
 	closedRetryBudget int
-	logger            *slog.Logger
+	logger            *zap.Logger
 	clientSecretKey   string // NIP-46 session key
 	requireReal       bool   // Fail closed unless a real Signet bunker is configured and reachable
 	allowMock         bool   // Explicit test/dev-only mock signing mode
@@ -132,9 +133,9 @@ type Config struct {
 }
 
 // NewClient creates a new Signet client.
-func NewClient(config Config, logger *slog.Logger) (*Client, error) {
+func NewClient(config Config, logger *zap.Logger) (*Client, error) {
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 
 	// Generate ephemeral client key if not provided
@@ -150,7 +151,7 @@ func NewClient(config Config, logger *slog.Logger) (*Client, error) {
 		admission:         nostrout.Or(config.OutboundAdmission),
 		managementRelays:  signetManagementRelays(config),
 		closedRetryBudget: config.ClosedRetryBudget,
-		logger:            logger.With("component", "signet"),
+		logger:            logger.With(zap.String("component", "signet")),
 		clientSecretKey:   clientSK,
 		requireReal:       config.RequireReal,
 		allowMock:         config.AllowMock,
@@ -198,7 +199,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("normalize Signet bunker URI: %w", err)
 	}
 	bunkerPubkey, relayHosts := bunkerLogDetails(bunkerURI)
-	c.logger.Info("connecting to Signet bunker", "bunker_pubkey", bunkerPubkey, "relay_hosts", relayHosts)
+	c.logger.Info("connecting to Signet bunker", zap.String("bunker_pubkey", bunkerPubkey), zap.Strings("relay_hosts", relayHosts))
 
 	// Connect using the canonical NIP-46 implementation.
 	clientSecret, err := nostrutil.SecretKeyFromHex(c.clientSecretKey)
@@ -216,7 +217,7 @@ func (c *Client) Connect(ctx context.Context) error {
 		bunkerURI,
 		c.pool,
 		func(authURL string) {
-			c.logger.Info("bunker auth required", "url", authURL)
+			c.logger.Info("bunker auth required", zap.String("url", authURL))
 		},
 	)
 	if err != nil {
@@ -341,7 +342,7 @@ func (c *Client) newManagementPool(bunker *nostrout.Bunker) *nostrpool.RelayPool
 	if len(c.managementRelays) == 0 {
 		return nil
 	}
-	logger := nostrpool.NewSlogZapLogger(c.logger.With("relay_pool", "signet-management"))
+	logger := c.logger.With(zap.String("relay_pool", "signet-management"))
 	opts := []nostrpool.RelayPoolOption{
 		nostrpool.WithAuthSignFunc(bunker.SignEvent),
 		nostrpool.WithOutboundAdmission(c.admission),
@@ -393,7 +394,7 @@ func (c *Client) IsMockMode() bool {
 // ProvisionAgent registers a new agent with Signet.
 // Returns the agent's pubkey, npub, and bunker URI.
 func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKinds []int) (pubkey, npub, bunkerURI string, err error) {
-	c.logger.Info("provisioning agent", "agent_id", agentID, "allowed_kinds", allowedKinds)
+	c.logger.Info("provisioning agent", zap.String("agent_id", agentID), zap.Ints("allowed_kinds", allowedKinds))
 
 	c.mu.Lock()
 	connected := c.connected
@@ -441,11 +442,7 @@ func (c *Client) ProvisionAgent(ctx context.Context, agentID string, allowedKind
 	c.agents[agentID] = identity
 	c.mu.Unlock()
 
-	c.logger.Info("agent provisioned",
-		"agent_id", agentID,
-		"pubkey", redactPubkey(resp.Pubkey),
-		"npub", npubEncoded,
-	)
+	c.logger.Info("agent provisioned", zap.String("agent_id", agentID), zap.String("pubkey", redactPubkey(resp.Pubkey)), zap.String("npub", npubEncoded))
 
 	return resp.Pubkey, npubEncoded, resp.BunkerURI, nil
 }
@@ -472,11 +469,7 @@ func (c *Client) provisionAgentMock(agentID string) (pubkey, npub, bunkerURI str
 	c.agents[agentID] = identity
 	c.mu.Unlock()
 
-	c.logger.Info("agent provisioned (explicit mock mode)",
-		"agent_id", agentID,
-		"pubkey", redactPubkey(mockPK),
-		"npub", mockNpub,
-	)
+	c.logger.Info("agent provisioned (explicit mock mode)", zap.String("agent_id", agentID), zap.String("pubkey", redactPubkey(mockPK)), zap.String("npub", mockNpub))
 
 	return mockPK, mockNpub, agentBunkerURI, nil
 }
@@ -680,7 +673,7 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		if mockSecretKey == "" {
 			return fmt.Errorf("mock agent missing signing key: %s", agentID)
 		}
-		c.logger.Debug("signing as agent (explicit mock mode)", "agent_id", agentID)
+		c.logger.Debug("signing as agent (explicit mock mode)", zap.String("agent_id", agentID))
 		return signEventWithKey(event, mockSecretKey)
 	}
 
@@ -741,13 +734,13 @@ func (c *Client) SignAs(ctx context.Context, agentID string, event *nostr.Event)
 		return fmt.Errorf("agent sign_event: %w", err)
 	}
 
-	c.logger.Debug("signed as agent", "agent_id", agentID, "pubkey", redactPubkey(pubkey))
+	c.logger.Debug("signed as agent", zap.String("agent_id", agentID), zap.String("pubkey", redactPubkey(pubkey)))
 	return nil
 }
 
 // RevokeAgent permanently destroys an agent's keypair.
 func (c *Client) RevokeAgent(ctx context.Context, pubkey string) error {
-	c.logger.Info("revoking agent", "pubkey", redactPubkey(pubkey))
+	c.logger.Info("revoking agent", zap.String("pubkey", redactPubkey(pubkey)))
 
 	c.mu.Lock()
 	connected := c.connected
@@ -774,13 +767,13 @@ func (c *Client) RevokeAgent(ctx context.Context, pubkey string) error {
 		return fmt.Errorf("%w: %s", ErrAgentNotFound, pubkey)
 	}
 
-	c.logger.Info("agent revoked", "pubkey", redactPubkey(pubkey))
+	c.logger.Info("agent revoked", zap.String("pubkey", redactPubkey(pubkey)))
 	return nil
 }
 
 // SuspendAgent temporarily blocks signing for an agent.
 func (c *Client) SuspendAgent(ctx context.Context, pubkey string) error {
-	c.logger.Info("suspending agent", "pubkey", redactPubkey(pubkey))
+	c.logger.Info("suspending agent", zap.String("pubkey", redactPubkey(pubkey)))
 
 	c.mu.Lock()
 	connected := c.connected
@@ -796,7 +789,7 @@ func (c *Client) SuspendAgent(ctx context.Context, pubkey string) error {
 		if err := c.setMockAgentStatus(pubkey, AgentStatusSuspended); err != nil {
 			return err
 		}
-		c.logger.Info("agent suspended (explicit mock mode)", "pubkey", redactPubkey(pubkey))
+		c.logger.Info("agent suspended (explicit mock mode)", zap.String("pubkey", redactPubkey(pubkey)))
 		return nil
 	}
 
@@ -810,13 +803,13 @@ func (c *Client) SuspendAgent(ctx context.Context, pubkey string) error {
 		return fmt.Errorf("agent/set-policy suspend intent failed: %w", err)
 	}
 
-	c.logger.Info("agent suspended", "pubkey", redactPubkey(pubkey))
+	c.logger.Info("agent suspended", zap.String("pubkey", redactPubkey(pubkey)))
 	return nil
 }
 
 // ResumeAgent re-enables signing for a suspended agent.
 func (c *Client) ResumeAgent(ctx context.Context, pubkey string) error {
-	c.logger.Info("resuming agent", "pubkey", redactPubkey(pubkey))
+	c.logger.Info("resuming agent", zap.String("pubkey", redactPubkey(pubkey)))
 
 	c.mu.Lock()
 	connected := c.connected
@@ -832,7 +825,7 @@ func (c *Client) ResumeAgent(ctx context.Context, pubkey string) error {
 		if err := c.setMockAgentStatus(pubkey, AgentStatusActive); err != nil {
 			return err
 		}
-		c.logger.Info("agent resumed (explicit mock mode)", "pubkey", redactPubkey(pubkey))
+		c.logger.Info("agent resumed (explicit mock mode)", zap.String("pubkey", redactPubkey(pubkey)))
 		return nil
 	}
 
@@ -846,7 +839,7 @@ func (c *Client) ResumeAgent(ctx context.Context, pubkey string) error {
 		return fmt.Errorf("agent/set-policy resume intent failed: %w", err)
 	}
 
-	c.logger.Info("agent resumed", "pubkey", redactPubkey(pubkey))
+	c.logger.Info("agent resumed", zap.String("pubkey", redactPubkey(pubkey)))
 	return nil
 }
 
@@ -1067,8 +1060,7 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 				accepted = true
 				continue
 			}
-			c.logger.Warn("signet management relay rejected publish",
-				"relay", result.RelayURL, "reason", result.Reason, "error", result.Error)
+			c.logger.Warn("signet management relay rejected publish", zap.String("relay", result.RelayURL), zap.String("reason", result.Reason), zap.Error(result.Error))
 		}
 		if !accepted {
 			if publishErr != nil {

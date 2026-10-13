@@ -3,8 +3,9 @@ package soulfactory
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 
@@ -16,14 +17,14 @@ import (
 type StatusSyncHandler struct {
 	reactor          *Reactor
 	bahiaIntegration *BahiaIntegration
-	logger           *slog.Logger
+	logger           *zap.Logger
 
 	mu    sync.RWMutex
 	souls map[uuid.UUID]*domain.AgentSoul // bahia service ID -> soul
 }
 
 // NewStatusSyncHandler creates a new status sync handler.
-func NewStatusSyncHandler(reactor *Reactor, bahiaIntegration *BahiaIntegration, logger *slog.Logger) *StatusSyncHandler {
+func NewStatusSyncHandler(reactor *Reactor, bahiaIntegration *BahiaIntegration, logger *zap.Logger) *StatusSyncHandler {
 	return &StatusSyncHandler{
 		reactor:          reactor,
 		bahiaIntegration: bahiaIntegration,
@@ -53,12 +54,13 @@ func (h *StatusSyncHandler) UnregisterSoul(serviceID uuid.UUID) {
 // HandleEvent processes bahia events and syncs status.
 // This implements the events.Subscriber interface.
 func (h *StatusSyncHandler) HandleEvent(ctx context.Context, event events.Event) {
-	logger := h.logger.With("event_type", event.Type, "entity_id", event.EntityID)
+	logger := h.logger.With(zap.Any("event_type", event.Type), zap.String("entity_id", event.EntityID))
 
 	// Parse service ID from entity or data
 	serviceID, err := h.extractServiceID(event)
 	if err != nil {
-		logger.Debug("could not extract service ID", "error", err)
+		logger.Debug("could not extract service ID", zap.Error(err))
+
 		return
 	}
 
@@ -84,7 +86,7 @@ func (h *StatusSyncHandler) HandleEvent(ctx context.Context, event events.Event)
 
 // handleDeploymentComplete updates soul status when a deployment completes.
 func (h *StatusSyncHandler) handleDeploymentComplete(ctx context.Context, soul *domain.AgentSoul, event events.Event) {
-	logger := h.logger.With("agent_id", soul.AgentID)
+	logger := h.logger.With(zap.String("agent_id", soul.AgentID))
 
 	// Extract status from event data
 	data, ok := event.Data.(map[string]string)
@@ -94,7 +96,7 @@ func (h *StatusSyncHandler) handleDeploymentComplete(ctx context.Context, soul *
 	}
 
 	status := data["status"]
-	logger.Info("deployment run completed", "status", status)
+	logger.Info("deployment run completed", zap.String("status", status))
 
 	// Map bahia status to deploy status
 	var deployStatus string
@@ -111,17 +113,20 @@ func (h *StatusSyncHandler) handleDeploymentComplete(ctx context.Context, soul *
 
 	// Update soul and republish
 	if err := h.updateSoulDeployStatus(ctx, soul, deployStatus); err != nil {
-		logger.Error("failed to update soul deploy status", "error", err)
+		logger.Error("failed to update soul deploy status", zap.Error(err))
+
 	}
 }
 
 // handleDeploymentIntentCreated updates soul status when a new deployment starts.
 func (h *StatusSyncHandler) handleDeploymentIntentCreated(ctx context.Context, soul *domain.AgentSoul, event events.Event) {
-	logger := h.logger.With("agent_id", soul.AgentID)
+	logger := h.logger.With(zap.String("agent_id", soul.AgentID))
+
 	logger.Info("deployment intent created, updating status to deploying")
 
 	if err := h.updateSoulDeployStatus(ctx, soul, "deploying"); err != nil {
-		logger.Error("failed to update soul deploy status", "error", err)
+		logger.Error("failed to update soul deploy status", zap.Error(err))
+
 	}
 }
 
@@ -135,11 +140,7 @@ func (h *StatusSyncHandler) updateSoulDeployStatus(ctx context.Context, soul *do
 	if err := h.reactor.PublishSoul(ctx, soul); err != nil {
 		return fmt.Errorf("publish soul update: %w", err)
 	}
-
-	h.logger.Info("published soul status update",
-		"agent_id", soul.AgentID,
-		"deploy_status", deployStatus,
-	)
+	h.logger.Info("published soul status update", zap.String("agent_id", soul.AgentID), zap.String("deploy_status", deployStatus))
 
 	return nil
 }

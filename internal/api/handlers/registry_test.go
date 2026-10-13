@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
+
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -197,7 +197,7 @@ func newRegistryTestServer(t *testing.T, repo *mockOCIReadRepo, blobBody []byte)
 		config.OCIServerConfig{SpoolDir: filepath.Join(t.TempDir(), "spool"), UploadExpiry: time.Hour},
 		repo,
 		&mockUploadRepo{},
-		blossom.NewClient(blossom.Config{Servers: []string{blobSrv.URL}}, slog.Default()),
+		blossom.NewClient(blossom.Config{Servers: []string{blobSrv.URL}}, zap.NewNop()),
 		zap.NewNop(),
 	)
 	if err != nil {

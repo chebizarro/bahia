@@ -11,8 +11,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nip55l"
@@ -66,8 +67,10 @@ type Options struct {
 	// uses internal/adapters/nip55l.
 	NewNIP55L func(context.Context, NIP55LConfig) (nostr.Keyer, error)
 	// OnAuthURL receives the URL a NIP-46 bunker asks the operator to open to
-	// authorize Bahia's client key. Nil logs it at warn level via slog.Default.
+	// authorize Bahia's client key. Nil logs with the supplied Logger, which defaults to no-op.
 	OnAuthURL func(authURL string)
+	// Logger receives the default NIP-46 authorization notice. Nil is no-op.
+	Logger *zap.Logger
 }
 
 // Open builds the configured service signer and verifies that it reports the
@@ -107,7 +110,14 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 	case config.NostrSignerNIP46:
 		onAuthURL := opts.OnAuthURL
 		if onAuthURL == nil {
-			onAuthURL = func(authURL string) { slog.Warn(AuthURLMessage, "url", authURL) }
+			onAuthURL = func(authURL string) {
+				logger := opts.Logger
+				if logger == nil {
+					logger = zap.NewNop()
+				}
+				logger.Warn(AuthURLMessage, zap.String("url", authURL))
+
+			}
 		}
 		signer, err = openNIP46(ctx, cfg.Signer, expected, timeout, opts.Admission, onAuthURL)
 	case config.NostrSignerNIP55L:

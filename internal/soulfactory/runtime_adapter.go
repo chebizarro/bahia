@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -84,7 +85,7 @@ type RuntimeAdapterConfig struct {
 	Relays                []string
 	Transport             RuntimeAdapterTransport
 	TransportFactory      RuntimeAdapterTransportFactory
-	Logger                *slog.Logger
+	Logger                *zap.Logger
 	Now                   func() time.Time
 	CapabilityLimit       int
 	// MaxCapabilityAge bounds how old a 30317 capability announcement may be
@@ -195,7 +196,7 @@ type runtimeControlAdapter struct {
 	relays                []string
 	transport             RuntimeAdapterTransport
 	factory               RuntimeAdapterTransportFactory
-	logger                *slog.Logger
+	logger                *zap.Logger
 	now                   func() time.Time
 	capabilityLimit       int
 	maxCapabilityAge      time.Duration
@@ -223,7 +224,7 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 	}
 	logger := config.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	factory := config.TransportFactory
 	if factory == nil {
@@ -252,11 +253,12 @@ func newRuntimeControlAdapter(config RuntimeAdapterConfig) (*runtimeControlAdapt
 		transport:             config.Transport,
 		factory:               factory,
 		resultTimeout:         config.ResultTimeout,
-		logger:                logger.With("component", "soulfactory-runtime-adapter", "runtime", string(config.Target)),
-		now:                   firstNowFunc(config.Now),
-		capabilityLimit:       limit,
-		maxCapabilityAge:      maxAge,
-		maxFutureSkew:         maxSkew,
+		logger:                logger.With(zap.String("component", "soulfactory-runtime-adapter"), zap.String("runtime", string(config.Target))),
+
+		now:              firstNowFunc(config.Now),
+		capabilityLimit:  limit,
+		maxCapabilityAge: maxAge,
+		maxFutureSkew:    maxSkew,
 	}, nil
 }
 
@@ -522,18 +524,21 @@ func (a *runtimeControlAdapter) relayFallbacks(capability *RuntimeCapability) []
 func (a *runtimeControlAdapter) fetchRuntimeNIP65Policy(ctx context.Context, runtimePubkey string, queryRelays []string) domain.SoulRelayPolicySpec {
 	transport, closeTransport, err := a.transportForRelays(queryRelays)
 	if err != nil {
-		a.logger.Warn("skip NIP-65 runtime relay discovery", "runtime_pubkey", runtimePubkey, "error", err)
+		a.logger.Warn("skip NIP-65 runtime relay discovery", zap.String("runtime_pubkey", runtimePubkey), zap.Error(err))
+
 		return domain.SoulRelayPolicySpec{}
 	}
 	defer closeTransport()
 	parsedRuntimePubkey, err := nostr.PubKeyFromHex(runtimePubkey)
 	if err != nil {
-		a.logger.Warn("skip NIP-65 runtime relay discovery", "runtime_pubkey", runtimePubkey, "error", err)
+		a.logger.Warn("skip NIP-65 runtime relay discovery", zap.String("runtime_pubkey", runtimePubkey), zap.Error(err))
+
 		return domain.SoulRelayPolicySpec{}
 	}
 	events, err := collectRuntimeAdapterEvents(ctx, a.logger, "runtime_adapter.relay_list", transport, []nostr.Filter{{Kinds: []nostr.Kind{nostr.Kind(kindNIP65RelayListMetadata)}, Authors: []nostr.PubKey{parsedRuntimePubkey}, Limit: 1}})
 	if err != nil {
-		a.logger.Warn("NIP-65 runtime relay discovery failed", "runtime_pubkey", runtimePubkey, "error", err)
+		a.logger.Warn("NIP-65 runtime relay discovery failed", zap.String("runtime_pubkey", runtimePubkey), zap.Error(err))
+
 		return domain.SoulRelayPolicySpec{}
 	}
 	var latest *nostr.Event
@@ -689,7 +694,7 @@ func BuildProvisionRuntimeParamsFromDraft(draft domain.SoulDraftContent) map[str
 // Both adapter reads (kind:30317 capabilities and the runtime's NIP-65 relay
 // list) are latest-wins lookups, so a partial read is accepted under
 // RelayReadLatestQuorum and logged as degraded; see RelayReadPolicy.
-func collectRuntimeAdapterEvents(ctx context.Context, logger *slog.Logger, caller string, transport RuntimeAdapterTransport, filters []nostr.Filter) ([]*nostr.Event, error) {
+func collectRuntimeAdapterEvents(ctx context.Context, logger *zap.Logger, caller string, transport RuntimeAdapterTransport, filters []nostr.Filter) ([]*nostr.Event, error) {
 	sub, err := transport.SubscribeAllWithEOSE(ctx, filters)
 	if err != nil {
 		return nil, err

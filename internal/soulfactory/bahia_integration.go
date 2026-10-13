@@ -3,9 +3,10 @@ package soulfactory
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 
@@ -21,7 +22,7 @@ type BahiaIntegration struct {
 	orgID                  uuid.UUID
 	agentEnvID             uuid.UUID // Default environment for agents
 	deployRuntimeArtifacts bool
-	logger                 *slog.Logger
+	logger                 *zap.Logger
 }
 
 // BahiaIntegrationConfig holds configuration for bahia integration.
@@ -38,12 +39,12 @@ type BahiaIntegrationConfig struct {
 }
 
 // NewBahiaIntegration creates a new bahia integration.
-func NewBahiaIntegration(registry *service.RegistryService, config BahiaIntegrationConfig, logger *slog.Logger) (*BahiaIntegration, error) {
+func NewBahiaIntegration(registry *service.RegistryService, config BahiaIntegrationConfig, logger *zap.Logger) (*BahiaIntegration, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("bahia registry is required")
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	bi := &BahiaIntegration{
 		deployRuntimeArtifacts: config.DeployRuntimeArtifacts,
@@ -86,7 +87,8 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 	if _, err := bi.registryService(); err != nil {
 		return uuid.Nil, err
 	}
-	logger := bi.logger.With("agent_id", soul.AgentID, "soul_id", soul.ID)
+	logger := bi.logger.With(zap.String("agent_id", soul.AgentID), zap.Any("soul_id", soul.ID))
+
 	logger.Info("registering soul as bahia service")
 
 	serviceName := soulServiceName(soul.AgentID)
@@ -99,7 +101,8 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 		if existing.ArtifactRepo != artifactRepo {
 			return uuid.Nil, fmt.Errorf("existing service %q has artifact repository %q, want %q", serviceName, existing.ArtifactRepo, artifactRepo)
 		}
-		logger.Info("reusing existing soul service", "service_id", existing.ID, "service_name", existing.Name)
+		logger.Info("reusing existing soul service", zap.Any("service_id", existing.ID), zap.String("service_name", existing.Name))
+
 		return existing.ID, nil
 	}
 
@@ -121,16 +124,13 @@ func (bi *BahiaIntegration) RegisterSoulAsService(ctx context.Context, soul *dom
 		// lookup and create, so reconcile the durable record before failing.
 		existing, lookupErr := bi.registry.GetServiceByName(ctx, serviceName)
 		if lookupErr == nil && existing != nil && existing.ArtifactRepo == artifactRepo {
-			logger.Info("reusing concurrently registered soul service", "service_id", existing.ID, "service_name", existing.Name)
+			logger.Info("reusing concurrently registered soul service", zap.Any("service_id", existing.ID), zap.String("service_name", existing.Name))
+
 			return existing.ID, nil
 		}
 		return uuid.Nil, fmt.Errorf("create service: %w", err)
 	}
-
-	logger.Info("registered soul as service",
-		"service_id", svc.ID,
-		"service_name", svc.Name,
-	)
+	logger.Info("registered soul as service", zap.Any("service_id", svc.ID), zap.String("service_name", svc.Name))
 
 	return svc.ID, nil
 }
@@ -153,7 +153,7 @@ func soulServiceArtifactRepo(agentID string) string {
 // only when explicit Bahia config opts in and the runtime returned a real
 // deployable artifact reference containing an image digest.
 func (bi *BahiaIntegration) CreateInitialDeployment(ctx context.Context, soul *domain.AgentSoul, serviceID uuid.UUID, runtimeResult *RuntimeControlResultEnvelope) (*domain.DeploymentIntent, error) {
-	logger := bi.logger.With("agent_id", soul.AgentID, "service_id", serviceID)
+	logger := bi.logger.With(zap.String("agent_id", soul.AgentID), zap.Any("service_id", serviceID))
 
 	if bi.agentEnvID == uuid.Nil {
 		logger.Debug("no agent environment configured, skipping initial deployment")
@@ -242,13 +242,7 @@ func (bi *BahiaIntegration) CreateInitialDeployment(ctx context.Context, soul *d
 	if err := bi.registry.CreateDeploymentIntent(ctx, intent); err != nil {
 		return nil, fmt.Errorf("create deployment intent: %w", err)
 	}
-
-	logger.Info("created initial deployment intent from runtime artifact",
-		"intent_id", intent.ID,
-		"environment_id", bi.agentEnvID,
-		"image_repo", deployable.ImageRepo,
-		"image_digest", deployable.ImageDigest,
-	)
+	logger.Info("created initial deployment intent from runtime artifact", zap.Any("intent_id", intent.ID), zap.Any("environment_id", bi.agentEnvID), zap.String("image_repo", deployable.ImageRepo), zap.String("image_digest", deployable.ImageDigest))
 
 	return intent, nil
 }
@@ -389,7 +383,7 @@ func (bi *BahiaIntegration) SyncSoulStatus(ctx context.Context, soul *domain.Age
 		return "", nil
 	}
 
-	logger := bi.logger.With("agent_id", soul.AgentID, "service_id", *soul.BahiaServiceID)
+	logger := bi.logger.With(zap.String("agent_id", soul.AgentID), zap.Any("service_id", *soul.BahiaServiceID))
 
 	if bi.agentEnvID == uuid.Nil {
 		return "unmanaged", nil
@@ -425,7 +419,8 @@ func (bi *BahiaIntegration) SyncSoulStatus(ctx context.Context, soul *domain.Age
 	if state.CurrentObservationID != nil {
 		obs, err := bi.registry.GetLatestObservation(ctx, *soul.BahiaServiceID, bi.agentEnvID)
 		if err != nil {
-			logger.Warn("failed to get latest observation", "error", err)
+			logger.Warn("failed to get latest observation", zap.Error(err))
+
 		} else if obs != nil {
 			switch obs.HealthStatus {
 			case domain.HealthStatusHealthy:
@@ -439,22 +434,24 @@ func (bi *BahiaIntegration) SyncSoulStatus(ctx context.Context, soul *domain.Age
 			}
 		}
 	}
+	logger.Debug("synced soul status", zap.String("deploy_status", deployStatus))
 
-	logger.Debug("synced soul status", "deploy_status", deployStatus)
 	return deployStatus, nil
 }
 
 // HandleLifecycleAction handles soul lifecycle actions by updating bahia accordingly.
 func (bi *BahiaIntegration) HandleLifecycleAction(ctx context.Context, soul *domain.AgentSoul, action domain.SoulActionType) error {
 	if soul.BahiaServiceID == nil {
-		bi.logger.Debug("no bahia service ID for lifecycle action", "action", action)
+		bi.logger.Debug("no bahia service ID for lifecycle action", zap.Any("action", action))
+
 		return ErrLifecycleUnsupported
 	}
 	if _, err := bi.registryService(); err != nil {
 		return err
 	}
 
-	logger := bi.logger.With("agent_id", soul.AgentID, "service_id", *soul.BahiaServiceID, "action", action)
+	logger := bi.logger.With(zap.String("agent_id", soul.AgentID), zap.Any("service_id", *soul.BahiaServiceID), zap.Any("action", action))
+
 	logger.Info("handling soul lifecycle action")
 
 	switch action {
@@ -490,7 +487,7 @@ func (bi *BahiaIntegration) revokeDeployment(ctx context.Context, soul *domain.A
 
 // redeployAgent triggers a fresh deployment for the agent.
 func (bi *BahiaIntegration) redeployAgent(ctx context.Context, soul *domain.AgentSoul) error {
-	logger := bi.logger.With("agent_id", soul.AgentID)
+	logger := bi.logger.With(zap.String("agent_id", soul.AgentID))
 
 	if bi.agentEnvID == uuid.Nil {
 		logger.Debug("no agent environment configured, skipping redeploy")
@@ -667,7 +664,8 @@ func (bi *BahiaIntegration) EnsureAgentEnvironment(ctx context.Context) (uuid.UU
 	}
 
 	bi.agentEnvID = env.ID
-	bi.logger.Info("created agents environment", "environment_id", env.ID)
+	bi.logger.Info("created agents environment", zap.Any("environment_id", env.ID))
+
 	return env.ID, nil
 }
 

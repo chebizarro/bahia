@@ -7,13 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/codec/betterbinary"
@@ -84,7 +85,7 @@ type productionLedgerSeams struct {
 	Publisher     saga.EventPublisher
 	Encryptor     LedgerEncryptor
 	ServicePubkey string
-	Logger        *slog.Logger
+	Logger        *zap.Logger
 	Now           func() time.Time
 }
 
@@ -113,7 +114,7 @@ type productionStateStore struct {
 	publisher saga.EventPublisher
 	encryptor LedgerEncryptor
 	author    nostr.PubKey
-	logger    *slog.Logger
+	logger    *zap.Logger
 	now       func() time.Time
 
 	// mu serializes every read-modify-publish of both record kinds, so two
@@ -135,14 +136,16 @@ func newProductionStateStore(dir string, seams productionLedgerSeams) (*producti
 	}
 	logger := seams.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	now := seams.Now
 	if now == nil {
 		now = time.Now
 	}
 	store := &productionStateStore{
-		dir: dir, logger: logger.With("component", "soulfactory_adapter_ledger"), now: now,
+		dir: dir, logger: logger.With(zap.String("component", "soulfactory_adapter_ledger")),
+
+		now:        now,
 		requests:   map[string]ledgerCommitted[productionProvisioningState]{},
 		identities: map[string]ledgerCommitted[productionIdentityReservation]{},
 	}
@@ -292,7 +295,8 @@ func (s *productionStateStore) remove(ctx context.Context, requestID string) err
 	s.requests[requestID] = ledgerCommitted[productionProvisioningState]{version: current.Version, createdAt: createdAt, deleted: true}
 	if err := os.Remove(s.requestPath(requestID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		if s.canonical() {
-			s.logger.Warn("adapter ledger cache remove failed", "request_id", requestID, "error", err)
+			s.logger.Warn("adapter ledger cache remove failed", zap.String("request_id", requestID), zap.Error(err))
+
 			return nil
 		}
 		return err
@@ -335,7 +339,8 @@ func (s *productionStateStore) reservation(ctx context.Context, spec Provisionin
 		if !s.canonical() {
 			return nil, false, err
 		}
-		s.logger.Warn("adapter ledger reservation cache write failed", "agent_id", spec.AgentID, "error", err)
+		s.logger.Warn("adapter ledger reservation cache write failed", zap.String("agent_id", spec.AgentID), zap.Error(err))
+
 	}
 	copied := *next
 	return &copied, true, nil
@@ -365,7 +370,8 @@ func (s *productionStateStore) removeIdentity(ctx context.Context, agentID strin
 	s.identities[agentID] = ledgerCommitted[productionIdentityReservation]{version: current.Version, createdAt: createdAt, deleted: true}
 	if err := os.Remove(s.reservationPath(agentID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		if s.canonical() {
-			s.logger.Warn("adapter ledger reservation cache remove failed", "agent_id", agentID, "error", err)
+			s.logger.Warn("adapter ledger reservation cache remove failed", zap.String("agent_id", agentID), zap.Error(err))
+
 			return nil
 		}
 		return err
@@ -666,7 +672,8 @@ func (s *productionStateStore) cacheRequest(state *productionProvisioningState) 
 		return
 	}
 	if err := writeProductionJSON(s.requestPath(state.RequestID), state); err != nil {
-		s.logger.Warn("adapter ledger cache write failed", "request_id", state.RequestID, "error", err)
+		s.logger.Warn("adapter ledger cache write failed", zap.String("request_id", state.RequestID), zap.Error(err))
+
 	}
 }
 
@@ -784,7 +791,8 @@ func (s ledgerPurgingStore) Delete(ctx context.Context, requestID string, expect
 		if err := s.states.removeIdentity(ctx, run.AgentID); err != nil {
 			return err
 		}
-		s.states.logger.Info("adapter ledger identity reservation released", "agent_id", run.AgentID, "request_id", run.RequestID)
+		s.states.logger.Info("adapter ledger identity reservation released", zap.String("agent_id", run.AgentID), zap.String("request_id", run.RequestID))
+
 	}
 	return s.Store.Delete(ctx, requestID, expectedVersion)
 }
@@ -800,7 +808,8 @@ func (s ledgerPurgingStore) releasesIdentity(ctx context.Context, run *saga.Run)
 		return false, nil
 	}
 	if s.souls == nil {
-		s.states.logger.Warn("adapter ledger identity reservation kept: no Soul lookup to prove the agent id is free", "agent_id", run.AgentID, "request_id", run.RequestID)
+		s.states.logger.Warn("adapter ledger identity reservation kept: no Soul lookup to prove the agent id is free", zap.String("agent_id", run.AgentID), zap.String("request_id", run.RequestID))
+
 		return false, nil
 	}
 	soul, err := s.souls(ctx, run.AgentID)
@@ -808,7 +817,8 @@ func (s ledgerPurgingStore) releasesIdentity(ctx context.Context, run *saga.Run)
 		return false, fmt.Errorf("inspect Soul of agent %s before releasing its identity reservation: %w", run.AgentID, err)
 	}
 	if soul != nil && soul.Status != domain.SoulStatusRevoked {
-		s.states.logger.Info("adapter ledger identity reservation kept: agent has a live Soul", "agent_id", run.AgentID, "request_id", run.RequestID, "soul_status", string(soul.Status))
+		s.states.logger.Info("adapter ledger identity reservation kept: agent has a live Soul", zap.String("agent_id", run.AgentID), zap.String("request_id", run.RequestID), zap.String("soul_status", string(soul.Status)))
+
 		return false, nil
 	}
 	return true, nil

@@ -5,8 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -21,7 +22,7 @@ type AssistantSessionRecoveryConfig struct {
 	// comes back short.
 	PageLimit     int
 	ServicePubkey string
-	Logger        *slog.Logger
+	Logger        *zap.Logger
 	Engine        AssistantTurnEngine
 	Store         AssistantCheckpointStore
 	// Subscriber defaults to the orchestrator's relay subscriber. It is the
@@ -53,7 +54,7 @@ type AssistantSessionRecoveryRunner struct {
 	readiness      SupervisionReadiness
 	pageLimit      int
 	servicePubkey  string
-	logger         *slog.Logger
+	logger         *zap.Logger
 	topicMigration *AssistantSessionTopicMigration
 }
 
@@ -62,7 +63,7 @@ const defaultAssistantRecoveryPageLimit = 500
 func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg AssistantSessionRecoveryConfig) *AssistantSessionRecoveryRunner {
 	logger := cfg.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	pageLimit := cfg.PageLimit
 	if pageLimit <= 0 {
@@ -78,7 +79,7 @@ func NewAssistantSessionRecoveryRunner(orchestrator *AssistantOrchestrator, cfg 
 			servicePubkey = strings.TrimSpace(orchestrator.identity.Pubkey)
 		}
 	}
-	return &AssistantSessionRecoveryRunner{engine: cfg.Engine, store: cfg.Store, subscriber: subscriber, local: cfg.LocalStore, readiness: cfg.Readiness, pageLimit: pageLimit, servicePubkey: servicePubkey, logger: logger.With("component", "assistant_session_recovery")}
+	return &AssistantSessionRecoveryRunner{engine: cfg.Engine, store: cfg.Store, subscriber: subscriber, local: cfg.LocalStore, readiness: cfg.Readiness, pageLimit: pageLimit, servicePubkey: servicePubkey, logger: logger.With(zap.String("component", "assistant_session_recovery"))}
 }
 
 // SetTopicMigration attaches the startup migration that adds t=assistant-session
@@ -118,13 +119,15 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 	// all records carry the tag.
 	if r.topicMigration != nil {
 		if err := r.topicMigration.Run(ctx); err != nil {
-			r.logger.Warn("assistant session topic migration failed; recovery proceeds without it", "error", err)
+			r.logger.Warn("assistant session topic migration failed; recovery proceeds without it", zap.Error(err))
+
 		}
 	}
 
 	sources, err := r.collectSources(ctx)
 	if err != nil {
-		r.logger.Warn("assistant recovery query failed; sessions remain parked", "error", err)
+		r.logger.Warn("assistant recovery query failed; sessions remain parked", zap.Error(err))
+
 		return nil
 	}
 	recovered := 0
@@ -139,12 +142,14 @@ func (r *AssistantSessionRecoveryRunner) Run(ctx context.Context) error {
 			recErr = r.recoverV1(ctx, src.event)
 		}
 		if recErr != nil {
-			r.logger.Error("assistant session parked during recovery", "event_id", src.event.ID.Hex(), "schema", src.schema, "error", recErr)
+			r.logger.Error("assistant session parked during recovery", zap.String("event_id", src.event.ID.Hex()), zap.String("schema", src.schema), zap.Error(recErr))
+
 			continue
 		}
 		recovered++
 	}
-	r.logger.Info("assistant recovery pass completed", "sessions_seen", len(sources), "sessions_recovered", recovered, "source", r.inventorySource())
+	r.logger.Info("assistant recovery pass completed", zap.Int("sessions_seen", len(sources)), zap.Int("sessions_recovered", recovered), zap.String("source", r.inventorySource()))
+
 	return nil
 }
 
@@ -362,7 +367,8 @@ func (r *AssistantSessionRecoveryRunner) recoverV2(ctx context.Context, ev *nost
 func (r *AssistantSessionRecoveryRunner) recoverV1(ctx context.Context, ev *nostr.Event) error {
 	conversion := ClassifyAssistantLegacySession(AssistantLegacySessionSource{EventID: ev.ID.Hex(), Schema: domain.AssistantSessionSchema, JSON: []byte(ev.Content)})
 	if conversion.Execution == nil {
-		r.logger.Info("assistant v1 history not executable", "event_id", ev.ID.Hex(), "classification", conversion.Classification, "reason", conversion.Reason)
+		r.logger.Info("assistant v1 history not executable", zap.String("event_id", ev.ID.Hex()), zap.Any("classification", conversion.Classification), zap.String("reason", conversion.Reason))
+
 		return nil
 	}
 	var legacy domain.AssistantSession

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"fiatjaf.com/nostr"
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -81,14 +82,18 @@ func (r *Reactor) rebuildParkedOperations(ctx context.Context) []rebuiltOperatio
 	if err != nil {
 		return nil
 	}
-	logger := r.logger.With("caller", "reactor.rebuild_parked")
+	logger := r.logger.With(zap.String("caller",
+
+		"reactor.rebuild_parked",
+	),
+	)
 	query := func(filters []nostr.Filter) ([]*nostr.Event, bool) {
 		events, err := relayClient.Query(ctx, filters)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, false
 			}
-			logger.Warn("parked operation rebuild read incomplete; rebuilding from the events received", "error", err)
+			logger.Warn("parked operation rebuild read incomplete; rebuilding from the events received", zap.Error(err))
 		}
 		return events, true
 	}
@@ -162,12 +167,23 @@ func (r *Reactor) rebuildParkedOperations(ctx context.Context) []rebuiltOperatio
 		}
 		event := actions[op.request]
 		if event == nil {
-			logger.Warn("awaiting_terminal lifecycle action not found on the relays; it is not re-driven", "event_id", op.request, "agent_id", op.agentID)
+			logger.Warn("awaiting_terminal lifecycle action not found on the relays; it is not re-driven", zap.String("event_id",
+				op.
+					request,
+			), zap.String("agent_id",
+				op.
+					agentID,
+			),
+			)
 			continue
 		}
 		action, err := ParseSoulActionEvent(event)
 		if err != nil {
-			logger.Warn("awaiting_terminal lifecycle action does not parse; it is not re-driven", "event_id", op.request, "error", err)
+			logger.Warn("awaiting_terminal lifecycle action does not parse; it is not re-driven", zap.String("event_id",
+				op.
+					request,
+			), zap.Error(err),
+			)
 			continue
 		}
 		agentID := normalizeSoulLookupRef(action.SoulRef)
@@ -177,7 +193,10 @@ func (r *Reactor) rebuildParkedOperations(ctx context.Context) []rebuiltOperatio
 		rebuilt = append(rebuilt, rebuiltOperation{agentID: agentID, op: r.lifecycle().deferredAction(event, action)})
 	}
 	if len(rebuilt) > 0 {
-		logger.Info("rebuilt operations left awaiting a runtime terminal result; re-driving them", "operations", len(rebuilt))
+		logger.Info("rebuilt operations left awaiting a runtime terminal result; re-driving them", zap.Int("operations",
+
+			len(rebuilt)),
+		)
 	}
 	return rebuilt
 }

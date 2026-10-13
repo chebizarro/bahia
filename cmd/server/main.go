@@ -5,21 +5,27 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/openagentsinc/bahia/internal/app"
 	"github.com/openagentsinc/bahia/internal/config"
+	"go.uber.org/zap"
 )
 
 func main() {
 	configPath := flag.String("config", "", "path to config YAML file")
 	flag.Parse()
 
+	logger, loggerErr := zap.NewDevelopment()
+	if loggerErr != nil {
+		fmt.Fprintln(os.Stderr, loggerErr)
+		os.Exit(1)
+	}
 	if err := run(*configPath); err != nil {
-		log.Fatalf("application error: %v", err)
+		logger.Error(fmt.Sprintf("application error: %v", err), zap.Error(err))
+		os.Exit(1)
 	}
 }
 
@@ -55,7 +61,7 @@ func run(configPath string) error {
 			return app.New(cfg, app.Replacing(current))
 		},
 		newSignals: productionSignalSource,
-		logf:       log.Printf,
+		logf:       zap.S().Infof,
 	})
 }
 

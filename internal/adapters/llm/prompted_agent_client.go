@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
 )
@@ -40,11 +41,11 @@ type PromptedAgentClient struct {
 	maxTokens   int
 	temperature float64
 	httpClient  *http.Client
-	logger      *slog.Logger
+	logger      *zap.Logger
 }
 
 // NewPromptedAgentClient creates an OpenAI-compatible prompted tool-call client.
-func NewPromptedAgentClient(config PromptedAgentClientConfig, logger *slog.Logger) *PromptedAgentClient {
+func NewPromptedAgentClient(config PromptedAgentClientConfig, logger *zap.Logger) *PromptedAgentClient {
 	if config.BaseURL == "" {
 		config.BaseURL = "https://api.openai.com"
 	}
@@ -58,7 +59,7 @@ func NewPromptedAgentClient(config PromptedAgentClientConfig, logger *slog.Logge
 		config.HTTPClient = &http.Client{Timeout: config.Timeout}
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	return &PromptedAgentClient{
 		baseURL:     strings.TrimRight(config.BaseURL, "/"),
@@ -67,7 +68,7 @@ func NewPromptedAgentClient(config PromptedAgentClientConfig, logger *slog.Logge
 		maxTokens:   config.MaxTokens,
 		temperature: config.Temperature,
 		httpClient:  config.HTTPClient,
-		logger:      logger.With("component", "llm_prompted_agent_client"),
+		logger:      logger.With(zap.String("component", "llm_prompted_agent_client")),
 	}
 }
 

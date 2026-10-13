@@ -1,8 +1,9 @@
 package soulfactory
 
 import (
-	"log/slog"
 	"testing"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -11,7 +12,7 @@ import (
 
 func TestCanonicalProvisioningProjectionIgnoresDirectInteropRequest(t *testing.T) {
 	signer := newFakeSigner(t)
-	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, slog.Default())
+	reactor := NewReactor(Config{Relays: []string{"wss://relay.example"}}, fakeGenerator{}, signer, zap.NewNop())
 	capture := attachPublishCapture(reactor)
 	request := &nostr.Event{ID: soulTestID("direct-5950"), Kind: nostr.Kind(domain.KindProvisioningRequest)}
 	result := BuildProvisioningErrorResultEvent(request, "deploy", "runtime unavailable")

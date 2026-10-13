@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/mcpclient"
 )
@@ -28,7 +29,7 @@ var (
 type Client struct {
 	baseURL string
 	client  *mcpclient.Client
-	logger  *slog.Logger
+	logger  *zap.Logger
 
 	taskMu     sync.Mutex
 	taskIDFile string
@@ -43,15 +44,15 @@ type Config struct {
 }
 
 // NewClient creates a new agent-memory client.
-func NewClient(config Config, logger *slog.Logger) *Client {
+func NewClient(config Config, logger *zap.Logger) *Client {
 	config.URL = strings.TrimRight(strings.TrimSpace(config.URL), "/")
 	if config.Timeout == 0 {
 		config.Timeout = 30 * time.Second
 	}
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
-	componentLogger := logger.With("component", "agentmemory")
+	componentLogger := logger.With(zap.String("component", "agentmemory"))
 
 	return &Client{
 		baseURL: config.URL,
@@ -99,7 +100,8 @@ func (c *Client) RegisterAgent(ctx context.Context, agentID string, npub string,
 	}
 	taskID := taskIDs[agentID]
 	if taskID == "" {
-		c.logger.Info("starting agent memory task", "agent_id", agentID, "npub", npub)
+		c.logger.Info("starting agent memory task", zap.String("agent_id", agentID), zap.String("npub", npub))
+
 		goal := fmt.Sprintf("Seed non-personal fleet provisioning context for Soul Factory agent %s.", agentID)
 		result, err := c.callToolText(ctx, "memory_task_start", map[string]interface{}{
 			"agent": agentID,
@@ -136,10 +138,7 @@ func (c *Client) RegisterAgent(ctx context.Context, agentID string, npub string,
 
 // SeedMemory adds initial context/memory for an agent.
 func (c *Client) SeedMemory(ctx context.Context, agentID string, entries []MemoryEntry) error {
-	c.logger.Info("seeding agent memory",
-		"agent_id", agentID,
-		"entries", len(entries),
-	)
+	c.logger.Info("seeding agent memory", zap.String("agent_id", agentID), zap.Int("entries", len(entries)))
 
 	taskID, err := c.taskID(ctx, agentID)
 	if err != nil {

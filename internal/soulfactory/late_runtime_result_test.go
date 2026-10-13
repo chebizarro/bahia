@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"slices"
 	"sync"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
@@ -174,29 +176,6 @@ type lateLifecycleFixture struct {
 	proposedDraft *domain.SoulDraft
 }
 
-type backfillSignalHandler struct {
-	slog.Handler
-	complete chan<- struct{}
-}
-
-func (h *backfillSignalHandler) Handle(ctx context.Context, record slog.Record) error {
-	if record.Message == "soul factory request backfill complete; processing realtime events" {
-		select {
-		case h.complete <- struct{}{}:
-		default:
-		}
-	}
-	return h.Handler.Handle(ctx, record)
-}
-
-func (h *backfillSignalHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &backfillSignalHandler{Handler: h.Handler.WithAttrs(attrs), complete: h.complete}
-}
-
-func (h *backfillSignalHandler) WithGroup(name string) slog.Handler {
-	return &backfillSignalHandler{Handler: h.Handler.WithGroup(name), complete: h.complete}
-}
-
 // newLateLifecycleFixture wires a lifecycle handler whose soul changes voice,
 // memory and persona between its current and proposed drafts.
 func newLateLifecycleFixture(t *testing.T, script ...string) *lateLifecycleFixture {
@@ -231,7 +210,7 @@ func newLateLifecycleFixture(t *testing.T, script ...string) *lateLifecycleFixtu
 		Relays:            []string{"wss://public.example"},
 		AuthorizedPubkeys: []string{signer.pubkey},
 		SoulFactoryPubkey: signer.pubkey,
-	}, scriptedGenerator{}, signer, slog.Default())
+	}, scriptedGenerator{}, signer, zap.NewNop())
 	reactor.relayClient = newEOSEOnlyRelayClient(t)
 	capture := &fleetReconcilePublishCapture{}
 	reactor.publishFn = capture.publish
@@ -247,7 +226,7 @@ func newLateLifecycleFixture(t *testing.T, script ...string) *lateLifecycleFixtu
 		return nil, nil
 	}
 	runtime := &scriptedLateRuntime{t: t, controller: signer, runtime: newFakeSigner(t), script: script}
-	handler := NewLifecycleHandler(reactor, nil, nil, slog.Default())
+	handler := NewLifecycleHandler(reactor, nil, nil, zap.NewNop())
 	handler.SetRuntimeAdapters(map[domain.RuntimeTarget]RuntimeAdapter{domain.RuntimeTargetOpenClaw: runtime})
 	reactor.lifecycleHandler = handler
 	return &lateLifecycleFixture{signer: signer, runtime: runtime, reactor: reactor, handler: handler, capture: capture, soul: soul, currentDraft: currentDraft, proposedDraft: proposedDraft}
@@ -359,7 +338,7 @@ func TestRuntimeResultWaitersHandBackResultObservedBeforePark(t *testing.T) {
 		Soul:     RuntimeSoulRef{ID: "scout", SpecHash: "sha256:spec"},
 	}
 	pending := newScriptedRuntimePending(t, controller, runtime, req, 0)
-	waiters := newRuntimeResultWaiters(slog.Default())
+	waiters := newRuntimeResultWaiters(zap.NewNop())
 
 	// A result for the same request signed by another key never correlates.
 	if waiters.deliver(t.Context(), lateRuntimeResultEvent(t, forger, pending, "success", nostr.Now())) {
@@ -604,10 +583,18 @@ func TestRelayClientResumableSubscriptionResumesFromCursorAfterEOSE(t *testing.T
 func TestReactorReconnectDeliversResultPublishedWhileDisconnected(t *testing.T) {
 	f := newLateLifecycleFixture(t, "timeout")
 	backfillComplete := make(chan struct{}, 1)
-	f.reactor.logger = slog.New(&backfillSignalHandler{
-		Handler:  slog.NewTextHandler(io.Discard, nil),
-		complete: backfillComplete,
-	})
+	f.reactor.logger = zap.New(zapcore.NewCore(
+		zapcore.NewConsoleEncoder(zap.NewDevelopmentEncoderConfig()),
+		zapcore.AddSync(io.Discard), zapcore.DebugLevel,
+	), zap.Hooks(func(entry zapcore.Entry) error {
+		if entry.Message == "soul factory request backfill complete; processing realtime events" {
+			select {
+			case backfillComplete <- struct{}{}:
+			default:
+			}
+		}
+		return nil
+	}))
 	completed := make(chan struct{}, 1)
 	f.reactor.publishFn = func(ctx context.Context, event *nostr.Event, relays []string) error {
 		if err := f.capture.publish(ctx, event, relays); err != nil {
@@ -723,7 +710,7 @@ func TestLifecycleActionReadsSoulThroughReactorRelayBus(t *testing.T) {
 		Relays:            []string{"wss://not-the-bus.invalid"},
 		AuthorizedPubkeys: []string{operator.pubkey},
 		SoulFactoryPubkey: factory.pubkey,
-	}, scriptedGenerator{}, factory, slog.Default())
+	}, scriptedGenerator{}, factory, zap.NewNop())
 	reactor.relayClient = bus
 	capture := attachPublishCapture(reactor)
 

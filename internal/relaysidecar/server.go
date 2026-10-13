@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -141,7 +139,8 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		}
 	}
 	relay := khatru.NewRelay()
-	relay.Log = log.New(os.Stderr, "[bahia-relay-sidecar] ", log.LstdFlags)
+	// Khatru requires *log.Logger; route its diagnostics through the existing zap sink.
+	relay.Log = zap.NewStdLog(logger.Named("bahia-relay-sidecar"))
 	relay.ServiceURL = nostrCfg.Sidecar.PublicURL
 	state := admin.snapshot()
 	relay.Info.Name = state.Metadata.Name

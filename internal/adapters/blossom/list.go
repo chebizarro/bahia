@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"go.uber.org/zap"
 )
 
 // List retrieves all blobs owned by the configured private key's pubkey.
@@ -49,10 +50,12 @@ func (c *Client) ListByPubkey(ctx context.Context, pubkey string) ([]BlobDescrip
 		blobs, err := c.listFromServer(ctx, server, pubkey)
 		if err != nil {
 			lastErr = err
-			c.logger.Warn("list failed from server",
-				"server", server,
-				"pubkey", pubkey[:16]+"...",
-				"error", err,
+			c.logger.Warn("list failed from server", zap.String("server",
+
+				server), zap.String("pubkey",
+
+				pubkey[:16]+"...",
+			), zap.Error(err),
 			)
 			continue
 		}
@@ -65,10 +68,14 @@ func (c *Client) ListByPubkey(ctx context.Context, pubkey string) ([]BlobDescrip
 			}
 		}
 
-		c.logger.Debug("listed blobs from server",
-			"server", server,
-			"pubkey", pubkey[:16]+"...",
-			"count", len(blobs),
+		c.logger.Debug("listed blobs from server", zap.String("server",
+
+			server), zap.String("pubkey",
+
+			pubkey[:16]+"...",
+		), zap.Int("count",
+
+			len(blobs)),
 		)
 	}
 

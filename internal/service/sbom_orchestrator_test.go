@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
@@ -349,7 +350,7 @@ func newTestSBOMOrchestrator(t *testing.T, publisher *fakeSBOMPublisher, subscri
 		subscriber = &fakeSBOMAvailabilitySubscriber{messages: []SBOMAvailabilitySubscriptionMessage{{EOSE: true}}}
 	}
 	attestationSigner := keyer.NewPlainKeySigner([32]byte(publisher.signer))
-	return NewSBOMOrchestrator(SBOMOrchestratorConfig{Generators: registry, Storage: sbomadapter.NewStorageResolver(&sbomadapter.MockBlossomClient{Blobs: map[string][]byte{}}, nil, nil, slog.Default()), Repo: repo, Publisher: publisher, Subscriber: subscriber, AttestationSigner: attestationSigner, Pubkey: publisher.signer.Public().Hex()})
+	return NewSBOMOrchestrator(SBOMOrchestratorConfig{Generators: registry, Storage: sbomadapter.NewStorageResolver(&sbomadapter.MockBlossomClient{Blobs: map[string][]byte{}}, nil, nil, zap.NewNop()), Repo: repo, Publisher: publisher, Subscriber: subscriber, AttestationSigner: attestationSigner, Pubkey: publisher.signer.Public().Hex()})
 }
 
 type fakeGenerator struct {

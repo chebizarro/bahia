@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"fiatjaf.com/nostr"
 
@@ -145,7 +146,7 @@ type OpenClawSidecarConfig struct {
 	Transport                RuntimeAdapterTransport
 	Driver                   OpenClawControlDriver
 	IdempotencyStore         OpenClawIdempotencyStore
-	Logger                   *slog.Logger
+	Logger                   *zap.Logger
 	Now                      func() time.Time
 	CapabilityAdditionalTags nostr.Tags
 }
@@ -160,7 +161,7 @@ type OpenClawSidecar struct {
 	transport           RuntimeAdapterTransport
 	driver              OpenClawControlDriver
 	store               OpenClawIdempotencyStore
-	logger              *slog.Logger
+	logger              *zap.Logger
 	now                 func() time.Time
 	methods             []string
 	capabilityTags      nostr.Tags
@@ -207,7 +208,7 @@ func NewOpenClawSidecar(config OpenClawSidecarConfig) (*OpenClawSidecar, error) 
 	}
 	logger := config.Logger
 	if logger == nil {
-		logger = slog.Default()
+		logger = zap.NewNop()
 	}
 	methods := uniqueStrings(config.Driver.Methods())
 	if len(methods) == 0 {
@@ -244,10 +245,11 @@ func NewOpenClawSidecar(config OpenClawSidecarConfig) (*OpenClawSidecar, error) 
 		transport:        transport,
 		driver:           config.Driver,
 		store:            store,
-		logger:           logger.With("component", "openclaw-soulfactory-sidecar"),
-		now:              firstNowFunc(config.Now),
-		methods:          methods,
-		capabilityTags:   append(nostr.Tags{}, config.CapabilityAdditionalTags...),
+		logger:           logger.With(zap.String("component", "openclaw-soulfactory-sidecar")),
+
+		now:            firstNowFunc(config.Now),
+		methods:        methods,
+		capabilityTags: append(nostr.Tags{}, config.CapabilityAdditionalTags...),
 	}, nil
 }
 
@@ -496,14 +498,17 @@ func (s *OpenClawSidecar) subscribeAndConsume(ctx context.Context, filters []nos
 		case <-backfillDeadline.C:
 			if eose != nil {
 				err := sub.StoredEventsIncomplete(context.DeadlineExceeded)
-				s.logger.Warn("OpenClaw SoulFactory sidecar backfill still incomplete", "error", err)
+				s.logger.Warn("OpenClaw SoulFactory sidecar backfill still incomplete", zap.Error(err))
+
 				s.setReadinessError(err)
 			}
 		case <-eose:
 			eose = nil
 			if err := sub.StoredEventsIncomplete(nil); err != nil {
-				// A relay CLOSED the REQ: control requests it holds are unseen.
-				s.logger.Warn("OpenClaw SoulFactory sidecar backfill incomplete", "error", err)
+				s.logger.
+					// A relay CLOSED the REQ: control requests it holds are unseen.
+					Warn("OpenClaw SoulFactory sidecar backfill incomplete", zap.Error(err))
+
 				s.setReadinessError(err)
 				continue
 			}
@@ -512,7 +517,8 @@ func (s *OpenClawSidecar) subscribeAndConsume(ctx context.Context, filters []nos
 		case event, ok := <-sub.Events:
 			if !ok {
 				if gaveUp := sub.GaveUp(); gaveUp != nil {
-					s.logger.Error("OpenClaw SoulFactory sidecar subscription gave up â waiting for topology change", "error", gaveUp)
+					s.logger.Error("OpenClaw SoulFactory sidecar subscription gave up â waiting for topology change", zap.NamedError("error", gaveUp))
+
 					s.setReadinessError(gaveUp)
 					if tn, ok := s.transport.(topologyNotifier); ok {
 						if err := tn.WaitForTopologyChange(ctx); err != nil {
@@ -535,7 +541,8 @@ func (s *OpenClawSidecar) subscribeAndConsume(ctx context.Context, filters []nos
 				_, err = s.HandleControlEvent(ctx, event)
 			}
 			if err != nil {
-				s.logger.Warn("OpenClaw SoulFactory request rejected or failed", "event", event.ID, "error", err)
+				s.logger.Warn("OpenClaw SoulFactory request rejected or failed", zap.Any("event", event.ID), zap.Error(err))
+
 			}
 		}
 	}
