@@ -195,7 +195,7 @@ func TestAuthInspectUsesNostrSigner(t *testing.T) {
 }
 
 func TestParseAdoptionTargets(t *testing.T) {
-	targets, err := parseAdoptionTargets([]string{"local", "prod=prod-docker"}, nil, []string{"local=dev", "prod=prod"})
+	targets, err := parseAdoptionTargets([]string{"local", "prod=prod-docker"}, []string{"local=dev", "prod=prod"})
 	if err != nil {
 		t.Fatalf("parseAdoptionTargets returned error: %v", err)
 	}
@@ -206,21 +206,26 @@ func TestParseAdoptionTargets(t *testing.T) {
 		t.Fatalf("endpoint_ref not parsed: %#v", targets[1])
 	}
 
-	if _, err := parseAdoptionTargets([]string{"local", "local=other"}, nil, nil); err == nil {
+	if _, err := parseAdoptionTargets([]string{"local", "local=other"}, nil); err == nil {
 		t.Fatal("expected duplicate alias error")
 	}
-	if _, err := parseAdoptionTargets([]string{"Local", "local=other"}, nil, nil); err == nil {
+	if _, err := parseAdoptionTargets([]string{"Local", "local=other"}, nil); err == nil {
 		t.Fatal("expected normalized duplicate alias error")
 	}
-	if _, err := parseAdoptionTargets([]string{"local"}, nil, []string{"missing=prod"}); err == nil {
+	if _, err := parseAdoptionTargets([]string{"local"}, []string{"missing=prod"}); err == nil {
 		t.Fatal("expected unmatched environment alias error")
 	}
-	raw, err := parseAdoptionTargets(nil, []string{"local=unix:///docker.sock"}, nil)
-	if err != nil {
-		t.Fatalf("parse raw targets returned error: %v", err)
+
+}
+
+func TestAdoptionCommandsDoNotExposeRawTargets(t *testing.T) {
+	for _, command := range adoptCommands().Commands() {
+		if command.Flags().Lookup("raw-target") != nil {
+			t.Errorf("%s still exposes --raw-target", command.Name())
+		}
 	}
-	if len(raw) != 1 || raw[0].DockerHost != "unix:///docker.sock" || raw[0].EndpointRef != "" {
-		t.Fatalf("unexpected raw targets: %#v", raw)
+	if _, err := parseAdoptionTargets(nil, nil); err == nil {
+		t.Fatal("adoption requires a managed endpoint target")
 	}
 }
 

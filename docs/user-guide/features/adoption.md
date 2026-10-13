@@ -31,10 +31,11 @@ bahia adopt import --org "$ORG" --target prod=prod-docker --select prod/<contain
 adoption:
   enabled: true
   allowed_pubkeys: ["<operator-hex-pubkey>"]   # required; scans and imports are refused otherwise
-  allow_raw_docker_hosts: false                # permit --raw-target alias=dockerHost
 ```
 
-The signer must be listed in `adoption.allowed_pubkeys`. Server-managed endpoint references are the normal target form; raw Docker hosts are accepted only when `allow_raw_docker_hosts` is set. Adoption works with any service signer (`nostr.signer`: local, NIP-46 or NIP-55L).
+The signer must be listed in `adoption.allowed_pubkeys`. Signed adoption uses
+server-managed endpoint references; raw Docker hosts are not accepted. Adoption
+works with any service signer (`nostr.signer`: local, NIP-46 or NIP-55L).
 
 ## Related
 
