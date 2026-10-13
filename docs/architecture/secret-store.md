@@ -190,6 +190,13 @@ hash-chained audit entry; a success that cannot be audited is rolled back.
 ContextVM is interactive RPC here, as AGENTS.md allows: the daemon asks for a
 value and gets it back; no state is read through it.
 
+The Soul Factory Signet management client uses the same 49-hour reply reach.
+Each provisioner bunker connection owns one reply subscription, with a 49-hour
+resume overlap; after EOSE, JSON-RPC ids route replies to concurrent calls.
+Event ids are deduplicated across subscription reopens, and a call never opens
+its own history REQ. The subscription must be caught up before publishing a
+management request, including requests whose replies are NIP-59-backdated.
+
 ### Wire contract
 
 - Request: a kind-14 rumor `{"jsonrpc":"2.0","id":"<random>","method":"credential/inspect"|"credential/deliver"|"credential/list","params":{…}}`

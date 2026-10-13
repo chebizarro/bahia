@@ -93,6 +93,7 @@ type Client struct {
 	mu                   sync.Mutex
 	bunker               *nostrout.Bunker     // Active admission-gated NIP-46 connection
 	management           *nostrpool.RelayPool // Management plane of the active connection
+	managementReplies    *managementReplyStream
 	agents               map[string]*AgentIdentity
 	connected            bool
 	lifetime             context.Context
@@ -225,8 +226,27 @@ func (c *Client) Connect(ctx context.Context) error {
 		return fmt.Errorf("bunker ping failed: %w", err)
 	}
 
+	provisionerPK, err := bunker.GetPublicKey(connectCtx)
+	if err != nil {
+		return fmt.Errorf("get Signet provisioner pubkey: %w", err)
+	}
+	management := c.newManagementPool(bunker)
+	var replies *managementReplyStream
+	if management != nil {
+		bunkerPubkey, _, _, err := ParseBunkerURI(bunkerURI)
+		if err != nil {
+			management.Close()
+			return err
+		}
+		signetPK, err := nostr.PubKeyFromHex(bunkerPubkey)
+		if err != nil {
+			management.Close()
+			return fmt.Errorf("decode Signet bunker pubkey: %w", err)
+		}
+		replies = newManagementReplyStream(connectCtx, management, bunker, signetPK, provisionerPK, c.logger)
+	}
 	c.setConnection(bunker, connectCtx, cancelConnect, true)
-	c.replaceManagementPool(c.newManagementPool(bunker))
+	c.replaceManagementPool(management, replies)
 	installed = true
 
 	c.logger.Info("connected to Signet bunker")
@@ -334,11 +354,16 @@ func (c *Client) newManagementPool(bunker *nostrout.Bunker) *nostrpool.RelayPool
 
 // replaceManagementPool installs the active connection's management pool and
 // closes the previous one.
-func (c *Client) replaceManagementPool(pool *nostrpool.RelayPool) {
+func (c *Client) replaceManagementPool(pool *nostrpool.RelayPool, replies *managementReplyStream) {
 	c.mu.Lock()
 	previous := c.management
+	previousReplies := c.managementReplies
 	c.management = pool
+	c.managementReplies = replies
 	c.mu.Unlock()
+	if previousReplies != nil {
+		previousReplies.Close()
+	}
 	if previous != nil {
 		previous.Close()
 	}
@@ -941,8 +966,7 @@ type signetJSONRPCResponse struct {
 }
 
 func consumeSignetManagementResponse(requestID string, resp signetJSONRPCResponse, out interface{}) (bool, error) {
-	// A management subscription intentionally includes up to twelve hours of
-	// NIP-59 history. Correlate before interpreting either an error or result so
+	// Correlate before interpreting either an error or result so
 	// a terminal response for an older request cannot abort the current one.
 	if resp.ID != requestID {
 		return false, nil
@@ -960,28 +984,16 @@ func consumeSignetManagementResponse(requestID string, resp signetJSONRPCRespons
 }
 
 func (c *Client) callManagement(ctx context.Context, method string, params map[string]interface{}, out interface{}) error {
-	bunkerPubkey, _, _, err := ParseBunkerURI(c.bunkerURI)
-	if err != nil {
-		return err
-	}
-	if len(c.managementRelays) == 0 {
-		return fmt.Errorf("signet management relays are required")
-	}
-	bunkerPK, err := nostr.PubKeyFromHex(bunkerPubkey)
-	if err != nil {
-		return fmt.Errorf("decode Signet bunker pubkey: %w", err)
-	}
 	c.mu.Lock()
 	bunker := c.bunker
 	management := c.management
+	replies := c.managementReplies
 	c.mu.Unlock()
-	if bunker == nil || management == nil {
+	if bunker == nil || management == nil || replies == nil {
 		return ErrNotConnected
 	}
-	provisionerPK, err := bunker.GetPublicKey(ctx)
-	if err != nil {
-		return fmt.Errorf("get Signet provisioner pubkey: %w", err)
-	}
+	bunkerPK := replies.signetPK
+	provisionerPK := replies.provisioner
 
 	requestID := nostrutil.GeneratePrivateKeyHex()[:16]
 	body, err := json.Marshal(signetJSONRPCRequest{
@@ -1038,74 +1050,54 @@ func (c *Client) callManagement(ctx context.Context, method string, params map[s
 		return fmt.Errorf("sign Signet management gift-wrap: %w", err)
 	}
 
-	// Subscribe before publishing. Signet can answer immediately, and creating
-	// the response subscription afterwards loses that reply on fast relays.
-	responses, err := management.SubscribeAllWithEOSE(ctx, []nostr.Filter{{
-		Kinds: []nostr.Kind{signetKindGiftWrap},
-		Tags:  nostr.TagMap{"p": []string{provisionerPK.Hex()}},
-		// NIP-59 deliberately backdates gift-wrap timestamps (go-nostr uses a
-		// window of up to ten hours). Correlation by the private JSON-RPC id
-		// below makes a wider history window safe and prevents a freshly
-		// published Signet response from being filtered out as "old".
-		Since: nostr.Now() - 12*60*60,
-	}})
+	// The connection-scoped subscription is caught up before this request is
+	// published, so a fast or backdated reply cannot fall between REQ and EVENT.
+	response, unregister, err := replies.register(ctx, requestID)
 	if err != nil {
-		return fmt.Errorf("subscribe to Signet management replies: %w", err)
+		return err
 	}
-	defer responses.Close()
+	defer unregister()
 
-	// Publishing is transport, not request/response flow control. A relay OK is
-	// useful telemetry, but waiting for one before consuming the already-live
-	// response subscription can deadlock indefinitely on otherwise functional
-	// pub/sub relays. The pool collects every relay's OK in the background; the
-	// correlated Signet response below is the operation's completion signal.
+	published := make(chan error, 1)
 	go func() {
-		results, _ := management.PublishWithResults(ctx, gift)
+		results, publishErr := management.PublishWithResults(ctx, gift)
+		accepted := false
 		for _, result := range results {
 			if result.Accepted || result.IsDuplicate() {
+				accepted = true
 				continue
 			}
 			c.logger.Warn("signet management relay rejected publish",
-				"relay", result.RelayURL,
-				"reason", result.Reason,
-				"error", result.Error,
-			)
+				"relay", result.RelayURL, "reason", result.Reason, "error", result.Error)
 		}
+		if !accepted {
+			if publishErr != nil {
+				published <- fmt.Errorf("no relay accepted Signet management request: %w", publishErr)
+			} else {
+				published <- errors.New("no relay accepted Signet management request")
+			}
+			return
+		}
+		published <- nil
 	}()
 
-	for relayEvent := range responses.Events {
-		sealJSON, err := bunker.NIP44Decrypt(ctx, relayEvent.PubKey, relayEvent.Content)
-		if err != nil {
-			continue
+	for {
+		select {
+		case reply := <-response:
+			if reply.err != nil {
+				return reply.err
+			}
+			_, err := consumeSignetManagementResponse(requestID, reply.response, out)
+			return err
+		case err := <-published:
+			if err != nil {
+				return err
+			}
+			published = nil
+		case <-ctx.Done():
+			return fmt.Errorf("await Signet management response: %w", ctx.Err())
 		}
-		var responseSeal nostr.Event
-		if err := json.Unmarshal([]byte(sealJSON), &responseSeal); err != nil ||
-			!responseSeal.VerifySignature() || responseSeal.PubKey != bunkerPK {
-			continue
-		}
-		rumorJSON, err := bunker.NIP44Decrypt(ctx, responseSeal.PubKey, responseSeal.Content)
-		if err != nil {
-			continue
-		}
-		var rumor nostr.Event
-		if err := json.Unmarshal([]byte(rumorJSON), &rumor); err != nil {
-			continue
-		}
-		rumor.PubKey = responseSeal.PubKey
-		var resp signetJSONRPCResponse
-		if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil {
-			continue
-		}
-		matched, err := consumeSignetManagementResponse(requestID, resp, out)
-		if !matched {
-			continue
-		}
-		return err
 	}
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("await Signet management response: %w", err)
-	}
-	return fmt.Errorf("await Signet management response: subscription closed")
 }
 
 // --- NIP-98 Auth Helpers ---
@@ -1164,7 +1156,7 @@ func (c *Client) Close() error {
 		cancelLifetime()
 	}
 
-	c.replaceManagementPool(nil)
+	c.replaceManagementPool(nil, nil)
 	c.logger.Info("signet client closed")
 	return nil
 }

@@ -30,11 +30,12 @@ var (
 // fakeSignet is an in-process Signet: a NIP-46 bunker and its gift-wrapped
 // ContextVM management plane, both served over a RelayPool.
 type fakeSignet struct {
-	key     nostr.SecretKey
-	signer  nip46.StaticKeySigner
-	pool    *nostrpool.RelayPool
-	mu      sync.Mutex
-	methods []string
+	key      nostr.SecretKey
+	signer   nip46.StaticKeySigner
+	pool     *nostrpool.RelayPool
+	mu       sync.Mutex
+	methods  []string
+	decrypts int
 }
 
 func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSignet {
@@ -62,7 +63,13 @@ func startFakeSignet(t *testing.T, ctx context.Context, relayURL string) *fakeSi
 			var err error
 			switch ev.Kind {
 			case nostr.KindNostrConnect:
-				_, _, reply, err = s.signer.HandleRequest(ctx, *ev)
+				request, _, handledReply, handledErr := s.signer.HandleRequest(ctx, *ev)
+				reply, err = handledReply, handledErr
+				if err == nil && request.Method == "nip44_decrypt" {
+					s.mu.Lock()
+					s.decrypts++
+					s.mu.Unlock()
+				}
 			case signetKindGiftWrap:
 				reply, err = s.answerManagement(*ev)
 			default:
@@ -84,6 +91,12 @@ func (s *fakeSignet) seenMethods() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.methods...)
+}
+
+func (s *fakeSignet) decryptCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.decrypts
 }
 
 // answerManagement unwraps a NIP-59 management request and gift-wraps a
@@ -147,7 +160,8 @@ func (s *fakeSignet) answerManagement(gift nostr.Event) (nostr.Event, error) {
 	if err != nil {
 		return nostr.Event{}, err
 	}
-	reply := nostr.Event{Kind: signetKindGiftWrap, Content: giftContent, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"p", provisioner.Hex()}}}
+	// Signet NIP-59 gift wraps can be backdated by up to 48 hours.
+	reply := nostr.Event{Kind: signetKindGiftWrap, Content: giftContent, CreatedAt: nostr.Timestamp(time.Now().Add(-47 * time.Hour).Unix()), Tags: nostr.Tags{{"p", provisioner.Hex()}}}
 	return reply, reply.Sign(nonce)
 }
 
@@ -202,7 +216,26 @@ func TestSignetManagementRunsOnRelayPoolWithRecipientAuth(t *testing.T) {
 		if err := client.RevokeAgent(ctx, nostr.Generate().Public().Hex()); err != nil {
 			t.Fatalf("round %d: agent/revoke: %v", round, err)
 		}
-		if got := signet.seenMethods(); len(got) != round || got[round-1] != "agent/revoke" {
+		beforeSecond := signet.decryptCount()
+		authMu.Lock()
+		readersBeforeSecond := len(giftReaders)
+		authMu.Unlock()
+		if err := client.RevokeAgent(ctx, nostr.Generate().Public().Hex()); err != nil {
+			t.Fatalf("round %d: second agent/revoke: %v", round, err)
+		}
+		// Request and reply are both addressed to the same provisioner in this
+		// fake, so each new round trip requires four NIP-46 decrypts. Replaying
+		// the first call's history would add four more.
+		if got := signet.decryptCount() - beforeSecond; got != 4 {
+			t.Fatalf("round %d: second call needed %d decrypts, want 4 without history replay", round, got)
+		}
+		authMu.Lock()
+		readersAfterSecond := len(giftReaders)
+		authMu.Unlock()
+		if readersAfterSecond != readersBeforeSecond {
+			t.Fatalf("round %d: second call opened another reply REQ", round)
+		}
+		if got := signet.seenMethods(); len(got) != 2*round || got[2*round-2] != "agent/revoke" || got[2*round-1] != "agent/revoke" {
 			t.Fatalf("round %d: Signet saw %v", round, got)
 		}
 		// What ConnectionManager does when a connection is lost.
