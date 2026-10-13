@@ -165,7 +165,8 @@ func (s *configCLIState) sync(cmd *cobra.Command, requireFresh bool) error {
 		if requireFresh {
 			return fmt.Errorf("cannot publish config without EOSE from every configured relay; local version history may be stale")
 		}
-		fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay config data may be stale (no EOSE within timeout)")
+		// Advisory status is best-effort; it does not affect the signed result.
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay config data may be stale (no EOSE within timeout)")
 	}
 	return nil
 }

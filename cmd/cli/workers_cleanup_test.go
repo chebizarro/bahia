@@ -82,9 +82,13 @@ func TestWorkersCleanupOrphansDryRunViaEntryPoint(t *testing.T) {
 		out := cmd.OutOrStdout()
 		for _, r := range results {
 			if dryRun {
-				fmt.Fprintf(out, "would delete d=%s (event %s)\n", r.DTag, r.EventID)
+				if _, err := fmt.Fprintf(out, "would delete d=%s (event %s)\n", r.DTag, r.EventID); err != nil {
+					return err
+				}
 			} else {
-				fmt.Fprintf(out, "deleted d=%s (event %s, deletion %s)\n", r.DTag, r.EventID, r.DeletionID)
+				if _, err := fmt.Fprintf(out, "deleted d=%s (event %s, deletion %s)\n", r.DTag, r.EventID, r.DeletionID); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -141,7 +145,9 @@ func TestWorkersCleanupOrphansApplyFlagViaEntryPoint(t *testing.T) {
 		}
 		out := cmd.OutOrStdout()
 		for _, r := range results {
-			fmt.Fprintf(out, "deleted d=%s (deletion %s)\n", r.DTag, r.DeletionID)
+			if _, err := fmt.Fprintf(out, "deleted d=%s (deletion %s)\n", r.DTag, r.DeletionID); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -219,7 +225,9 @@ func TestWorkersCleanupOrphansWithKeyFile(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "found %d orphans\n", len(results))
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "found %d orphans\n", len(results)); err != nil {
+			return err
+		}
 		return nil
 	}
 

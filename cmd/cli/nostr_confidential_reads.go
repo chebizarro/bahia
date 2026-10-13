@@ -98,7 +98,8 @@ func readCLIConfidentialRecords[T any](cmd *cobra.Command, family int, include .
 	if err != nil {
 		return nil, 0, err
 	}
-	defer nc.Close()
+	// Read-only client cleanup is best-effort after query completion.
+	defer func() { _ = nc.Close() }()
 	envelopes, envelopeResult, err := nc.SyncAndQueryFamily(cmd.Context(), kinds.OrgKeyEnvelope)
 	if err != nil {
 		return nil, 0, fmt.Errorf("sync key envelopes: %w", err)
@@ -108,7 +109,8 @@ func readCLIConfidentialRecords[T any](cmd *cobra.Command, family int, include .
 		return nil, 0, fmt.Errorf("sync confidential state: %w", err)
 	}
 	if !envelopeResult.Fresh || !familyResult.Fresh {
-		fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
+		// Advisory status is best-effort; it does not affect the signed result.
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
 	}
 	reader, err := client.NewConfidentialReader(cmd.Context(), signer, servicePubkey, envelopes)
 	if err != nil {
@@ -145,16 +147,16 @@ func readCLIConfidentialRecords[T any](cmd *cobra.Command, family int, include .
 	return records, unreadable, nil
 }
 
-func showUnreadable(cmd *cobra.Command, unreadable, readable int) bool {
+func showUnreadable(cmd *cobra.Command, unreadable, readable int) (bool, error) {
 	if unreadable == 0 {
-		return false
+		return false, nil
 	}
 	if readable == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), "not readable with this key")
-		return true
+		_, err := fmt.Fprintln(cmd.OutOrStdout(), "not readable with this key")
+		return true, err
 	}
-	fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d record(s) not readable with this key\n", unreadable)
-	return false
+	_, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d record(s) not readable with this key\n", unreadable)
+	return false, err
 }
 
 func listCLIOrgs(cmd *cobra.Command) error {
@@ -163,7 +165,11 @@ func listCLIOrgs(cmd *cobra.Command) error {
 		return err
 	}
 	sort.Slice(orgs, func(i, j int) bool { return orgs[i].ID.String() < orgs[j].ID.String() })
-	if showUnreadable(cmd, unreadable, len(orgs)) {
+	shown, err := showUnreadable(cmd, unreadable, len(orgs))
+	if err != nil {
+		return err
+	}
+	if shown {
 		return nil
 	}
 	return renderCLIOrgs(orgs)
@@ -189,7 +195,11 @@ func getCLIOrg(cmd *cobra.Command, idOrName string) error {
 			return outputSingle(&orgs[i])
 		}
 	}
-	if showUnreadable(cmd, unreadable, 0) {
+	shown, err := showUnreadable(cmd, unreadable, 0)
+	if err != nil {
+		return err
+	}
+	if shown {
 		return nil
 	}
 	return fmt.Errorf("organization %s not found", idOrName)
@@ -213,7 +223,11 @@ func listCLIOrgMembers(cmd *cobra.Command, orgID string) error {
 		}
 	}
 	sort.Slice(members, func(i, j int) bool { return members[i].Pubkey < members[j].Pubkey })
-	if showUnreadable(cmd, unreadable, len(members)) {
+	shown, err := showUnreadable(cmd, unreadable, len(members))
+	if err != nil {
+		return err
+	}
+	if shown {
 		return nil
 	}
 	return renderCLIOrgMembers(members)
@@ -250,7 +264,11 @@ func listCLISecrets(cmd *cobra.Command, serviceID string) error {
 		}
 	}
 	sort.Slice(secrets, func(i, j int) bool { return secrets[i].Name < secrets[j].Name })
-	if showUnreadable(cmd, unreadable, len(secrets)) {
+	shown, err := showUnreadable(cmd, unreadable, len(secrets))
+	if err != nil {
+		return err
+	}
+	if shown {
 		return nil
 	}
 	return renderCLISecrets(secrets)
@@ -283,7 +301,11 @@ func listCLINotificationChannels(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if showUnreadable(cmd, unreadable, len(visible)) {
+	shown, err := showUnreadable(cmd, unreadable, len(visible))
+	if err != nil {
+		return err
+	}
+	if shown {
 		return nil
 	}
 	channels := make([]map[string]any, 0, len(visible))
@@ -317,7 +339,11 @@ func getCLINotificationChannel(cmd *cobra.Command, id string) error {
 			return outputSingle(metadata)
 		}
 	}
-	if showUnreadable(cmd, unreadable, 0) {
+	shown, err := showUnreadable(cmd, unreadable, 0)
+	if err != nil {
+		return err
+	}
+	if shown {
 		return nil
 	}
 	return fmt.Errorf("notification channel %s not found", id)

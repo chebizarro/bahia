@@ -89,7 +89,11 @@ func TestCLIRequestIntentsMatchD79Fixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	entries, err := outbox.ListEntries([]string{localstore.OutboxPending}, 10)
 	if err != nil {
 		t.Fatal(err)

@@ -157,14 +157,16 @@ func publishCLIIntentWithResult(cmd *cobra.Command, request client.PublishIntent
 	if err != nil {
 		return fmt.Errorf("open CLI outbox: %w", err)
 	}
-	defer outbox.Close()
+	// Committed outbox operations determine the result; close is best-effort.
+	defer func() { _ = outbox.Close() }()
 	if _, err := outbox.Enqueue(localstore.OutboxEntry{
 		Event: prepared.Event, Target: strings.Join(relays, ","),
 		EntityType: request.Domain, EntityID: request.Coordinate,
 	}); err != nil {
 		return fmt.Errorf("enqueue intent: %w", err)
 	}
-	fmt.Fprintln(cmd.ErrOrStderr(), "→ intent queued; publishing and waiting for status...")
+	// Advisory status is best-effort; it does not affect the signed result.
+	_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "→ intent queued; publishing and waiting for status...")
 	result, err := publisher.PublishAndWait(cmd.Context(), prepared)
 	if err != nil {
 		return fmt.Errorf("publish intent_id=%s event_id=%s: %w", prepared.IntentID, prepared.EventID, err)

@@ -39,7 +39,8 @@ func (relay *statePolicyRelay) serve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.CloseNow()
+	// The peer may close this test socket first.
+	defer func() { _ = conn.CloseNow() }()
 	for {
 		_, message, err := conn.Read(r.Context())
 		if err != nil {

@@ -40,7 +40,8 @@ func readCLIWorkerEvents(cmd *cobra.Command, extraAuthor string) ([]nostr.Event,
 	if err != nil {
 		return nil, nil, fmt.Errorf("create Nostr client: %w", err)
 	}
-	defer nc.Close()
+	// Read-only client cleanup is best-effort after query completion.
+	defer func() { _ = nc.Close() }()
 	states, stateFresh, err := nc.SyncAndQueryWorkerFamilies(cmd.Context())
 	if err != nil {
 		return nil, nil, fmt.Errorf("sync worker state: %w", err)
@@ -69,7 +70,8 @@ func readCLIWorkerEvents(cmd *cobra.Command, extraAuthor string) ([]nostr.Event,
 		return nil, nil, fmt.Errorf("sync worker advertisements: %w", err)
 	}
 	if !stateFresh.Fresh || !adFresh.Fresh {
-		fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
+		// Advisory status is best-effort; it does not affect the signed result.
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
 	}
 	return states, adverts, nil
 }

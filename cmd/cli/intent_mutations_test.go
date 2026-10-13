@@ -331,7 +331,11 @@ func TestCLIServiceEnvironmentIntentPipeline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	entries, err := outbox.ListEntries([]string{localstore.OutboxPublished}, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +372,11 @@ func TestCLIIntentRejectionAndTimeoutRemainInspectable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pending, err := outbox.ListEntries([]string{localstore.OutboxPending}, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +407,11 @@ func TestCLIIntentNoRelayExit3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	failed, err := outbox.ListEntries([]string{localstore.OutboxFailed}, 10)
 	if err != nil || len(failed) != 1 {
 		t.Fatalf("failed outbox entries = %#v, %v", failed, err)
@@ -418,7 +430,11 @@ func TestCLIIntentRelayTransportFailureStaysPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	pending, err := outbox.ListEntries([]string{localstore.OutboxPending}, 10)
 	if err != nil || len(pending) != 1 {
 		t.Fatalf("pending outbox entries = %#v, %v", pending, err)
