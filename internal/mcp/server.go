@@ -1683,10 +1683,6 @@ func (s *Server) InvokeTool(ctx context.Context, name string, arguments map[stri
 	return s.CallTool(ctx, name, arguments)
 }
 
-func signerFirstMCPMutationUnavailable(toolName, method string) *ToolResult {
-	return errorResult(fmt.Sprintf("%s is not available as a direct registry mutation; publish a signed ContextVM/Nostr %s command with an operator signer instead", toolName, method))
-}
-
 func normalizePubkeys(pubkeys []string) []string {
 	normalized := make([]string, 0, len(pubkeys))
 	for _, pubkey := range pubkeys {
@@ -1804,10 +1800,6 @@ func (s *Server) authorizeServicePermission(ctx context.Context, serviceID uuid.
 		return errorResult("access denied")
 	}
 	return nil
-}
-
-func (s *Server) authorizeSecretPermission(ctx context.Context, serviceID uuid.UUID, permission domain.Permission) *ToolResult {
-	return s.authorizeServicePermission(ctx, serviceID, permission, "secret")
 }
 
 func (s *Server) authorizeBuildPermission(ctx context.Context, buildID uuid.UUID, permission domain.Permission) (*domain.Build, *ToolResult) {
@@ -2010,21 +2002,6 @@ func mcpCreateEntityIDSchema(entity string) map[string]interface{} {
 		"description": "Optional client-minted " + entity + " id: a canonical lowercase UUIDv7 (or v4). Omit to mint one; the result echoes it. " +
 			"To retry a create, pass the returned id with the same arguments: the same id and content replays the create, the same id with different content is rejected (JSON-RPC -32010).",
 	}
-}
-
-// mcpCreateEntityID returns a create tool's entity id: the
-// caller's `id` argument, which must be a canonical UUIDv7 (or v4), or a
-// freshly minted UUIDv7. The id is part of the derived idempotency key, so a
-// retry that passes back the returned id (and the same arguments) is replayed
-// by the control plane, and one without it is a new create, never a request
-// fingerprint conflict.
-func mcpCreateEntityID(args map[string]interface{}) (uuid.UUID, *ToolResult) {
-	raw, _ := args["id"].(string)
-	id, _, err := domain.ResolveCreateEntityID(raw)
-	if err != nil {
-		return uuid.Nil, errorResult(fmt.Sprintf("invalid id: %v", err))
-	}
-	return id, nil
 }
 
 func (s *Server) handleUpdateService(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
@@ -2293,14 +2270,6 @@ func (s *Server) handleToolDenylistRemove(ctx context.Context, args map[string]i
 
 // --- Helper Functions ---
 
-func decodeToolArgs(args map[string]interface{}, out interface{}) error {
-	data, err := json.Marshal(args)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, out)
-}
-
 func limitOffsetArgs(args map[string]interface{}, defaultLimit int) (int, int) {
 	limit := defaultLimit
 	offset := 0
@@ -2356,14 +2325,6 @@ func llmReleaseToMap(release *domain.LLMRelease) map[string]interface{} {
 		"metadata":            release.Metadata,
 		"created_at":          release.CreatedAt.Format("2006-01-02T15:04:05Z"),
 	}
-}
-
-func optionalStringPointerArg(args map[string]interface{}, name string) *string {
-	value, ok := args[name].(string)
-	if !ok {
-		return nil
-	}
-	return &value
 }
 
 func jsonResult(data interface{}) (*ToolResult, error) {
@@ -2912,37 +2873,6 @@ func (s *Server) handleDeletePolicy(ctx context.Context, args map[string]interfa
 
 func (s *Server) handleEvaluatePolicy(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return s.invokeIntentWrite(ctx, "bahia_evaluate_policy", args)
-}
-
-func optionalPolicyUUIDArg(args map[string]interface{}, key string) (*uuid.UUID, *ToolResult) {
-	value := strings.TrimSpace(stringArg(args, key))
-	if value == "" {
-		return nil, nil
-	}
-	parsed, err := uuid.Parse(value)
-	if err != nil {
-		return nil, errorResult(fmt.Sprintf("invalid %s: %v", key, err))
-	}
-	return &parsed, nil
-}
-
-func policyRulesArg(args map[string]interface{}) ([]domain.PolicyRule, *ToolResult) {
-	rulesRaw, ok := args["rules"]
-	if !ok {
-		return nil, errorResult("rules is required")
-	}
-	rulesJSON, err := json.Marshal(rulesRaw)
-	if err != nil {
-		return nil, errorResult(fmt.Sprintf("failed to marshal rules: %v", err))
-	}
-	var rules []domain.PolicyRule
-	if err := json.Unmarshal(rulesJSON, &rules); err != nil {
-		return nil, errorResult(fmt.Sprintf("failed to parse rules: %v", err))
-	}
-	if len(rules) == 0 {
-		return nil, errorResult("at least one rule is required")
-	}
-	return rules, nil
 }
 
 func policiesToMaps(policies []domain.DeploymentPolicy) []map[string]interface{} {

@@ -235,21 +235,6 @@ func newTestMCPDeploymentServer(t *testing.T, protected bool) *deploymentTestFix
 	}
 }
 
-func (f *deploymentTestFixture) addArtifact(id uuid.UUID, digest string) uuid.UUID {
-	if id == uuid.Nil {
-		id = uuid.New()
-	}
-	f.artifacts.artifacts[id] = &domain.Artifact{
-		ID:          id,
-		ServiceID:   f.serviceID,
-		ImageRepo:   "registry.example.com/api",
-		ImageTag:    "latest",
-		ImageDigest: digest,
-		ScanStatus:  domain.ScanStatusClean,
-	}
-	return id
-}
-
 func TestGetTools_IncludesDeploymentWorkflowTools(t *testing.T) {
 	fixture := newTestMCPDeploymentServer(t, false)
 	tools := fixture.server.GetTools()

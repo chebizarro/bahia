@@ -84,7 +84,7 @@ func TestOutboxStatusNilOutbox(t *testing.T) {
 func TestOutboxRetryRequeuesFailedEntry(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	sk := nostr.Generate()
 	ev := nostr.Event{Kind: 30900, CreatedAt: 100, Tags: nostr.Tags{{"d", "x"}}, Content: "{}"}
 	require.NoError(t, ev.Sign(sk))

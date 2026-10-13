@@ -139,7 +139,7 @@ func TestMCPBackupRunRetainedPendingCannotClaimPendingWhileIntakePaused(t *testi
 	require.NoError(t, err)
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	var expiresAt time.Time
 	for _, tag := range event.Tags {
 		if len(tag) == 2 && tag[0] == "expiration" {

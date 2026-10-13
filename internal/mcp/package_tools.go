@@ -2,10 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-
-	"github.com/openagentsinc/bahia/internal/domain"
 )
 
 func packageToolDefinitions() []Tool {
@@ -83,20 +79,4 @@ func (s *Server) handlePackageYank(ctx context.Context, args map[string]interfac
 
 func (s *Server) handlePackageDriftDetect(ctx context.Context, args map[string]interface{}) (*ToolResult, error) {
 	return s.invokeIntentWrite(ctx, "bahia_package_drift_detect", args)
-}
-
-func packagePolicyArg(args map[string]interface{}) (domain.PackageRepositoryPolicy, error) {
-	var policy domain.PackageRepositoryPolicy
-	raw, ok := args["policy"]
-	if !ok || raw == nil {
-		return policy, nil
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return policy, err
-	}
-	if err := json.Unmarshal(b, &policy); err != nil {
-		return policy, fmt.Errorf("policy must match package repository policy schema: %w", err)
-	}
-	return policy, nil
 }

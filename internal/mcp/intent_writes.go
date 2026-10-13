@@ -617,21 +617,27 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 			return w, fmt.Errorf("reason is required")
 		}
 		w = intentWrite{domain: "tool", op: "approval-response", coordinate: "tool-approval:" + id.String(), content: map[string]any{"intent_id": id.String(), "action": action, "reason": reason}, statusOnly: true}
-		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindToolProvisionIntentState, "id", id.String())
+		// Owner projection is best-effort for status-only writes; the unsigned intent
+		// must still reach the operator-signature rejection path.
+		w.orgID, _ = s.intentOrgFromState(ctx, args, nostrpool.KindToolProvisionIntentState, "id", id.String())
 	case "bahia_verify_signatures":
 		id, e := parseRequiredUUIDArg(args, "artifact_id")
 		if e != nil {
 			return w, e
 		}
 		w = intentWrite{domain: "artifact", op: "signature-verify", coordinate: "artifact:" + id.String(), content: map[string]any{"artifact_id": id.String()}, statusOnly: true}
-		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindArtifactRegistry, "id", id.String())
+		// Owner projection is best-effort for status-only writes; the unsigned intent
+		// must still reach the operator-signature rejection path.
+		w.orgID, _ = s.intentOrgFromState(ctx, args, nostrpool.KindArtifactRegistry, "id", id.String())
 	case "bahia_test_notification_channel":
 		id, e := parseRequiredUUIDArg(args, "channel_id")
 		if e != nil {
 			return w, e
 		}
 		w = intentWrite{domain: "notification", op: "channel-test", coordinate: id.String(), content: map[string]any{"id": id.String()}, statusOnly: true}
-		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindNotificationChannelRegistry, "id", id.String())
+		// Owner projection is best-effort for status-only writes; the unsigned intent
+		// must still reach the operator-signature rejection path.
+		w.orgID, _ = s.intentOrgFromState(ctx, args, nostrpool.KindNotificationChannelRegistry, "id", id.String())
 	case "bahia_ingest_sbom":
 		id, e := parseRequiredUUIDArg(args, "artifact_id")
 		if e != nil {
@@ -653,7 +659,9 @@ func (s *Server) intentWriteForTool(ctx context.Context, name string, args map[s
 			return w, e
 		}
 		w = intentWrite{domain: "sbom", op: "import", coordinate: "sbom-import:" + intentID, statusOnly: true, content: map[string]any{"idempotencyKey": intentID, "subject": map[string]any{"type": "artifact", "id": id.String(), "digest": stringFromRecord(artifact.Fields, "image_digest")}, "format": parsed.SBOM.Format, "payloadBase64": base64.StdEncoding.EncodeToString(data), "storage": "blossom", "generator": map[string]any{"id": "import"}}}
-		w.orgID, err = s.intentOrgFromState(ctx, args, nostrpool.KindArtifactRegistry, "id", id.String())
+		// Owner projection is best-effort for status-only writes; the unsigned intent
+		// must still reach the operator-signature rejection path.
+		w.orgID, _ = s.intentOrgFromState(ctx, args, nostrpool.KindArtifactRegistry, "id", id.String())
 	case "bahia_register_artifact":
 		id, e := mcpIntentEntityID(args, intentID)
 		if e != nil {

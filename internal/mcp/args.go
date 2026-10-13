@@ -22,22 +22,6 @@ func boolArg(args map[string]interface{}, name string) bool {
 	return false
 }
 
-func int64Arg(args map[string]interface{}, name string) int64 {
-	switch v := args[name].(type) {
-	case float64:
-		return int64(v)
-	case int:
-		return int64(v)
-	case int64:
-		return v
-	case json.Number:
-		n, _ := v.Int64()
-		return n
-	default:
-		return 0
-	}
-}
-
 func anyMapFromArg(raw interface{}) map[string]any {
 	if raw == nil {
 		return nil

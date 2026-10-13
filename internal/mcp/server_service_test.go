@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -185,19 +184,4 @@ func TestCallTool_ServiceListGetFromCanonicalState(t *testing.T) {
 		t.Fatalf("expected 1 service, got %v", listPayload["total"])
 	}
 
-}
-
-func assertSignerFirstMutationError(t *testing.T, server *Server, tool string, args map[string]interface{}) {
-	t.Helper()
-	result, err := server.CallTool(authorizedMCPContext(), tool, args)
-	if err != nil {
-		t.Fatalf("%s call err: %v", tool, err)
-	}
-	if !result.IsError {
-		t.Fatalf("expected %s to return an error result", tool)
-	}
-	text := result.Content[0].Text
-	if !strings.Contains(text, "direct registry mutation") || !strings.Contains(text, "ContextVM/Nostr") {
-		t.Fatalf("expected signer-first migration error for %s, got %q", tool, text)
-	}
 }
