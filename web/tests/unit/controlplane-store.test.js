@@ -61,6 +61,19 @@ describe('store-first controlplane bootstrap', () => {
     expect(controlplane.controlplaneConnection).toMatchObject({ bootstrapComplete: true, status: 'live' });
   });
 
+  it('records protected-read rejection and clears it after protected EOSE', async () => {
+    await controlplane.bootstrapControlplane();
+    bridge.handlers.onClosed('restricted: not admitted', 'wss://relay.example', {}, 'protected');
+    expect(controlplane.controlplaneConnection).toMatchObject({
+      protectedReadsReady: false,
+      protectedReadError: 'wss://relay.example: restricted: not admitted'
+    });
+    bridge.handlers.onEose('wss://relay.example', 'protected');
+    expect(controlplane.controlplaneConnection).toMatchObject({
+      protectedReadsReady: true, protectedReadError: null
+    });
+  });
+
   it('tears down and can bootstrap again after disconnect', async () => {
     await controlplane.bootstrapControlplane();
     controlplane.disconnectControlplane();

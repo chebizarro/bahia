@@ -3,6 +3,7 @@
   import { page } from '$app/state';
   import Nav from '$lib/components/Nav.svelte';
   import ErrorBoundary from '$lib/components/ErrorBoundary.svelte';
+  import ProtectedReadNotice from '$lib/components/ProtectedReadNotice.svelte';
   import AuthGuard from '$lib/components/AuthGuard.svelte';
   import ToastContainer from '$lib/components/ToastContainer.svelte';
   import AssistantChat from '$lib/components/assistant/AssistantChat.svelte';
@@ -206,6 +207,7 @@
 <div class="app">
   <Nav />
   <main>
+    <ProtectedReadNotice />
     <ErrorBoundary>
       {#if isProtectedRoute}
         <AuthGuard requiredRoles={routeAccess.requiredRoles} requiresRestCompatibility={routeAccess.requiresRestCompatibility}>

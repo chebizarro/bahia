@@ -135,6 +135,8 @@ export function disconnectControlplane() {
   controlplaneConnection.connected = false;
   controlplaneConnection.ready = false;
   controlplaneConnection.bootstrapComplete = false;
+  controlplaneConnection.protectedReadsReady = false;
+  controlplaneConnection.protectedReadError = null;
   completedRelays.clear();
   markDisconnected();
 }
