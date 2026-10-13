@@ -138,7 +138,11 @@ func TestNewAcceptsHexIdentityAndCustomAppID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer k.Close()
+	defer func() {
+		if err := k.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if err := k.SignEvent(context.Background(), testEvent()); err != nil {
 		t.Fatal(err)
 	}

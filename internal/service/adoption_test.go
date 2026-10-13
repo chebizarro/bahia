@@ -13,7 +13,6 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/adapters/runtime"
 	runtimeAdapter "github.com/openagentsinc/bahia/internal/adapters/runtime"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -1584,7 +1583,7 @@ func TestAdoptionSecretClassifierUsesTokenBoundaries(t *testing.T) {
 			t.Errorf("%s=%s is not a secret", key, value)
 		}
 	}
-	classified := classifyDiscoveredSensitiveData(runtime.DiscoveredContainer{Environment: map[string]string{"PASSWORD_MIN_LENGTH": "12", "DB_PASSWORD": "x"}}, "PASSWORD_MIN_LENGTH")
+	classified := classifyDiscoveredSensitiveData(runtimeAdapter.DiscoveredContainer{Environment: map[string]string{"PASSWORD_MIN_LENGTH": "12", "DB_PASSWORD": "x"}}, "PASSWORD_MIN_LENGTH")
 	if len(classified.SensitiveEnvironmentKeys) != 1 || classified.SensitiveEnvironmentKeys[0] != "DB_PASSWORD" || classified.SafeEnvironment["PASSWORD_MIN_LENGTH"] != "12" {
 		t.Fatalf("operator exemption: %+v", classified)
 	}

@@ -64,7 +64,7 @@ func requireEventFrame(t *testing.T, frame any, subID string, want nostr.Event) 
 	env, ok := frame.(nostr.EventEnvelope)
 	require.Truef(t, ok, "frame %T, want EVENT for %q", frame, subID)
 	require.Equal(t, subID, *env.SubscriptionID)
-	require.Equal(t, want.ID, env.Event.ID)
+	require.Equal(t, want.ID, env.ID)
 }
 
 func TestLiveFanoutClosesOnlyOverflowingSubscriptionAndNeverWritesAfterClosed(t *testing.T) {

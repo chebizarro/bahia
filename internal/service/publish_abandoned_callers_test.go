@@ -17,11 +17,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// abandonedPublish is what the outbox publisher returns when the first
+// errAbandonedPublish is what the outbox publisher returns when the first
 // delivery round already made the publish quorum unreachable (every relay
 // answered OK=false with blocked:/invalid:/pow:): the row is failed and
 // nothing retries it.
-var abandonedPublish = fmt.Errorf("nostr event delivery abandoned: accepted by 0 of 1 required relays: wss://relay.example rejected permanently: blocked: pubkey not allowed: %w", nostrutil.ErrPublishAbandoned)
+var errAbandonedPublish = fmt.Errorf("nostr event delivery abandoned: accepted by 0 of 1 required relays: wss://relay.example rejected permanently: blocked: pubkey not allowed: %w", nostrutil.ErrPublishAbandoned)
 
 // abandonedSignedPublisher signs every event and reports it abandoned.
 type abandonedSignedPublisher struct {
@@ -34,7 +34,7 @@ func (p *abandonedSignedPublisher) PublishSignedEventWithResults(_ context.Conte
 		return nil, err
 	}
 	p.events = append(p.events, *ev)
-	return []sbomadapter.PublishOKResult{{RelayURL: "wss://relay.example", Reason: "blocked: pubkey not allowed"}}, abandonedPublish
+	return []sbomadapter.PublishOKResult{{RelayURL: "wss://relay.example", Reason: "blocked: pubkey not allowed"}}, errAbandonedPublish
 }
 
 func (p *abandonedSignedPublisher) DeliveryOutcome(context.Context, string) (nostrutil.DeliveryOutcome, error) {
@@ -137,7 +137,7 @@ func (p *abandoningConfigPublisher) PublishPresignedEvent(ctx context.Context, e
 	if err := p.repo.AbandonPublish(ctx, event.ID.Hex(), "abandoned: required relay acceptance is unreachable; blocked: no"); err != nil {
 		return err
 	}
-	return abandonedPublish
+	return errAbandonedPublish
 }
 
 func TestConfigFabricAbandonedPublishIsNotDesiredState(t *testing.T) {
@@ -174,7 +174,7 @@ func TestConfigFabricAbandonedPublishIsNotDesiredState(t *testing.T) {
 func TestConfigFabricRunnerAbandonedVersionIsNotDesiredState(t *testing.T) {
 	ctx := context.Background()
 	repo := repositorytest.NewInMemoryNostrEventRepository()
-	queued := &configTestPublisher{err: queuedPublish}
+	queued := &configTestPublisher{err: errQueuedPublish}
 	svc := NewConfigFabricService(repo, queued, newConfigTestSigner(t))
 	base := time.Unix(1787625660, 0)
 	tick := 0
@@ -185,7 +185,7 @@ func TestConfigFabricRunnerAbandonedVersionIsNotDesiredState(t *testing.T) {
 	queued.err = nil
 	first, err := svc.Publish(ctx, validPolicyRequest(1))
 	require.NoError(t, err)
-	queued.err = queuedPublish
+	queued.err = errQueuedPublish
 	second, err := svc.Publish(ctx, validPolicyRequest(2))
 	require.NoError(t, err)
 	require.Equal(t, ConfigDeliveryQueued, second.Delivery)

@@ -353,7 +353,8 @@ func TestNIP11_AuthRequired_ReflectsReadAuthMode(t *testing.T) {
 			req.Header.Set("Accept", "application/nostr+json")
 			resp, err := http.DefaultClient.Do(req)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			// The response body is read-only; close cannot affect the assertion.
+			defer func() { _ = resp.Body.Close() }()
 
 			var info struct {
 				Limitation struct {

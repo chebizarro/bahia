@@ -2,7 +2,6 @@ package soulfactory
 
 import (
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -342,7 +341,6 @@ func TestConcordAuthorityCitationAndRosterPayloadValidation(t *testing.T) {
 	badGrant := concordTestTypedControlEdition(t, f, owner, 3, badGrantID, 1, "", `{"member":"bad","role_ids":[]}`)
 	fold := concordAuthorityFold(t, f, owner, badRole, badGrant)
 	if len(fold.heads) != 0 {
-		encoded, _ := json.Marshal(fold.heads)
-		t.Fatalf("invalid typed roster seated heads: %s", encoded)
+		t.Fatalf("invalid typed roster seated heads: %v", fold.heads)
 	}
 }

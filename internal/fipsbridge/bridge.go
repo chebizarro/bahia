@@ -246,7 +246,11 @@ func (b *Bridge) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open FIPS bridge event store: %w", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			b.logger.Warn("close FIPS bridge event store", zap.Error(err))
+		}
+	}()
 	filter := b.endpointFilter()
 	b.logger.Info("restored endpoints from the local event store", zap.String("store", storePath), zap.Int("events", b.hydrate(ctx, store, filter)))
 

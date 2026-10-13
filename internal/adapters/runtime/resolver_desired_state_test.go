@@ -108,7 +108,9 @@ func TestResolveDesiredStateApplier_PodmanEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Podman request did not use endpoint_ref socket: %v", err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d", response.StatusCode)
 	}

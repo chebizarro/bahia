@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"golang.org/x/tools/go/packages"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,17 +16,11 @@ import (
 // fence, and durable replay may replace the startup suspension.
 func TestSQLRuntimeLifecycleCannotAutoRemediate(t *testing.T) {
 	set := token.NewFileSet()
-	packages, err := parser.ParseDir(set, filepath.Join(repoRoot(t), "internal/service"), func(info os.FileInfo) bool {
-		return strings.HasSuffix(info.Name(), ".go") && !strings.HasSuffix(info.Name(), "_test.go")
-	}, 0)
-	if err != nil {
-		t.Fatal(err)
+	loaded, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedSyntax | packages.NeedFiles, Dir: repoRoot(t), Fset: set}, "./internal/service")
+	if err != nil || len(loaded) != 1 || len(loaded[0].Errors) != 0 {
+		t.Fatalf("load internal/service: %v (%v)", err, loaded)
 	}
-	servicePackage, ok := packages["service"]
-	if !ok {
-		t.Fatal("internal/service package not found")
-	}
-	for _, file := range servicePackage.Files {
+	for _, file := range loaded[0].Syntax {
 		for _, decl := range file.Decls {
 			method, ok := decl.(*ast.FuncDecl)
 			if !ok || method.Name.Name != "AutoRemediateDesiredState" || method.Recv == nil {

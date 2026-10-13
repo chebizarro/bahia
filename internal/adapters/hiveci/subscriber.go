@@ -264,7 +264,7 @@ func (s *Subscriber) consumeSubscription(ctx context.Context, merged *nostrAdapt
 		case ev, ok := <-merged.Events:
 			if !ok {
 				if gaveUp := merged.GaveUp(); gaveUp != nil {
-					s.logger.Error("hiveci subscription gave up â waiting for topology change", zap.Error(gaveUp))
+					s.logger.Error("hiveci subscription gave up — waiting for topology change", zap.Error(gaveUp))
 					if err := s.pool.WaitForTopologyChange(ctx); err != nil {
 						return err
 					}

@@ -330,7 +330,11 @@ func TestAssistantCheckpointLoadIgnoresPreOKLocalCacheCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer local.Close()
+	t.Cleanup(func() {
+		if err := local.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	signer := testAssistantSigner(t)
 	relay := newAssistantTestRelay()
 	store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}, LocalStore: local})

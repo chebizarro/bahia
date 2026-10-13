@@ -517,7 +517,7 @@ func (s *OpenClawSidecar) subscribeAndConsume(ctx context.Context, filters []nos
 		case event, ok := <-sub.Events:
 			if !ok {
 				if gaveUp := sub.GaveUp(); gaveUp != nil {
-					s.logger.Error("OpenClaw SoulFactory sidecar subscription gave up â waiting for topology change", zap.NamedError("error", gaveUp))
+					s.logger.Error("OpenClaw SoulFactory sidecar subscription gave up — waiting for topology change", zap.NamedError("error", gaveUp))
 
 					s.setReadinessError(gaveUp)
 					if tn, ok := s.transport.(topologyNotifier); ok {

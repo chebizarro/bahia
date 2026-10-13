@@ -135,7 +135,11 @@ func readBaseline(t *testing.T, path string) map[string]int {
 	if err != nil {
 		t.Fatalf("open baseline %s: %v", path, err)
 	}
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()

@@ -726,9 +726,10 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 	if err != nil {
 		return err
 	}
-	if status == "applied" {
+	switch status {
+	case "applied":
 		createdAt++
-	} else if status == "withdrawn" {
+	case "withdrawn":
 		createdAt += 2
 	}
 	// NIP-40 expiry uses wall-clock time so the sweep can clean old status
