@@ -596,31 +596,6 @@ func (fakeSoulFactoryRuntimeAdapter) Execute(context.Context, soulfactory.Runtim
 	return nil, nil
 }
 
-type gatedRunner struct {
-	name    string
-	started chan struct{}
-}
-
-func newGatedRunner(name string) *gatedRunner {
-	return &gatedRunner{name: name, started: make(chan struct{})}
-}
-
-func (r *gatedRunner) Name() string { return r.name }
-func (r *gatedRunner) Run(ctx context.Context) error {
-	close(r.started)
-	<-ctx.Done()
-	return nil
-}
-
-func requireRunnerStarted(t *testing.T, runner *gatedRunner) {
-	t.Helper()
-	select {
-	case <-runner.started:
-	case <-time.After(2 * time.Second):
-		require.Failf(t, "runner did not start", "%s did not start", runner.name)
-	}
-}
-
 type restartRequestRunner struct{}
 
 func (r *restartRequestRunner) Name() string { return "restart-request" }

@@ -239,7 +239,7 @@ func TestOCKRotationDegradesReadinessUntilRecovery(t *testing.T) {
 func TestUndeliveredCanonicalStateDegradesReadinessUntilDelivered(t *testing.T) {
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "daemon.bolt"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	tracker := controlplane.NewReadinessTracker()
 	provider := NewHealthProvider(tracker, nil)
 	registerUndeliveredHealthCheck(provider, store)
