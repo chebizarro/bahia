@@ -17,6 +17,8 @@ PostgreSQL is an optional derived index. The daemon's control-plane truth is the
 
 Legacy SQL-only state requires a separately governed migration with a dry-run census, stable semantic coordinates, admission limits, durable progress, crash/retry proof, and independent status. Do not trigger such a migration by restarting the daemon, reconnecting PostgreSQL, or manually changing SQL publish flags. The [startup source audit](../analysis/postgres-startup-source-audit.md) identifies the code paths that must be absent before this runbook is an acceptance proof.
 
+The optional `runtime-observation-retention` runner starts only when PostgreSQL is connected. It deletes at most 500 unlinked `runtime_observations` older than 30 days per transaction, waits 250 ms between full batches, retries failures after one minute, and checks again hourly when caught up. The current state-linked row is never removed by this job, even if older than 30 days. Track `bahia_runtime_observation_rows_retired_total`, `bahia_runtime_observation_retention_batches_total{outcome=...}` and the runner warning log. A PostgreSQL outage does not block readiness or alter canonical relay records. Existing immutable F74a archive rows are distinct from this hot-table retention job; their removal belongs to the observation-history cutover, not this runner.
+
 ## Disposable startup and reconnect matrix
 
 The opt-in repository test starts and removes its own `postgres:16-alpine`

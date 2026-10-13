@@ -95,6 +95,8 @@ described in the [runbook](../runbooks/signet-secret-store.md#system-credentials
 
 Serialized configuration (JSON, YAML, log fields) is a diagnostic view: credentials, private keys, bunker URIs, and auth headers are masked. Never save such a view back as the operational configuration.
 
+For OTLP/HTTP telemetry, set `telemetry.enabled: true`, `telemetry.otlp_protocol: http`, and `telemetry.otlp_endpoint` to the collector's HTTP endpoint (for example, `http://otel-collector:4318`). The default protocol remains gRPC when `otlp_protocol` is omitted. The collector sends material runtime-transition logs to VictoriaLogs and unit-state/transition metrics to VictoriaMetrics; configure 30-day retention in those backends. Telemetry uses the OTLP exporter, never the Nostr service key or relay transport.
+
 ## Your first deployment
 
 ### 1. Sign in
