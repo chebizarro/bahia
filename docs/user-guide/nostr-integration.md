@@ -17,7 +17,7 @@ Nostr is Bahia's control plane and source of durable product state. Clients subs
 | Signed intent | `30900` with `t=bahia-intent` | operator | `d=<intent-id>`, `domain`, `intent_id`, optional `org` |
 | Intent status | `30315` | service | requester `p`, intent correlation and bounded status |
 | Canonical state | `30900` with `schema=bahia.cp-state.v1` | service | `t=<topic>` and stable `d` coordinate |
-| Audit fact | `4903` | service | entity and correlation tags |
+| Audit fact | `4903` | service | entity and correlation tags; assistant checkpoints use `t=assistant-checkpoint:<session_id>` |
 | Interactive request | `25910`, optionally wrapped by `1059` or `21059` | requester | registered ContextVM JSON-RPC method |
 | Documentation | `30023` with `t=bahia-docs` | service | `d=<topic>` |
 | Worker advertisement | `10100` | worker | worker pubkey |
@@ -79,6 +79,12 @@ Readers must:
 5. choose the replaceable winner by Nostr ordering;
 6. apply deletion/tombstone semantics;
 7. reconnect and resubscribe with an overlap.
+
+Assistant execution checkpoint history is a service-signed predecessor chain. The
+daemon reads its indexed session topic through EOSE and validates the chain;
+a pre-topic checkpoint uses an author/kind backfill. Only relay-accepted
+checkpoints retained in the daemon's local store can fill a pruned relay
+history. A projection alone does not authorize another assistant turn.
 
 The web app and CLI keep local event stores and can render cached state before EOSE. They expose catch-up state so cached results are not mistaken for fresh results.
 

@@ -96,8 +96,9 @@ type AssistantExecutionEngineConfig struct {
 	Evidence      AssistantRequestEvidenceResolver
 	// Publisher and Signer publish the public v2 session projection. The
 	// projection is a derived read model; its publication is best-effort.
-	Publisher AssistantEventPublisher
-	Signer    nostr.Signer
+	Publisher  AssistantEventPublisher
+	LocalStore AssistantLocalEventStore
+	Signer     nostr.Signer
 	// Subscriber recovers the latest published projection created_at for a
 	// session before this process first publishes it (see projection clock).
 	Subscriber AssistantRelaySubscriber
@@ -1913,6 +1914,20 @@ func (e *AssistantExecutionEngine) publishProjectionLocked(s *assistantEngineSes
 	if err = signGoNostrEvent(e.cfg.Lifecycle, e.cfg.Signer, &ev); err != nil {
 		e.logger.Error("assistant projection sign failed", "session_id", p.SessionID, "error", err)
 		return
+	}
+	if e.cfg.LocalStore != nil {
+		if _, err := e.cfg.LocalStore.SaveEvent(ev); err != nil {
+			e.logger.Error("assistant projection local retention failed", "session_id", p.SessionID, "event_id", ev.ID.Hex(), "error", err)
+			return
+		}
+		retained := false
+		for range e.cfg.LocalStore.QueryEvents(nostr.Filter{IDs: []nostr.ID{ev.ID}}) {
+			retained = true
+		}
+		if !retained {
+			e.logger.Error("assistant projection was not retained locally", "session_id", p.SessionID, "event_id", ev.ID.Hex())
+			return
+		}
 	}
 	accepted, err := e.cfg.Publisher.Publish(e.cfg.Lifecycle, ev)
 	if err == nil && accepted == 0 {

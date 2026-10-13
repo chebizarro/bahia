@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"fiatjaf.com/nostr"
 
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
@@ -30,7 +33,7 @@ func newAssistantRouterFixture(t *testing.T, defaultWorkflow domain.AssistantWor
 }
 
 func (f *assistantRouterFixture) newRouter(defaultWorkflow domain.AssistantWorkflow, legacy ...domain.AssistantSession) *AssistantOrchestrator {
-	return NewAssistantOrchestrator(AssistantOrchestratorConfig{Engine: f.stack.engine, DefaultWorkflow: defaultWorkflow, Publisher: f.relay, Subscriber: f.relay, Signer: f.signer, Identity: AssistantIdentity{AgentID: "assistant-test"}, InitialSessions: legacy})
+	return NewAssistantOrchestrator(AssistantOrchestratorConfig{Engine: f.stack.engine, DefaultWorkflow: defaultWorkflow, Publisher: f.relay, Subscriber: f.relay, Signer: f.signer, Identity: AssistantIdentity{AgentID: "assistant-test"}, InitialSessions: legacy, LocalStore: f.stack.store.local})
 }
 
 func (f *assistantRouterFixture) source(label string) AssistantRequestSource {
@@ -233,5 +236,91 @@ func TestAssistantOrchestratorRequiresVersionedContracts(t *testing.T) {
 	encoded, err := json.Marshal(stale)
 	if err != nil || !json.Valid(encoded) {
 		t.Fatalf("refusal is not a JSON result: %v", err)
+	}
+}
+
+// An empty relay inventory cannot certify a caller-supplied ID as new when
+// signed service history survives in the daemon's local event store.
+func TestAssistantOrchestratorPrunedRelayHistoryRefusesSessionRecreation(t *testing.T) {
+	for _, onlyCheckpoint := range []bool{false, true} {
+		name := "projection_and_checkpoint"
+		if onlyCheckpoint {
+			name = "checkpoint_only"
+		}
+		t.Run(name, func(t *testing.T) {
+			local, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = local.Close() })
+			f := newAssistantRouterFixture(t, domain.AssistantWorkflowIterative, assistantStackOptions{iterative: &assistantScriptedProposer{}, localStore: local})
+			done := requireAccepted(t, f.prompt(t, "s-pruned", ""))
+			if done.Phase != domain.AssistantExecutionCompleted {
+				t.Fatalf("phase = %s", done.Phase)
+			}
+			f.stack.crash()
+			f.relay.mu.Lock()
+			f.relay.events = slices.DeleteFunc(f.relay.events, func(ev nostr.Event) bool {
+				return ev.Kind == domain.KindAssistantSessionState || ev.Kind == nostr.Kind(domain.AssistantExecutionCheckpointKind)
+			})
+			f.relay.mu.Unlock()
+			if onlyCheckpoint {
+				for ev := range local.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}}) {
+					if err := local.DeleteEvent(ev.ID); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			f.stack = newAssistantStack(t, f.relay, f.signer, f.server, assistantStackOptions{iterative: &assistantScriptedProposer{}, localStore: local})
+			f.router = f.newRouter(domain.AssistantWorkflowIterative)
+			requireRefusal(t, f.prompt(t, "s-pruned", ""), AssistantRefusalSessionLookup)
+			if _, created := f.stack.engine.Snapshot("s-pruned"); created {
+				t.Fatal("pruned session id was recreated")
+			}
+		})
+	}
+}
+
+// EOSE may find a projection while the relay has pruned every 4903. The
+// service-signed local chain, including a finished run's closure, decides.
+func TestAssistantOrchestratorFinishedRunUsesLocalChainAfterRelayPruning(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		name := "open"
+		if closed {
+			name = "closed"
+		}
+		t.Run(name, func(t *testing.T) {
+			local, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = local.Close() })
+			f := newAssistantRouterFixture(t, domain.AssistantWorkflowIterative, assistantStackOptions{iterative: &assistantScriptedProposer{}, localStore: local})
+			done := requireAccepted(t, f.prompt(t, "s-finished", ""))
+			if done.Phase != domain.AssistantExecutionCompleted {
+				t.Fatalf("phase = %s", done.Phase)
+			}
+			if closed {
+				result, err := f.router.HandleCancellationRequest(context.Background(), f.source("close"), domain.AssistantCancellationRequest{ContractVersion: 2, SessionID: "s-finished", RunID: done.CurrentRunID, Scope: "session"})
+				if err != nil || result["step"] != "session_closed" {
+					t.Fatalf("close = %#v, %v", result, err)
+				}
+			}
+			f.stack.crash()
+			f.relay.mu.Lock()
+			f.relay.events = slices.DeleteFunc(f.relay.events, func(ev nostr.Event) bool { return ev.Kind == nostr.Kind(domain.AssistantExecutionCheckpointKind) })
+			f.relay.mu.Unlock()
+			f.stack = newAssistantStack(t, f.relay, f.signer, f.server, assistantStackOptions{iterative: &assistantScriptedProposer{}, localStore: local})
+			f.router = f.newRouter(domain.AssistantWorkflowIterative)
+			result := f.prompt(t, "s-finished", "")
+			if closed {
+				requireRefusal(t, result, AssistantRefusalSessionClosed)
+				if execution, ok := f.router.ExecutionSnapshot("s-finished"); !ok || execution.Cancellation == nil {
+					t.Fatal("closing checkpoint was not recovered")
+				}
+			} else {
+				requireAccepted(t, result)
+			}
+		})
 	}
 }

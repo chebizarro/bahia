@@ -24,10 +24,9 @@ var ErrReadOnly = errors.New("outbox is open read-only")
 // The daemon's durable publish outbox: signed
 // events waiting for relay acceptance, with each relay's delivery state.
 //
-// Unlike the event store, the outbox is not a cache. A pending entry is the
-// only copy of an event no relay may hold yet, so the outbox lives in its own
-// bbolt file: deleting the event store file stays safe, deleting the outbox
-// file loses the events it still had to deliver.
+// The outbox holds events not yet accepted by a relay in its own bbolt file.
+// The event store also retains assistant history that relays may have pruned;
+// neither file may be discarded as a general recovery procedure.
 //
 // An entry is pending until every write relay of its target has accepted it
 // or reached a terminal state, then published (the caller's publish quorum

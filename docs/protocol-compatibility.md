@@ -13,7 +13,7 @@ topic constants are in `internal/kinds`.
 | Intent disposition | `30315`, `t=intent-status` | requester-scoped accepted/rejected status; not durable state |
 | Canonical state | `30900`, `schema=bahia.cp-state.v1` | addressable latest-wins record with a family `#t` topic |
 | Operational status | `30315` | addressable NIP-38 state/progress |
-| Audit | `4903` | immutable regular event without `d` |
+| Audit | `4903` | immutable regular event without `d`; assistant checkpoints route by indexed `#t=assistant-checkpoint:<session_id>` |
 | Interactive RPC | ContextVM `25910` | assistant, secret reveal and stored run-log fetch only |
 | Discovery | `11316`–`11320`, `30002`, `10002`, `10050` | trust the configured service author; relay lists are purpose-specific |
 | Documentation | `30023` | long-form pages published by `internal/docs` |

@@ -63,6 +63,8 @@ const (
 	// every transcript message also carries (AssistantTranscriptSessionTopic),
 	// so a session replay is an indexed REQ.
 	AssistantTranscriptSessionTopicPrefix = "assistant-transcript:"
+	// AssistantCheckpointSessionTopicPrefix scopes immutable execution journals.
+	AssistantCheckpointSessionTopicPrefix = "assistant-checkpoint:"
 	// AssistantStatusTopic is on every 30315 assistant status.
 	AssistantStatusTopic = "assistant-status"
 	// RelaySettingsTopic is on the relay-settings operator policy (30900).
@@ -73,6 +75,11 @@ const (
 // transcript messages.
 func AssistantTranscriptSessionTopic(sessionID string) string {
 	return AssistantTranscriptSessionTopicPrefix + sessionID
+}
+
+// AssistantCheckpointSessionTopic scopes checkpoint REQs to one session.
+func AssistantCheckpointSessionTopic(sessionID string) string {
+	return AssistantCheckpointSessionTopicPrefix + sessionID
 }
 
 // CPStateTopic* are the single-letter "t" topics the projector's

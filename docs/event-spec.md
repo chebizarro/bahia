@@ -496,8 +496,10 @@ Domain facts add `domain`, `type` and a domain schema
 (`bahia.audit.deployment.v1`, `bahia.audit.security.v1` with `type` ∈
 `security-scan|security-policy-breach|security-publication`,
 `bahia.audit.route-canary.v1` on transitions only,
-`bahia.audit.assistant-execution-checkpoint.v1` with encrypted content and
-`session`/`run` tags). Bahia tags audits `protected=true` as semantic
+`bahia.audit.assistant-execution-checkpoint.v1` with encrypted content,
+indexed `t=assistant-checkpoint:<session_id>`, and `session`/`run` metadata
+tags). Readers check the metadata locally after the indexed REQ; pre-topic
+checkpoints are recovered by an author/kind backfill through EOSE. Bahia tags audits `protected=true` as semantic
 metadata; it does not add the NIP-70 `-` tag. The sidecar keeps regular
 events durably unless `nostr.sidecar.event_retention` is set.
 

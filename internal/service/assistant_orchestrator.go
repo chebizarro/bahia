@@ -116,6 +116,7 @@ type AssistantOrchestratorConfig struct {
 	// v1 history is read-only: it answers participant checks and refuses new
 	// turns; it never authorizes an unknown session as new.
 	InitialSessions []domain.AssistantSession
+	LocalStore      SupervisionEventStore
 	Logger          *slog.Logger
 }
 
@@ -127,6 +128,7 @@ type AssistantOrchestrator struct {
 	executions      AssistantExecutionReader
 	defaultWorkflow domain.AssistantWorkflow
 	subscriber      AssistantRelaySubscriber
+	local           SupervisionEventStore
 	signer          nostr.Signer
 	identity        AssistantIdentity
 	status          *AssistantStatusEventPublisher
@@ -155,6 +157,7 @@ func NewAssistantOrchestrator(config AssistantOrchestratorConfig) *AssistantOrch
 		executions:      executions,
 		defaultWorkflow: config.DefaultWorkflow,
 		subscriber:      config.Subscriber,
+		local:           config.LocalStore,
 		signer:          config.Signer,
 		identity:        identity,
 		status:          NewAssistantStatusEventPublisher(config.Publisher, config.Signer, identity),
@@ -362,14 +365,66 @@ func (o *AssistantOrchestrator) resolveSession(ctx context.Context, sessionID, o
 		o.mu.Unlock()
 		return nil, AssistantRefusalLegacyReadOnly, errors.New("historical v1 assistant sessions are read-only; start a new session")
 	}
+	known, err := o.localSessionEvidence(ctx, sessionID)
+	if err != nil {
+		return nil, AssistantRefusalSessionLookup, fmt.Errorf("assistant local session lookup incomplete: %w", err)
+	}
+	if known {
+		return nil, AssistantRefusalSessionLookup, errors.New("signed local assistant history exists for this session; relay projection is unavailable")
+	}
 	return nil, "", nil
 }
 
+// localSessionEvidence is refusal-only: a signed record can disprove that a
+// caller-supplied ID is new, but cannot by itself authorize a new turn.
+func (o *AssistantOrchestrator) localSessionEvidence(ctx context.Context, sessionID string) (bool, error) {
+	if o.local == nil {
+		return false, nil
+	}
+	author, err := o.signer.GetPublicKey(ctx)
+	if err != nil {
+		return false, err
+	}
+	projections := nostr.Filter{Kinds: []nostr.Kind{domain.KindAssistantSessionState}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{"d": {domain.AssistantSessionSchema + ":" + sessionID, domain.AssistantSessionSchemaV2 + ":" + sessionID}}}
+	for ev := range o.local.QueryEvents(projections) {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if ev.PubKey != author || !ev.CheckID() || !ev.VerifySignature() || tagValue(ev.Tags, "session") != sessionID {
+			continue
+		}
+		schema := tagValue(ev.Tags, domain.AssistantSessionTagSchema)
+		if tagValue(ev.Tags, "d") != schema+":"+sessionID {
+			continue
+		}
+		switch schema {
+		case domain.AssistantSessionSchemaV2:
+			var p domain.AssistantSessionV2
+			if json.Unmarshal([]byte(ev.Content), &p) == nil && p.SessionID == sessionID {
+				return true, nil
+			}
+		case domain.AssistantSessionSchema:
+			var p domain.AssistantSession
+			if json.Unmarshal([]byte(ev.Content), &p) == nil && p.SessionID == sessionID {
+				return true, nil
+			}
+		}
+	}
+	checkpoints := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.AssistantExecutionCheckpointKind)}, Authors: []nostr.PubKey{author}}
+	for ev := range o.local.QueryEvents(checkpoints) {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		if ev.PubKey == author && ev.CheckID() && ev.VerifySignature() && tagValue(ev.Tags, domain.AssistantCheckpointTagSession) == sessionID && tagValue(ev.Tags, domain.AssistantCheckpointTagDomain) == domain.AssistantDomain && tagValue(ev.Tags, domain.AssistantCheckpointTagType) == domain.AssistantCheckpointTypeExecution && tagValue(ev.Tags, domain.AssistantCheckpointTagSchema) == domain.AssistantExecutionCheckpointSchema && tagValue(ev.Tags, domain.AssistantCheckpointTagRun) != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // loadFinishedRun makes the engine load a finished run's checkpoint chain the
-// first time this process starts a new turn after it. Startup recovery only
-// hydrates finished projections, and the projection has no "closed" field, so
-// a session-scope cancellation recorded on a finished run is only enforced
-// once its checkpoint is loaded.
+// first time this process starts a new turn after it. A projection may lag a
+// closing checkpoint, so the signed journal remains the authority for closure.
 func (o *AssistantOrchestrator) loadFinishedRun(ctx context.Context, projection domain.AssistantSessionV2, operator string) (*domain.AssistantSessionV2, string, error) {
 	if !assistantProjectionAuthorizes(projection, operator) {
 		return nil, AssistantRefusalUnauthorized, errors.New("requester is not a participant in this assistant session")

@@ -2,13 +2,18 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"iter"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 func checkpointTestExecution(rev uint64) domain.AssistantExecution {
@@ -154,5 +159,194 @@ func TestAssistantCheckpointPreservesNilVersusEmptyAllowedTools(t *testing.T) {
 				t.Fatalf("allowed_tools %v round-tripped as %#v", allowed, got)
 			}
 		})
+	}
+}
+
+func TestAssistantCheckpointLoadUsesIndexedSessionTopic(t *testing.T) {
+	signer := testAssistantSigner(t)
+	relay := newAssistantTestRelay()
+	store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}})
+	root, err := store.Append(context.Background(), checkpointTestExecution(1), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := checkpointTestExecution(1)
+	other.SessionID = "other-session"
+	if _, err := store.Append(context.Background(), other, ""); err != nil {
+		t.Fatal(err)
+	}
+	head, err := store.Load(context.Background(), "session-chain", "run-chain")
+	if err != nil || head.EventID != root {
+		t.Fatalf("head = %+v, %v", head, err)
+	}
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	if relay.nextSub != 1 {
+		t.Fatalf("opened %d REQs for indexed history", relay.nextSub)
+	}
+	for _, sub := range relay.subs {
+		for _, filter := range sub.filters {
+			if len(filter.Authors) != 1 || len(filter.Kinds) != 1 || filter.Kinds[0] != nostr.Kind(domain.AssistantExecutionCheckpointKind) {
+				t.Fatalf("unscoped checkpoint filter: %+v", filter)
+			}
+			if got := filter.Tags["t"]; len(got) != 1 || got[0] != kinds.AssistantCheckpointSessionTopic("session-chain") {
+				t.Fatalf("session topic = %v", got)
+			}
+			for tag := range filter.Tags {
+				if len(tag) != 1 {
+					t.Fatalf("non-indexed REQ tag %q", tag)
+				}
+			}
+		}
+	}
+}
+
+func TestAssistantCheckpointLoadFallsBackForPreTopicEvents(t *testing.T) {
+	signer := testAssistantSigner(t)
+	relay := newAssistantTestRelay()
+	store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}})
+	previous := ""
+	for rev := uint64(1); rev <= 2; rev++ {
+		execution := checkpointTestExecution(rev)
+		plain, err := json.Marshal(domain.AssistantExecutionCheckpoint{Execution: execution, PreviousEventID: previous})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev, err := store.sealCheckpoint(context.Background(), execution, previous, plain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tags nostr.Tags
+		for _, tag := range ev.Tags {
+			if len(tag) == 0 || tag[0] != "t" {
+				tags = append(tags, tag)
+			}
+		}
+		ev.Tags = tags
+		if err := signGoNostrEvent(context.Background(), signer, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := relay.Publish(context.Background(), ev); err != nil {
+			t.Fatal(err)
+		}
+		previous = ev.ID.Hex()
+	}
+	other := checkpointTestExecution(1)
+	other.SessionID = "another-session"
+	if _, err := store.Append(context.Background(), other, ""); err != nil {
+		t.Fatal(err)
+	}
+	head, err := store.Load(context.Background(), "session-chain", "run-chain")
+	if err != nil || head.EventID != previous || len(head.Chain) != 2 {
+		t.Fatalf("legacy head = %+v, %v", head, err)
+	}
+	relay.mu.Lock()
+	defer relay.mu.Unlock()
+	if relay.nextSub != 2 {
+		t.Fatalf("legacy load opened %d REQs, want scoped then author/kind", relay.nextSub)
+	}
+	for _, sub := range relay.subs {
+		for _, filter := range sub.filters {
+			for tag := range filter.Tags {
+				if len(tag) != 1 {
+					t.Fatalf("non-indexed REQ tag %q", tag)
+				}
+			}
+		}
+	}
+}
+
+type assistantRetentionProbe struct {
+	fail     bool
+	markFail bool
+	event    *nostr.Event
+	accepted bool
+}
+
+func (p *assistantRetentionProbe) SaveEvent(ev nostr.Event) (bool, error) {
+	if p.fail {
+		return false, errors.New("bbolt write failed")
+	}
+	p.event = &ev
+	return true, nil
+}
+
+func (p *assistantRetentionProbe) MarkAssistantCheckpointAccepted(id nostr.ID) error {
+	if p.markFail {
+		return errors.New("bbolt acceptance marker failed")
+	}
+	if p.event == nil || p.event.ID != id {
+		return errors.New("checkpoint not retained")
+	}
+	p.accepted = true
+	return nil
+}
+
+func (p *assistantRetentionProbe) AssistantCheckpointAccepted(id nostr.ID) (bool, error) {
+	return p.accepted && p.event != nil && p.event.ID == id, nil
+}
+
+func (p *assistantRetentionProbe) QueryEvents(filter nostr.Filter) iter.Seq[nostr.Event] {
+	return func(yield func(nostr.Event) bool) {
+		if p.event != nil && filter.Matches(*p.event) {
+			yield(*p.event)
+		}
+	}
+}
+
+func TestAssistantCheckpointLocalRetentionFailureKeepsSignedPendingEvent(t *testing.T) {
+	for _, failMark := range []bool{false, true} {
+		name := "event_write"
+		if failMark {
+			name = "acceptance_marker"
+		}
+		t.Run(name, func(t *testing.T) {
+			publisher := &assistantTestPublisher{}
+			local := &assistantRetentionProbe{fail: !failMark, markFail: failMark}
+			store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: publisher, Signer: testAssistantSigner(t), KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}, LocalStore: local})
+			execution := checkpointTestExecution(1)
+			if _, err := store.Append(context.Background(), execution, ""); err == nil {
+				t.Fatal("local retention failure committed checkpoint")
+			}
+			first := publisher.eventsOfKind(domain.AssistantExecutionCheckpointKind)
+			if len(first) != 1 {
+				t.Fatalf("published %d events", len(first))
+			}
+			local.fail, local.markFail = false, false
+			id, err := store.Append(context.Background(), execution, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			second := publisher.eventsOfKind(domain.AssistantExecutionCheckpointKind)
+			if len(second) != 2 || second[1].ID != first[0].ID || id != first[0].ID.Hex() || !local.accepted {
+				t.Fatal("retry changed the signed event or failed to retain its acceptance")
+			}
+		})
+	}
+}
+
+func TestAssistantCheckpointLoadIgnoresPreOKLocalCacheCopy(t *testing.T) {
+	local, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	signer := testAssistantSigner(t)
+	relay := newAssistantTestRelay()
+	store := NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, KeyProvider: StaticAssistantTranscriptKeyProvider{Key: testAssistantTranscriptKey()}, LocalStore: local})
+	execution := checkpointTestExecution(1)
+	plain, err := json.Marshal(domain.AssistantExecutionCheckpoint{Execution: execution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := store.sealCheckpoint(context.Background(), execution, "", plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.SaveEvent(ev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(context.Background(), execution.SessionID, execution.RunID); !errors.Is(err, ErrAssistantCheckpointNotFound) {
+		t.Fatalf("pre-OK local event used as authoritative checkpoint: %v", err)
 	}
 }
