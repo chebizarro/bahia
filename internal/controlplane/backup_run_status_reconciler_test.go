@@ -382,7 +382,7 @@ func TestBackupAcceptedStatusUsesOperatorRelaysAndBeatsSameSecondRejection(t *te
 	reconciler, err := NewBackupRunStatusReconciler(outbox, status, "operator-relays", func() { wakes++ }, nil, zap.NewNop())
 	require.NoError(t, err)
 	stale := *intent
-	stale.StatusData = map[string]any{"run_id": record.Coordinate[len("backup-run:"):], "state_event_id": record.StateEventID, "execution": "paused"}
+	stale.StatusData = map[string]any{"run_id": record.Coordinate[len("backup-run:"):], "state_event_id": record.StateEventID, "execution": "queued"}
 	tied, err := status.buildStatusEventWithExpiryAt(t.Context(), &stale, "accepted", "applied", "", nil, 0, rejectedAt)
 	require.NoError(t, err)
 	_, _, err = outbox.StageBackupRunAcceptedStatus(record, tied, "operator-relays")

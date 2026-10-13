@@ -50,10 +50,6 @@ type BackupRunCredentialRecords interface {
 	CurrentReference(context.Context, string) (domain.SecretCredentialRef, error)
 }
 
-// New async intake remains paused until canonical credential recovery and
-// exactly-once execution are available.
-const backupRunAsyncIntakeEnabled = false
-
 // ErrBackupRunPending means the operator-signed request is durably queued but
 // no service-signed run state or accepted outcome exists yet.
 var ErrBackupRunPending = errors.New("backup run state is pending relay acceptance")
@@ -145,6 +141,7 @@ type BackupIntentHandler struct {
 	runAdmission             BackupRunAdmissionWriter
 	runPending               BackupRunPendingWriter
 	runCredentialRecords     BackupRunCredentialRecords
+	runAsyncIntakeEnabled    bool
 	executors                BackupIntentExecutors
 	status                   *IntentStatusPublisher
 	logger                   *zap.Logger
@@ -160,6 +157,7 @@ type BackupIntentHandlerConfig struct {
 	RunAdmission             BackupRunAdmissionWriter
 	RunPending               BackupRunPendingWriter
 	RunCredentialRecords     BackupRunCredentialRecords
+	RunAsyncIntakeEnabled    bool
 	Executors                BackupIntentExecutors
 	Status                   *IntentStatusPublisher
 	Logger                   *zap.Logger
@@ -180,6 +178,7 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		runAdmission:             cfg.RunAdmission,
 		runPending:               cfg.RunPending,
 		runCredentialRecords:     cfg.RunCredentialRecords,
+		runAsyncIntakeEnabled:    cfg.RunAsyncIntakeEnabled,
 		executors:                cfg.Executors,
 		status:                   cfg.Status,
 		logger:                   logger.Named("backup-intent"),
@@ -404,7 +403,7 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 		return fmt.Errorf("%w: %v", ErrBackupRunAdmissionConflict, err)
 	}
 	if found {
-		intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "paused"}
+		intent.Result = map[string]any{"run_id": requested.ID.String(), "state_event_id": stateID, "execution": "queued"}
 		if !delivered {
 			return ErrBackupRunPending
 		}
@@ -421,44 +420,20 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 			}
 			return fmt.Errorf("%w: signed request expired or refused; terminal status awaits operator-relay quorum", ErrBackupRunAdmissionConflict)
 		}
-		if !backupRunAsyncIntakeEnabled {
+		if !h.runAsyncIntakeEnabled {
 			return fmt.Errorf("%w: backup run request intake paused: credential recovery and exactly-once execution are unavailable", ErrBackupRunAdmissionConflict)
 		}
-		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
+		intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "queued"}
 		return ErrBackupRunPending
 	}
-	if !backupRunAsyncIntakeEnabled {
+	if !h.runAsyncIntakeEnabled {
 		return fmt.Errorf("backup run request intake paused: credential recovery and exactly-once execution are unavailable")
 	}
 	if _, err := ValidateSignedBackupRunRequest(intent.Event, intent.Actor); err != nil {
 		return fmt.Errorf("backup run request is invalid: %w", err)
 	}
-	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
+	if err := h.verifyRunInputs(ctx, requested); err != nil {
 		return fmt.Errorf("backup run request intake paused: %w", err)
-	}
-	proof, ok := h.runReceipts.(backupExecutionConfigProof)
-	if !ok {
-		return fmt.Errorf("backup run request intake paused: canonical configuration proof is unavailable")
-	}
-	if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
-		return fmt.Errorf("backup run request intake paused: %w", err)
-	}
-	if requested.ExecutionSnapshot.CredentialRef == nil || h.runCredentialRecords == nil {
-		return fmt.Errorf("backup run request intake paused: pinned Signet credential proof is unavailable")
-	}
-	currentRef, err := h.runCredentialRecords.CurrentReference(ctx, requested.ExecutionSnapshot.Repository.CredentialProfile)
-	if err != nil {
-		return fmt.Errorf("backup run request intake paused: read canonical Signet credential: %w", err)
-	}
-	if currentRef != *requested.ExecutionSnapshot.CredentialRef {
-		return fmt.Errorf("backup run request intake paused: Signet credential version moved; fresh signed run required")
-	}
-	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
-	if err != nil {
-		return fmt.Errorf("backup run request intake paused: %w", err)
-	}
-	if prior != nil {
-		return fmt.Errorf("backup run request intake paused: run id already has an ACKed canonical state without an admission record")
 	}
 	expiresAt, err := signedBackupRunExpiration(intent.Event)
 	if err != nil {
@@ -467,8 +442,83 @@ func (h *BackupIntentHandler) handleRun(ctx context.Context, intent *Intent) err
 	if _, err := h.runPending.StagePendingRun(ctx, intent.IntentID, intent.Coordinate, *intent.Event, intent.Actor, expiresAt); err != nil {
 		return fmt.Errorf("stage signed backup run pending request: %w", err)
 	}
-	intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "paused"}
+	intent.Result = map[string]any{"run_id": requested.ID.String(), "request_event_id": requestID, "execution": "queued"}
 	return ErrBackupRunPending
+}
+
+// AdmitPendingRun revalidates the original signed request immediately before
+// staging, while the history worker holds its live relay observation.
+func (h *BackupIntentHandler) AdmitPendingRun(ctx context.Context, pending localstore.BackupRunPending, history *nostradapter.BackupRunHistoryProof) error {
+	if h == nil || !h.runAsyncIntakeEnabled || h.runAdmission == nil || history == nil {
+		return fmt.Errorf("backup run admission is paused")
+	}
+	intent, err := ValidateSignedBackupRunRequest(&pending.RequestEvent, pending.Actor)
+	if err != nil {
+		return err
+	}
+	if intent.IntentID != pending.IntentID || intent.Coordinate != pending.Coordinate || pending.ServicePubkey != history.ServicePubkey.Hex() {
+		return fmt.Errorf("backup run pending request identity changed")
+	}
+	if err := rejectLegacyBackupCredentialVersion(intent.Content); err != nil {
+		return err
+	}
+	run, err := backupRunFromIntentContent(intent)
+	if err != nil {
+		return err
+	}
+	if run.ID == uuid.Nil || intent.Coordinate != "backup-run:"+run.ID.String() {
+		return fmt.Errorf("backup run coordinate is invalid")
+	}
+	if err := h.verifyRunInputs(ctx, run); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	run.RequestedBy, run.RequestEventID, run.RequestKind, run.RequestDTag = pending.Actor, pending.RequestEvent.ID.Hex(), int(pending.RequestEvent.Kind), pending.Coordinate
+	run.Status, run.CreatedAt, run.UpdatedAt = domain.RunStatusQueued, now, now
+	stager, ok := h.runAdmission.(interface {
+		StageRunAdmissionWithHistory(context.Context, string, string, *domain.BackupRun, *nostradapter.BackupRunHistoryProof) (string, error)
+	})
+	if !ok {
+		return fmt.Errorf("backup run fenced admission writer is unavailable")
+	}
+	_, err = stager.StageRunAdmissionWithHistory(ctx, pending.IntentID, pending.RequestEvent.ID.Hex(), run, history)
+	return err
+}
+
+func (h *BackupIntentHandler) verifyRunInputs(ctx context.Context, requested *domain.BackupRun) error {
+	if err := validateBackupExecutionSnapshot(requested, requested); err != nil {
+		return err
+	}
+	if requested.Backend != domain.BackupBackendKopia || requested.VerificationMode != domain.BackupVerificationNone ||
+		requested.ExecutionSnapshot.Policy != nil || len(requested.ExecutionSnapshot.Recipe.Include) != 0 ||
+		len(requested.ExecutionSnapshot.Recipe.Exclude) != 0 {
+		return fmt.Errorf("bahia-cd0wr: only a single unfiltered Kopia snapshot without verification or policy is enabled")
+	}
+	proof, ok := h.runReceipts.(backupExecutionConfigProof)
+	if !ok {
+		return fmt.Errorf("canonical configuration proof is unavailable")
+	}
+	if err := proof.VerifyBackupExecutionConfig(ctx, requested.ExecutionSnapshot); err != nil {
+		return err
+	}
+	if requested.ExecutionSnapshot.CredentialRef == nil || h.runCredentialRecords == nil {
+		return fmt.Errorf("pinned Signet credential proof is unavailable")
+	}
+	currentRef, err := h.runCredentialRecords.CurrentReference(ctx, requested.ExecutionSnapshot.Repository.CredentialProfile)
+	if err != nil {
+		return fmt.Errorf("read canonical Signet credential: %w", err)
+	}
+	if currentRef != *requested.ExecutionSnapshot.CredentialRef {
+		return fmt.Errorf("Signet credential version moved; fresh signed run required")
+	}
+	prior, err := h.runReceipts.GetBackupRunReceipt(ctx, requested.ID)
+	if err != nil {
+		return err
+	}
+	if prior != nil {
+		return fmt.Errorf("run id already has an ACKed canonical state without an admission record")
+	}
+	return nil
 }
 
 // validateBackupExecutionSnapshot rejects any drift between the operator's

@@ -31,6 +31,24 @@ type BackupRunAdmission struct {
 	StatusDelivered bool   `json:"status_delivered,omitempty"`
 }
 
+// VerifyBackupRunAdmissionReady rejects a read-only, moved, or incomplete
+// ledger before config can enable asynchronous intake.
+func (o *Outbox) VerifyBackupRunAdmissionReady() error {
+	if o == nil || o.shared == nil || o.shared.readOnly || o.shared.movedFrom != "" {
+		return fmt.Errorf("backup run writable local outbox or original ledger is unavailable")
+	}
+	return o.shared.db.View(func(tx *bbolt.Tx) error {
+		for _, name := range [][]byte{backupRunPendingBucket, backupRunPendingCoordsBucket, backupRunPendingEventsBucket,
+			backupRunIntentsBucket, backupRunCoordsBucket, backupRunEventsBucket, backupRunStatusEventsBucket,
+			outboxDeliveryProofsBucket, backupRunStatusClockBucket} {
+			if tx.Bucket(name) == nil {
+				return fmt.Errorf("backup run local ledger bucket %q is unavailable", name)
+			}
+		}
+		return nil
+	})
+}
+
 // GetBackupRunAdmission reports an exact replay or a key conflict. The
 // admission record and its staged outbox entry are committed together.
 func (o *Outbox) GetBackupRunAdmission(intentID, coordinate, requestEventID string) (*BackupRunAdmission, error) {
@@ -447,6 +465,51 @@ func (o *Outbox) ListBackupRunAdmissionsNeedingStatus(after string, limit int) (
 	return records, next, errors.Join(err, decodeErr)
 }
 
+// ListBackupRunAdmissionsReadyForExecution returns only admissions with exact
+// retained state and accepted-status quorum proofs. The executor rechecks each
+// identity with GetBackupRunAdmission before any external effect.
+func (o *Outbox) ListBackupRunAdmissionsReadyForExecution(after string, limit int) ([]BackupRunAdmission, string, error) {
+	if o == nil || o.shared == nil {
+		return nil, "", fmt.Errorf("backup run admission outbox is unavailable")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var records []BackupRunAdmission
+	var next string
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(backupRunIntentsBucket)
+		if bucket == nil {
+			return fmt.Errorf("backup run admission index is unavailable")
+		}
+		cursor := bucket.Cursor()
+		key, raw := cursor.First()
+		if after != "" {
+			key, raw = cursor.Seek([]byte(after))
+			if bytes.Equal(key, []byte(after)) {
+				key, raw = cursor.Next()
+			}
+		}
+		visited := 0
+		for ; key != nil && visited < limit; key, raw = cursor.Next() {
+			visited++
+			next = string(key)
+			var record BackupRunAdmission
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return fmt.Errorf("decode backup run admission %q: %w", key, err)
+			}
+			if record.Delivered && record.StatusDelivered && record.StatusOutcome == "accepted" {
+				records = append(records, record)
+			}
+		}
+		if key == nil {
+			next = ""
+		}
+		return nil
+	})
+	return records, next, err
+}
+
 // StageBackupRunAcceptedStatus atomically records exactly one service-signed
 // accepted result and its outbox row. A crash before this transaction leaves an
 // admission to reconcile; a crash after it leaves the signed status to retry.
@@ -479,7 +542,7 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 	if json.Unmarshal([]byte(event.Content), &content) != nil || content.IntentID != record.IntentID ||
 		content.Coordinate != record.Coordinate ||
 		content.Result != "applied" || content.Data.RunID != strings.TrimPrefix(record.Coordinate, "backup-run:") ||
-		content.Data.StateEventID != record.StateEventID || content.Data.Execution != "paused" {
+		content.Data.StateEventID != record.StateEventID || content.Data.Execution != "queued" {
 		return "", false, fmt.Errorf("backup run terminal status content does not match the admission")
 	}
 	entry := OutboxEntry{Event: event, Target: target, EntityType: "backup_run.status", EnqueuedAt: time.Now().UTC(), State: OutboxPending}
@@ -546,6 +609,22 @@ func (o *Outbox) StageBackupRunAcceptedStatus(record BackupRunAdmission, event n
 		}
 		if err := bucket.Put([]byte(current.IntentID), raw); err != nil {
 			return err
+		}
+		pendingBucket := tx.Bucket(backupRunPendingBucket)
+		var pending BackupRunPending
+		if pendingRaw := pendingBucket.Get([]byte(current.IntentID)); pendingRaw != nil {
+			if json.Unmarshal(pendingRaw, &pending) != nil || pending.Coordinate != current.Coordinate ||
+				pending.RequestEvent.ID.Hex() != current.RequestEventID || pending.State != BackupRunPendingState {
+				return fmt.Errorf("backup run pending identity changed before acceptance")
+			}
+			pending.State = BackupRunAcceptedState
+			pendingRaw, err := json.Marshal(pending)
+			if err != nil {
+				return err
+			}
+			if err := pendingBucket.Put([]byte(current.IntentID), pendingRaw); err != nil {
+				return err
+			}
 		}
 		statusID = current.StatusEventID
 		inserted = true

@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	BackupRunPendingState = "pending"
-	BackupRunRefusedState = "refused"
+	BackupRunPendingState  = "pending"
+	BackupRunAcceptedState = "accepted"
+	BackupRunRefusedState  = "refused"
 )
 
 // BackupRunPending is the immutable, signed operator request and its bounded

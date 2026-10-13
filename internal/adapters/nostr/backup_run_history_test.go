@@ -15,11 +15,72 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/coder/websocket"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func TestBackupRunHistoryStagesOnceWithLiveProof(t *testing.T) {
+	relay := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
+	pool := NewRelayPool([]string{relay.url}, zap.NewNop())
+	defer pool.Close()
+	dir := t.TempDir()
+	store, err := localstore.Open(filepath.Join(dir, "events.db"))
+	require.NoError(t, err)
+	defer store.Close()
+	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.db"))
+	require.NoError(t, err)
+	defer outbox.Close()
+	service, actor := gonostr.Generate(), gonostr.Generate()
+	projector := withTestServiceKey(&Projector{enabled: true, logger: zap.NewNop()}, service.Hex())
+	publisher := &Publisher{localOutbox: outbox, ownEvents: store, target: repository.NostrPublishTargetControlPlane,
+		now: time.Now, logger: zap.NewNop(), wake: make(chan struct{}, 1)}
+	canonical := NewBackupCanonicalPublisher(projector, zap.NewNop())
+	canonical.SetRunAdmissionPublisher(publisher)
+	runID, err := uuid.NewV7()
+	require.NoError(t, err)
+	now := time.Now().UTC().Truncate(time.Second)
+	coordinate := BackupRunDTag(runID)
+	request := gonostr.Event{Kind: gonostr.Kind(kinds.CASControlState), CreatedAt: gonostr.Timestamp(now.Unix()),
+		Tags: gonostr.Tags{{"d", coordinate}, {"intent_id", "intent-1"}, {"expiration", fmt.Sprint(now.Add(time.Minute).Unix())}}, Content: `{}`}
+	require.NoError(t, request.Sign(actor))
+	_, _, err = outbox.PutBackupRunPending(localstore.BackupRunPending{IntentID: "intent-1", Coordinate: coordinate, RequestEvent: request,
+		Actor: actor.Public().Hex(), ServicePubkey: service.Public().Hex(), ReceivedAt: now, ExpiresAt: now.Add(time.Minute)})
+	require.NoError(t, err)
+	runner, err := NewBackupRunHistoryRunner(outbox, pool, store, zap.NewNop())
+	require.NoError(t, err)
+	stages := 0
+	runner.SetAdmission(func(ctx context.Context, pending localstore.BackupRunPending, proof *BackupRunHistoryProof) error {
+		stages++
+		require.NoError(t, proof.StillCurrent())
+		run := &domain.BackupRun{ID: runID, RecipeID: uuid.New(), RepositoryID: uuid.New(), RequestedBy: actor.Public().Hex(),
+			RequestEventID: request.ID.Hex(), RequestKind: int(request.Kind), RequestDTag: coordinate, Status: domain.RunStatusQueued,
+			Backend: domain.BackupBackendKopia, TargetRef: "/data", VerificationMode: domain.BackupVerificationNone,
+			VerificationStatus: domain.BackupVerificationPending, CreatedAt: now, UpdatedAt: now}
+		run.ExecutionSnapshot = &domain.BackupExecutionSnapshot{CredentialRef: &domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("a", 64), Version: 1}}
+		_, err := canonical.StageRunAdmissionWithHistory(ctx, pending.IntentID, request.ID.Hex(), run, proof)
+		return err
+	})
+	_, err = runner.ReconcileOnce(t.Context())
+	require.NoError(t, err)
+	_, err = runner.ReconcileOnce(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, stages)
+	admission, err := outbox.GetBackupRunAdmission("intent-1", coordinate, request.ID.Hex())
+	require.NoError(t, err)
+	require.NotNil(t, admission)
+	require.False(t, admission.Delivered, "acceptance waits for exact publisher quorum")
+	stateID, err := gonostr.IDFromHex(admission.StateEventID)
+	require.NoError(t, err)
+	staged, found, err := outbox.Get(stateID)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.True(t, staged.Event.VerifySignature())
+}
 
 func TestBackupRunHistoryRequiresExactAllRelayEOSEAndStableConnection(t *testing.T) {
 	first := newNIP11LimitRelay(t, map[string]int{"max_limit": 20})
