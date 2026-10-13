@@ -285,7 +285,8 @@ func TestSignedUnwrappedIntent_InvalidRevisionPublishesBoundedRejection(t *testi
 	require.ErrorContains(t, ingress.ProcessUnwrappedIntent(context.Background(), event), "invalid expected_updated_at")
 	require.Len(t, statuses.events, 1)
 	assert.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
-	assert.Equal(t, "intent-status:"+actor+":"+testOrgID().String(), extractDTag(statuses.events[0]))
+	assert.Equal(t, "intent-status:"+actor+":secret:invalid-secret-revision", extractDTag(statuses.events[0]))
+	assert.NotContains(t, statuses.events[0].Content, testOrgID().String())
 }
 
 func TestIntentRevisionMatchesCanonicalPrecision(t *testing.T) {

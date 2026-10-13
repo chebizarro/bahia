@@ -211,6 +211,13 @@ The daemon publishes one replaceable status per requester and coordinate:
 }
 ```
 
+For secret-domain intents, the public `d` coordinate is
+`intent-status:<requester-pubkey>:secret:<intent-id>` rather than the secret or
+service coordinate. Its content omits `coordinate` and `data`; rejection
+`reason` is a stable code (`invalid_request`, `revision_conflict`,
+`store_unavailable`, or `processing_failed`), never a handler diagnostic. The
+`intent_id` and optional `e` tag retain request correlation.
+
 `status` is `accepted` or `rejected`; `reason` explains a rejection; `data`
 carries request output (a scan page, a build id, an org rekey summary,
 `result=evaluated` with an `evaluation` object for policy evaluation). The
@@ -343,8 +350,7 @@ service pubkey:
 | Runtime | `runtime-instance-health`, `route-canary`, `runtime-observation` | `runtime:recovery:…`, `runtime:maintenance:…`, `route:<svc>:<env>:<unit>:<host>` | health and canary public; observations protected |
 | Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, keyed opaque member UUID, `org:invite:<org>:<id>` | OCK ciphertext |
 
-The `org-member` cp-state `d` is a stable keyed opaque UUID while the confidential-dedupe system key is unchanged. Org and member identities, including tombstones, are in OCK content, not relay-visible tags. Readers also accept retained `org:member:<org>:<pubkey>` records and select the latest decrypted record per `(org_id, pubkey)` by `created_at`, then lowest event id. OCK rotation re-asserts retained records on their existing coordinates; it does not migrate or delete relay history.
-| Secrets, notifications | `secret-registry`, `notification-channel`, `notification-log` | secret: bare opaque UUID; other families: `<prefix>:<id>`; log is one latest-50 window per channel | OCK ciphertext |
+| Secrets, notifications | `secret-registry`, `notification-channel`, `notification-log` | secret and channel: bare opaque UUID; log is one latest-50 window per channel | OCK ciphertext |
 | Payments | `payment-record` | per record | fleet-OCK ciphertext |
 | Adoption, Hive-CI | `adoption-binding`; `hiveci-policy`, `hiveci-result`, `hiveci-initiation`, `hiveci-release` | `adoption:binding:<svc>:<env>`; `hiveci:policy:<uuidv7>`, `hiveci:result:<event>`, `hiveci:initiation:<event>` | binding public; Hive-CI records fleet-OCK ciphertext |
 | Tools | `tool-provision-intent`, `tool-denylist`, `tool-profile` | `<prefix>:<id>` | fleet-OCK ciphertext |
@@ -355,6 +361,17 @@ The `org-member` cp-state `d` is a stable keyed opaque UUID while the confidenti
 | SoulFactory | `soul-factory-runtime-policy`, `soul-factory-saga-run`, `soul-factory-adapter-ledger` | per saga / ledger | protected; ledger is fleet-OCK ciphertext |
 | Continuity | `continuity-heartbeat` (on `30315`) | per worker | public |
 | Audit correlation | `cp-audit` (on `4903`) | — | protected (kind) |
+
+The `org-member` cp-state `d` is a stable keyed opaque UUID while the confidential-dedupe system key is unchanged. Org and member identities, including tombstones, are in OCK content, not relay-visible tags. Readers also accept retained `org:member:<org>:<pubkey>` records and select the latest decrypted record per `(org_id, pubkey)` by `created_at`, then lowest event id. OCK rotation re-asserts retained records on their existing coordinates; it does not migrate or delete relay history.
+
+Notification-channel records expose only the stable channel UUID in `d` and
+the envelope/filter tags `t`, `schema`, `legacy_kind`, and `deleted` (plus the
+shared cp-state `domain` tag). `org_id`, `channel_type`, and `name` are inside
+OCK-encrypted content for both org-scoped and fleet-scoped channels. Readers
+select the latest signed record by the addressable coordinate and read these
+fields after decryption; retained records with the old metadata tags remain
+readable. The shared NIP-CAS-0011 OCK envelope still carries `key_org` for
+key selection; this tag change does not hide that key-scope identifier.
 
 Backup repository, policy, recipe, definition, and run records carry an `org`
 tag and matching `content.org_id`. A backup run also carries

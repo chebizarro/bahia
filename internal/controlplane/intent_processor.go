@@ -16,6 +16,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
 )
 
@@ -490,7 +491,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 					p.status.PublishConflict(ctx, intent)
 				}
 			} else {
-				p.status.PublishRejection(ctx, intent, err.Error())
+				reason := err.Error()
+				if intent.Domain == "secret" {
+					reason = secretIntentPublicReason(err)
+				}
+				p.status.PublishRejection(ctx, intent, reason)
 			}
 		}
 		return err
@@ -541,6 +546,19 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		zap.String("coordinate", intent.Coordinate),
 	)
 	return nil
+}
+
+func secretIntentPublicReason(err error) string {
+	switch {
+	case IsRevisionConflict(err):
+		return "revision_conflict"
+	case errors.Is(err, secretstore.ErrUnavailable), errors.Is(err, secretstore.ErrNotConfigured):
+		return "store_unavailable"
+	case errors.Is(err, secretstore.ErrNotFound), errors.Is(err, secretstore.ErrDenied), errors.Is(err, secretstore.ErrRevoked), errors.Is(err, secretstore.ErrExpired), errors.Is(err, secretstore.ErrVersionMismatch):
+		return "invalid_request"
+	default:
+		return "processing_failed"
+	}
 }
 
 // IsProcessed reports whether an intent_id has completed the shared pipeline.

@@ -5,7 +5,7 @@ import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from '$l
 import { signIntent } from '$lib/nostr/intent-signer.js';
 import { giftWrapIntent, sensitiveIntentBlocker } from '$lib/nostr/intent-giftwrap.js';
 import { createIntentOutbox } from '$lib/nostr/outbox.js';
-import { createPendingIntents } from './pending-intents.svelte.js';
+import { createPendingIntents, intentStatusCoordinates } from './pending-intents.svelte.js';
 import { intentOrgCandidates, intentRecordOrgId } from './intent-readiness.svelte.js';
 import { SENSITIVE_INTENT_ORG_REQUIRED, intentOrgChoices } from '$lib/nostr/intent-org.js';
 
@@ -116,16 +116,16 @@ export async function submitSensitiveIntent({ domain, op, coordinate, orgId, con
   row.wrapEventId = wrap.id;
   await outbox.enqueue(wrap);
   for (const relay of getRelayUrls()) outbox.onReconnect(relay);
-  return { id: coordinate, coordinate, intentId: signedIntentId, pending: true, sensitive: true };
+  return { id: coordinate, coordinate, intentId: signedIntentId, domain, pending: true, sensitive: true };
 }
 
 /** Resolve a gift-wrapped intent only from its signed, correlated daemon status. */
-export async function waitForSensitiveIntentStatus({ coordinate, intentId }, { signal } = {}) {
+export async function waitForSensitiveIntentStatus({ domain, coordinate, intentId }, { signal } = {}) {
   const { pending } = await ensureSession();
   const requester = authState.pubkey;
   const service = getServicePubkey();
   const filter = { kinds: [30315], authors: [service],
-    '#d': [`intent-status:${requester}:${coordinate}`], '#p': [requester], '#t': ['intent-status'] };
+    '#d': intentStatusCoordinates(requester, { domain, coordinate, intentId }), '#p': [requester], '#t': ['intent-status'] };
   const store = getEventStore();
   return new Promise((resolve, reject) => {
     let finished = false;
@@ -144,7 +144,7 @@ export async function waitForSensitiveIntentStatus({ coordinate, intentId }, { s
     const abort = () => finish(null, signal.reason || new Error('Intent status wait aborted'));
     const onStatus = event => {
       const tag = name => event.tags?.find(item => item[0] === name)?.[1];
-      if (event.kind !== 30315 || event.pubkey !== service || tag('d') !== filter['#d'][0] ||
+      if (event.kind !== 30315 || event.pubkey !== service || !filter['#d'].includes(tag('d')) ||
           tag('p') !== requester || tag('intent_id') !== intentId || tag('t') !== 'intent-status') return;
       let body;
       try { body = JSON.parse(event.content || '{}'); }

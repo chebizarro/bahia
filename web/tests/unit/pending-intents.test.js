@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
-import { createPendingIntents } from '../../src/lib/stores/pending-intents.svelte.js';
+import { createPendingIntents, intentStatusCoordinates } from '../../src/lib/stores/pending-intents.svelte.js';
 
 const service = 'a'.repeat(64);
 const requester = 'b'.repeat(64);
@@ -42,6 +42,20 @@ describe('pending intent overlay', () => {
     await store.add({ event: intent, domain: 'service' });
     expect(await store.handleCanonical({ kind: 30900, pubkey: service, created_at: 100,
       tags: [['d', 'service:one']] })).toBe(true);
+    expect(store.query()).toEqual([]);
+    store.close();
+  });
+
+  it('correlates secret statuses by intent id and still reads earlier coordinate statuses', async () => {
+    const store = makeStore(); await store.open();
+    const coordinates = intentStatusCoordinates(requester, { domain: 'secret', coordinate: 'service:one', intentId: 'intent-one' });
+    expect(coordinates).toEqual([`intent-status:${requester}:secret:intent-one`, `intent-status:${requester}:service:one`]);
+    await store.add({ event: intent, domain: 'secret' });
+    expect(await store.handleStatus({ ...status('rejected', 'invalid_request'), tags: [
+      ['d', coordinates[0]], ['p', requester], ['intent_id', 'intent-one'], ['status', 'rejected']
+    ] })).toBe(true);
+    expect(store.query()[0].reason).toBe('invalid_request');
+    await store.handleStatus(status('accepted'));
     expect(store.query()).toEqual([]);
     store.close();
   });

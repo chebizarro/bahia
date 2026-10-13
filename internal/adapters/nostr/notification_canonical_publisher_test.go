@@ -10,6 +10,8 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -159,6 +161,47 @@ func TestNotificationPublishRoundTripFullConfig(t *testing.T) {
 	// Verify the wire event content does NOT contain sensitive data in plaintext.
 	if strings.Contains(events[0].Content, "wh_secret_abc123") {
 		t.Fatal("webhook secret appears in wire event content")
+	}
+}
+
+func TestNotificationChannelSignedWireTagsContainNoConfidentialMetadata(t *testing.T) {
+	for _, fleetScoped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "org", true: "fleet"}[fleetScoped], func(t *testing.T) {
+			sink := &captureProjectionPublisher{}
+			projector := newTestProjector(projectorTestConfig(), newFakeProjectionSource(), sink, nil, zap.NewNop())
+			encryptor := &mockConfidentialEncryptor{}
+			publisher := NewNotificationCanonicalPublisher(projector, encryptor, nil, zap.NewNop())
+			ch := &domain.NotificationChannel{ID: uuid.New(), OrgID: uuid.New(), Name: "private-oncall", ChannelType: domain.ChannelTypeWebhook, Enabled: true}
+			if fleetScoped {
+				ch.OrgID = uuid.Nil
+			}
+			require.NoError(t, publisher.PublishChannel(t.Context(), ch))
+			require.Len(t, sink.events, 1)
+			ev := sink.events[0]
+			require.True(t, ev.CheckID())
+			require.True(t, ev.VerifySignature())
+			wire, err := json.Marshal(ev)
+			require.NoError(t, err)
+			var signed struct {
+				Tags [][]string `json:"tags"`
+			}
+			require.NoError(t, json.Unmarshal(wire, &signed))
+			allowed := map[string]bool{"d": true, "domain": true, "schema": true, "legacy_kind": true, "deleted": true, "t": true}
+			for _, tag := range signed.Tags {
+				require.True(t, allowed[tag[0]], "unexpected public tag %q", tag[0])
+			}
+			require.Equal(t, ch.ID.String(), eventDTag(ev))
+			assertTag(t, ev, "t", kinds.CPStateTopicNotificationChannelRegistry)
+			orgVisible, err := encryptor.DecryptConfidential(t.Context(), ev.Content, 0, "", "")
+			require.NoError(t, err)
+			var payload map[string]any
+			require.NoError(t, json.Unmarshal(orgVisible, &payload))
+			require.Equal(t, ch.Name, payload["name"])
+			require.Equal(t, string(ch.ChannelType), payload["channel_type"])
+			if !fleetScoped {
+				require.Equal(t, ch.OrgID.String(), payload["org_id"])
+			}
+		})
 	}
 }
 

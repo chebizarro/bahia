@@ -2,17 +2,22 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // memCanonicalSecrets is the daemon's canonical secret state as the local
@@ -153,6 +158,80 @@ func (f *referenceFixture) content(secretID uuid.UUID, version int) map[string]i
 func (f *referenceFixture) process(t *testing.T, op string, content map[string]interface{}) error {
 	t.Helper()
 	return f.processor.ProcessRelayIntent(context.Background(), makeTestSecretIntent(t, op, content, uuid.NewString(), f.ownerPub))
+}
+
+func TestSecretIntentRejectionPreservesPrivateDiagnosticOnlyInDaemonLog(t *testing.T) {
+	f := newReferenceFixture(t, false)
+	secretID := domain.NewEntityID()
+	f.store.err = fmt.Errorf("%w: signet transport detail for service %s", secretstore.ErrUnavailable, f.serviceID)
+	logs, observed := observer.New(zap.WarnLevel)
+	f.processor.logger = zap.New(logs)
+	published := &statusCollector{}
+	f.processor.status = NewIntentStatusPublisher(published.publish, keyer.NewPlainKeySigner(nostr.Generate()), zap.NewNop())
+	request := makeTestSecretIntent(t, "create", f.content(secretID, 2), "request-correlation", f.ownerPub)
+	err := f.processor.ProcessRelayIntent(t.Context(), request)
+	if err == nil || !strings.Contains(err.Error(), "signet transport detail") {
+		t.Fatalf("handler error = %v, want private diagnostic", err)
+	}
+	if observed.FilterMessage("intent handler failed").Len() != 1 {
+		t.Fatalf("private diagnostic was not logged for operators: %+v", observed.All())
+	}
+	if !strings.Contains(fmt.Sprint(observed.All()[0].ContextMap()["error"]), "signet transport detail") {
+		t.Fatal("operator diagnostic was lost")
+	}
+	if len(published.events) != 1 {
+		t.Fatalf("status count = %d, want 1", len(published.events))
+	}
+	status := published.events[0]
+	if !status.CheckID() || !status.VerifySignature() {
+		t.Fatal("intent status is not signed")
+	}
+	wire, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{f.serviceID.String(), secretID.String(), "signet transport detail"} {
+		if strings.Contains(string(wire), private) {
+			t.Fatalf("public status exposes %q: %s", private, wire)
+		}
+	}
+	if extractTag(status, "intent_id") != "request-correlation" || extractTag(status, "e") != request.ID.Hex() {
+		t.Fatalf("request correlation lost: %+v", status.Tags)
+	}
+	var content map[string]any
+	if err := json.Unmarshal([]byte(status.Content), &content); err != nil {
+		t.Fatal(err)
+	}
+	if content["reason"] != "store_unavailable" {
+		t.Fatalf("public reason = %v, want store_unavailable", content["reason"])
+	}
+}
+
+func TestSecretIntentRevisionConflictUsesNonIdentifyingReason(t *testing.T) {
+	f := newReferenceFixture(t, false)
+	secretID := domain.NewEntityID()
+	published := &statusCollector{}
+	f.processor.status = NewIntentStatusPublisher(published.publish, keyer.NewPlainKeySigner(nostr.Generate()), zap.NewNop())
+	content := f.content(secretID, 2)
+	content["expected_updated_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	request := makeTestSecretIntent(t, "create", content, "conflict-correlation", f.ownerPub)
+	if err := f.processor.ProcessRelayIntent(t.Context(), request); !IsRevisionConflict(err) {
+		t.Fatalf("rejection = %v, want revision conflict", err)
+	}
+	if len(published.events) != 1 {
+		t.Fatalf("status count = %d, want 1", len(published.events))
+	}
+	status := published.events[0]
+	if !status.CheckID() || !status.VerifySignature() || strings.Contains(status.Content, secretID.String()) || extractTag(status, "d") == secretID.String() {
+		t.Fatalf("unsafe conflict status: %+v", status)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(status.Content), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["reason"] != "revision_conflict" || extractTag(status, "e") != request.ID.Hex() {
+		t.Fatalf("conflict reason or correlation lost: %+v %+v", payload, status.Tags)
+	}
 }
 
 func TestSecretReferenceIntentPublishesReferenceWithoutPostgres(t *testing.T) {

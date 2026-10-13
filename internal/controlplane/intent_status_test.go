@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -80,6 +81,53 @@ func TestIntentStatusPublisher_Rejection(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(ev.Content), &content))
 	assert.Equal(t, "rejected", content["result"])
 	assert.Equal(t, "permission denied", content["reason"])
+}
+
+func TestSecretIntentStatusSignedEventExposesOnlyRequestCorrelation(t *testing.T) {
+	published := &statusCollector{}
+	pub := NewIntentStatusPublisher(published.publish, keyer.NewPlainKeySigner(nostr.Generate()), zap.NewNop())
+	serviceID := "11111111-2222-7333-8444-555555555555"
+	secretID := "aaaaaaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee"
+	intent := testIntent(t, "update", secretID)
+	intent.Domain = "secret"
+	intent.IntentID = "request-correlation"
+	intent.Coordinate = serviceID + ":" + secretID
+	intent.Event = &nostr.Event{ID: testNostrID("secret-request")}
+	intent.StatusData = map[string]any{"service_id": serviceID, "diagnostic": "signet transport detail"}
+
+	pub.PublishRejection(t.Context(), intent, "signet transport detail for service "+serviceID)
+	require.Len(t, published.events, 1)
+	ev := published.events[0]
+	require.True(t, ev.CheckID())
+	require.True(t, ev.VerifySignature())
+	wire, err := json.Marshal(ev)
+	require.NoError(t, err)
+	for _, private := range []string{serviceID, secretID, "signet transport detail"} {
+		assert.NotContains(t, string(wire), private)
+	}
+	assert.Equal(t, "intent-status:"+intent.Actor+":secret:"+intent.IntentID, extractTag(ev, "d"))
+	assert.Equal(t, intent.IntentID, extractTag(ev, "intent_id"))
+	assert.Equal(t, intent.Event.ID.Hex(), extractTag(ev, "e"))
+	var content map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Content), &content))
+	assert.Equal(t, "invalid_request", content["reason"])
+	assert.NotContains(t, content, "coordinate")
+	assert.NotContains(t, content, "data")
+}
+
+func TestSecretIntentStatusUsesEventIDWhenIntentIDIsMissing(t *testing.T) {
+	pub := NewIntentStatusPublisher((&statusCollector{}).publish, keyer.NewPlainKeySigner(nostr.Generate()), zap.NewNop())
+	intent := testIntent(t, "create", "service-private-coordinate")
+	intent.Domain = "secret"
+	intent.IntentID = ""
+	intent.Event = &nostr.Event{ID: testNostrID("malformed-secret-request")}
+	ev, err := pub.buildStatusEvent(t.Context(), intent, "rejected", "rejected", "malformed private request", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "intent-status:"+intent.Actor+":secret:"+intent.Event.ID.Hex(), extractTag(ev, "d"))
+	assert.Equal(t, intent.Event.ID.Hex(), extractTag(ev, "e"))
+	intent.Event = nil
+	_, err = pub.buildStatusEvent(t.Context(), intent, "rejected", "rejected", "malformed private request", nil)
+	require.ErrorContains(t, err, "requires request correlation")
 }
 
 func TestIntentStatusPublisher_Conflict(t *testing.T) {
