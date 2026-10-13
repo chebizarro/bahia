@@ -422,6 +422,50 @@ func TestRelaySettingsHydratorZeroEventEOSERetainsLastKnownGood(t *testing.T) {
 	if !ok || strings.Join(snapshot.BrowserRelays, ",") != "wss://last-known-good.example" {
 		t.Fatalf("zero-event EOSE erased last-known-good: %#v", snapshot)
 	}
+	projection, err := store.Get(context.Background(), servicePubkey)
+	require.NoError(t, err)
+	require.Equal(t, time.Unix(1_002, 0).UTC(), projection.LastSyncAt, "EOSE without a confirmed head must not refresh freshness")
+	require.Nil(t, projection.RelayConfirmedAt)
+}
+
+func TestRelaySettingsHydratorEventOnlyOnSecondaryRelay(t *testing.T) {
+	state := RelayPolicyState{Schema: RelaySettingsSchema, BrowserRelays: []string{"wss://secondary-policy.example"}}
+	event := signedRelaySettingsStateEvent(t, time.Now().UTC().Add(-time.Minute), state)
+	primary := censusRelay(t)
+	secondary := censusRelay(t, *event)
+	pool := nostradapter.NewRelayPool([]string{primary, secondary}, zap.NewNop())
+	defer pool.Close()
+	store := &memoryRelayPolicyProjectionStore{}
+	caughtUp := make(chan struct{}, 1)
+	h := NewRelaySettingsHydrator(RelaySettingsHydratorConfig{
+		Pool: pool, ServicePubkey: event.PubKey.Hex(), ProjectionStore: store,
+		Logger: zap.NewNop(),
+		NewDrainTimer: func(time.Duration) (<-chan time.Time, func()) {
+			ch := make(chan time.Time, 1)
+			ch <- time.Now()
+			return ch, func() {}
+		},
+		OnCaughtUp: func(context.Context) { caughtUp <- struct{}{} },
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- h.subscribe(ctx) }()
+	select {
+	case <-caughtUp:
+	case <-ctx.Done():
+		t.Fatal("secondary-only event did not complete catch-up")
+	}
+	projection, err := store.Get(ctx, event.PubKey.Hex())
+	require.NoError(t, err)
+	require.NotNil(t, projection)
+	require.Equal(t, event.ID.Hex(), projection.EventID)
+	require.Equal(t, secondary, projection.SourceRelay)
+	require.NotNil(t, projection.RelayConfirmedAt)
+	require.True(t, h.IsLive())
+	require.Equal(t, 2, h.relayEOSECount(), "both relays must independently complete catch-up")
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
 }
 
 func TestRelaySettingsHydratorDrainsEventAfterEOSEFromSecondaryRelay(t *testing.T) {

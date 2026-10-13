@@ -72,12 +72,9 @@ def fetch_readiness(url: str) -> dict[str, Any]:
         with urllib.request.urlopen(url, timeout=15) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
-        # Older Bahia releases may return 503 solely because the optional
-        # projection is absent. Parse the diagnostic body so a deployment can
-        # transition away from that circular readiness dependency.
-        raw = exc.read()
+        raise RolloutGateError(f"readiness request returned HTTP {exc.code}") from exc
     except OSError as exc:
-        raise RolloutGateError(f"readiness request failed: {exc}") from exc
+        raise RolloutGateError("readiness request failed") from exc
     try:
         payload = json.loads(raw)
     except (TypeError, json.JSONDecodeError) as exc:

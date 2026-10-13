@@ -1,7 +1,9 @@
 import importlib.util
+import io
 from pathlib import Path
 import sys
 import unittest
+import urllib.error
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "relay_policy_rollout_gate.py"
 SPEC = importlib.util.spec_from_file_location("relay_policy_rollout_gate", SCRIPT_PATH)
@@ -22,6 +24,18 @@ def policy(event: str = "a", digest: str = "b", created: str = "2026-08-03T06:00
 
 
 class RelayPolicyRolloutGateTests(unittest.TestCase):
+    def test_non_2xx_readiness_cannot_pass_with_a_valid_projection_body(self):
+        from unittest.mock import patch
+
+        body = __import__("json").dumps({"checks": [{"name": "relay_policy_projection", "details": {
+            "availability": "available", **policy(),
+        }}]}).encode()
+        response = urllib.error.HTTPError("http://ready", 503, "unavailable", {}, io.BytesIO(body))
+        self.addCleanup(response.close)
+        with patch.object(gate.urllib.request, "urlopen", side_effect=response):
+            with self.assertRaisesRegex(gate.RolloutGateError, "HTTP 503"):
+                gate.fetch_readiness("http://ready")
+
     def test_same_projection_survives_relay_outage_as_cached(self):
         gate.require_same_or_newer(policy(), policy())
 

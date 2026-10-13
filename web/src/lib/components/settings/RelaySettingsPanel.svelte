@@ -214,6 +214,7 @@
       hash: '',
       source_relay: '',
       last_sync_at: '',
+      relay_confirmed_at: '',
       freshness: '',
       source: ''
     };
@@ -260,6 +261,8 @@
         operatorPolicyProvenance = {
           ...operatorPolicyProvenance,
           ...projected.provenance,
+          relay_confirmed_at: operatorPolicyProvenance.relay_confirmed_at || projected.provenance.relay_confirmed_at,
+          source: 'canonical_relay_event',
           freshness: 'live'
         };
         operatorPolicyCandidate = {
@@ -607,6 +610,9 @@
       <div><dt>Policy hash</dt><dd class="monospace">{operatorPolicyProvenance.hash || 'Not available'}</dd></div>
       <div><dt>Source relay</dt><dd class="monospace">{operatorPolicyProvenance.source_relay || 'Not available'}</dd></div>
       <div><dt>Last sync</dt><dd>{operatorPolicyProvenance.last_sync_at || 'Not available'}</dd></div>
+      <div><dt>Relay confirmation</dt><dd>{operatorPolicyProvenance.relay_confirmed_at
+        ? `${operatorPolicyProvenance.source === 'canonical_relay_event' ? 'Observed in this browser' : 'Confirmed by service'} at ${operatorPolicyProvenance.relay_confirmed_at}`
+        : 'Not observed in this browser session'}</dd></div>
     </dl>
   </div>
   {#if pendingCanonicalRelayPolicyState}
