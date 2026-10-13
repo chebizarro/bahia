@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,7 +106,7 @@ func TestEventsAndCursorsSurviveReopenAndDeletingTheFileResetsBoth(t *testing.T)
 	require.Zero(t, cursor)
 }
 
-func TestOpenSharesOneDatabasePerPathAndRecreatesCorruptFiles(t *testing.T) {
+func TestOpenSharesOneDatabasePerPathAndRefusesCorruptFiles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "daemon.bolt")
 	first, err := Open(path)
 	require.NoError(t, err)
@@ -123,13 +124,11 @@ func TestOpenSharesOneDatabasePerPathAndRecreatesCorruptFiles(t *testing.T) {
 	corrupt := filepath.Join(t.TempDir(), "corrupt.bolt")
 	require.NoError(t, os.WriteFile(corrupt, []byte("this is not a bbolt file, it is a cache that was damaged"), 0o600))
 	store, err := Open(corrupt)
+	require.Nil(t, store)
+	require.Error(t, err, "corruption must not silently discard assistant history")
+	data, err := os.ReadFile(corrupt)
 	require.NoError(t, err)
-	defer store.Close()
-	matches, err := filepath.Glob(corrupt + ".corrupt-*")
-	require.NoError(t, err)
-	require.Len(t, matches, 1, "the damaged file is kept aside for inspection")
-	_, err = store.SaveEvent(ev)
-	require.NoError(t, err)
+	require.Equal(t, []byte("this is not a bbolt file, it is a cache that was damaged"), data)
 }
 
 func TestQueryEventsPagesPastTiesAndHonoursLimit(t *testing.T) {
@@ -201,4 +200,39 @@ func TestPruneExpiredEventsHonoursNIP40OnEveryKind(t *testing.T) {
 	removed, err = store.PruneExpiredEvents(now.Add(time.Second))
 	require.NoError(t, err)
 	require.Equal(t, 1, removed, "the deadline is inclusive")
+}
+
+func TestPruneRegularEventsRetainsAssistantCheckpointEvidence(t *testing.T) {
+	store, path := openTemp(t)
+	sk := nostr.Generate()
+	tags := nostr.Tags{{domain.AssistantCheckpointTagDomain, domain.AssistantDomain}, {domain.AssistantCheckpointTagType, domain.AssistantCheckpointTypeExecution}, {domain.AssistantCheckpointTagSchema, domain.AssistantExecutionCheckpointSchema}, {domain.AssistantCheckpointTagSession, "session"}, {domain.AssistantCheckpointTagRun, "run"}}
+	root := signed(t, sk, nostr.Kind(domain.AssistantExecutionCheckpointKind), 100, tags, "root")
+	head := signed(t, sk, nostr.Kind(domain.AssistantExecutionCheckpointKind), 101, tags, "head")
+	pending := signed(t, sk, nostr.Kind(domain.AssistantExecutionCheckpointKind), 102, tags, "not relay accepted")
+	other := signed(t, sk, nostr.Kind(domain.AssistantExecutionCheckpointKind), 100, nostr.Tags{{"domain", "other"}}, "other")
+	for _, ev := range []nostr.Event{root, head, pending, other} {
+		_, err := store.SaveEvent(ev)
+		require.NoError(t, err)
+	}
+	for _, ev := range []nostr.Event{root, head} {
+		require.NoError(t, store.MarkAssistantCheckpointAccepted(ev.ID))
+	}
+	require.NoError(t, store.Close())
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	accepted, err := reopened.AssistantCheckpointAccepted(head.ID)
+	require.NoError(t, err)
+	require.True(t, accepted, "relay acceptance marker must survive restart")
+	accepted, err = reopened.AssistantCheckpointAccepted(pending.ID)
+	require.NoError(t, err)
+	require.False(t, accepted, "pre-OK cache copy is not committed")
+	removed, err := reopened.PruneRegularEvents(time.Unix(1000, 0))
+	require.NoError(t, err)
+	require.Equal(t, 1, removed)
+	require.True(t, reopened.hasLocked(root.ID))
+	require.True(t, reopened.hasLocked(head.ID))
+	require.True(t, reopened.hasLocked(pending.ID), "pre-OK evidence can only trigger refusal")
+	require.False(t, reopened.hasLocked(other.ID))
+	require.Error(t, reopened.DeleteEvent(root.ID), "committed checkpoint cannot be removed")
 }

@@ -18,6 +18,7 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/secretstore"
 )
 
@@ -57,12 +58,22 @@ func (h AssistantCheckpointHead) Contains(eventID string) bool {
 	return false
 }
 
+// AssistantLocalEventStore retains relay-accepted checkpoints separately
+// from the publisher's speculative pre-OK event cache.
+type AssistantLocalEventStore interface {
+	SupervisionEventStore
+	SaveEvent(nostr.Event) (bool, error)
+	MarkAssistantCheckpointAccepted(nostr.ID) error
+	AssistantCheckpointAccepted(nostr.ID) (bool, error)
+}
+
 type AssistantExecutionStoreConfig struct {
 	Publisher     AssistantEventPublisher
 	Subscriber    AssistantRelaySubscriber
 	Signer        nostr.Signer
 	KeyProvider   AssistantTranscriptKeyProvider
 	ServicePubkey string
+	LocalStore    AssistantLocalEventStore
 	Now           func() time.Time
 }
 
@@ -72,6 +83,7 @@ type AssistantExecutionStore struct {
 	signer        nostr.Signer
 	keys          AssistantTranscriptKeyProvider
 	servicePubkey string
+	local         AssistantLocalEventStore
 	now           func() time.Time
 	mu            sync.Mutex
 	pending       map[string]assistantPendingCheckpoint
@@ -90,7 +102,7 @@ func NewAssistantExecutionStore(c AssistantExecutionStoreConfig) *AssistantExecu
 	if now == nil {
 		now = time.Now
 	}
-	return &AssistantExecutionStore{publisher: c.Publisher, subscriber: c.Subscriber, signer: c.Signer, keys: c.KeyProvider, servicePubkey: strings.TrimSpace(c.ServicePubkey), now: now, pending: make(map[string]assistantPendingCheckpoint)}
+	return &AssistantExecutionStore{publisher: c.Publisher, subscriber: c.Subscriber, signer: c.Signer, keys: c.KeyProvider, servicePubkey: strings.TrimSpace(c.ServicePubkey), local: c.LocalStore, now: now, pending: make(map[string]assistantPendingCheckpoint)}
 }
 
 func checkpointTags(e domain.AssistantExecution, prev string, key AssistantTranscriptKeyRef) nostr.Tags {
@@ -100,6 +112,7 @@ func checkpointTags(e domain.AssistantExecution, prev string, key AssistantTrans
 		{domain.AssistantCheckpointTagSchema, domain.AssistantExecutionCheckpointSchema},
 		{domain.AssistantCheckpointTagSession, e.SessionID},
 		{domain.AssistantCheckpointTagRun, e.RunID},
+		{"t", kinds.AssistantCheckpointSessionTopic(e.SessionID)},
 		{domain.AssistantCheckpointTagRevision, strconv.FormatUint(e.Revision, 10)},
 		{domain.AssistantTranscriptTagKeyRef, key.Ref},
 		{domain.AssistantTranscriptTagKeyVersion, key.Version},
@@ -174,6 +187,21 @@ func (s *AssistantExecutionStore) Append(ctx context.Context, execution domain.A
 	}
 	if accepted < 1 {
 		return "", fmt.Errorf("publish assistant checkpoint %s: no relay accepted event", pending.event.ID.Hex())
+	}
+	if s.local != nil {
+		if _, err := s.local.SaveEvent(pending.event); err != nil {
+			return "", fmt.Errorf("retain assistant checkpoint %s: %w", pending.event.ID.Hex(), err)
+		}
+		retained := false
+		for range s.local.QueryEvents(nostr.Filter{IDs: []nostr.ID{pending.event.ID}}) {
+			retained = true
+		}
+		if !retained {
+			return "", fmt.Errorf("assistant checkpoint %s was not retained locally", pending.event.ID.Hex())
+		}
+		if err := s.local.MarkAssistantCheckpointAccepted(pending.event.ID); err != nil {
+			return "", fmt.Errorf("mark assistant checkpoint %s accepted locally: %w", pending.event.ID.Hex(), err)
+		}
 	}
 	delete(s.pending, runKey)
 	return pending.event.ID.Hex(), nil
@@ -358,9 +386,9 @@ func (s *AssistantExecutionStore) author(ctx context.Context) (nostr.PubKey, err
 	return s.signer.GetPublicKey(ctx)
 }
 
-// Load performs one scoped backfill through EOSE and returns the head of the
-// single valid chain. CLOSED, a stream ending before EOSE, any invalid event
-// or any fork parks the run instead of guessing at its history.
+// Load backfills through EOSE, merges the service-signed local replica, and
+// validates the complete predecessor chain. An author/kind-only second REQ
+// recovers checkpoints written before the indexed session topic existed.
 func (s *AssistantExecutionStore) Load(ctx context.Context, sessionID, runID string) (AssistantCheckpointHead, error) {
 	if s == nil || s.subscriber == nil || sessionID == "" || runID == "" {
 		return AssistantCheckpointHead{}, errors.New("assistant checkpoint query not configured")
@@ -369,45 +397,83 @@ func (s *AssistantExecutionStore) Load(ctx context.Context, sessionID, runID str
 	if err != nil {
 		return AssistantCheckpointHead{}, err
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.AssistantExecutionCheckpointKind)}, Authors: []nostr.PubKey{author}, Tags: nostr.TagMap{domain.AssistantCheckpointTagDomain: []string{domain.AssistantDomain}, domain.AssistantCheckpointTagType: []string{domain.AssistantCheckpointTypeExecution}, domain.AssistantCheckpointTagSchema: []string{domain.AssistantExecutionCheckpointSchema}, domain.AssistantCheckpointTagSession: []string{sessionID}, domain.AssistantCheckpointTagRun: []string{runID}}}
-	sub, err := s.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	base := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(domain.AssistantExecutionCheckpointKind)}, Authors: []nostr.PubKey{author}}
+	scoped := base
+	scoped.Tags = nostr.TagMap{"t": {kinds.AssistantCheckpointSessionTopic(sessionID)}}
+	nodes, err := s.backfill(ctx, scoped, author, sessionID, runID)
 	if err != nil {
 		return AssistantCheckpointHead{}, err
 	}
+	if s.local != nil {
+		for ev := range s.local.QueryEvents(scoped) {
+			if !assistantCheckpointMatchesRun(ev, sessionID, runID) {
+				continue
+			}
+			accepted, err := s.local.AssistantCheckpointAccepted(ev.ID)
+			if err != nil {
+				return AssistantCheckpointHead{}, fmt.Errorf("read local checkpoint acceptance %s: %w", ev.ID.Hex(), err)
+			}
+			if !accepted {
+				continue
+			}
+			cp, err := s.decode(ctx, &ev, author, sessionID, runID)
+			if err != nil {
+				return AssistantCheckpointHead{}, fmt.Errorf("local checkpoint %s: %w", ev.ID.Hex(), err)
+			}
+			nodes = append(nodes, assistantCheckpointNode{id: ev.ID.Hex(), cp: cp})
+		}
+	}
+	if head, err := newestAssistantCheckpoint(nodes); err == nil {
+		return head, nil
+	}
+	legacy, err := s.backfill(ctx, base, author, sessionID, runID)
+	if err != nil {
+		return AssistantCheckpointHead{}, err
+	}
+	return newestAssistantCheckpoint(append(nodes, legacy...))
+}
+
+func assistantCheckpointMatchesRun(ev nostr.Event, sessionID, runID string) bool {
+	return tagValue(ev.Tags, domain.AssistantCheckpointTagSession) == sessionID && tagValue(ev.Tags, domain.AssistantCheckpointTagRun) == runID
+}
+
+func (s *AssistantExecutionStore) backfill(ctx context.Context, filter nostr.Filter, author nostr.PubKey, sessionID, runID string) ([]assistantCheckpointNode, error) {
+	sub, err := s.subscriber.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
+	if err != nil {
+		return nil, err
+	}
 	defer sub.Close()
-	events := sub.EventChan()
-	closed := sub.ClosedChan()
-	eose := sub.EOSEChan()
+	events, closed, eose := sub.EventChan(), sub.ClosedChan(), sub.EOSEChan()
 	nodes := []assistantCheckpointNode{}
 	seen := map[string]bool{}
 	for {
 		select {
 		case <-ctx.Done():
-			return AssistantCheckpointHead{}, ctx.Err()
+			return nil, ctx.Err()
 		case c, ok := <-closed:
 			if !ok {
 				closed = nil
 				continue
 			}
-			return AssistantCheckpointHead{}, fmt.Errorf("assistant checkpoint subscription closed: %s %s", c.RelayURL, c.Reason)
+			return nil, fmt.Errorf("assistant checkpoint subscription closed: %s %s", c.RelayURL, c.Reason)
 		case ev, ok := <-events:
 			if !ok {
 				if assistantEOSEReached(eose) {
-					return newestAssistantCheckpoint(nodes)
+					return nodes, nil
 				}
-				return AssistantCheckpointHead{}, errors.New("assistant checkpoint subscription ended before EOSE")
+				return nil, errors.New("assistant checkpoint subscription ended before EOSE")
 			}
-			if ev == nil || seen[ev.ID.Hex()] {
+			if ev == nil || seen[ev.ID.Hex()] || !assistantCheckpointMatchesRun(*ev, sessionID, runID) {
 				continue
 			}
 			seen[ev.ID.Hex()] = true
 			cp, err := s.decode(ctx, ev, author, sessionID, runID)
 			if err != nil {
-				return AssistantCheckpointHead{}, fmt.Errorf("checkpoint %s: %w", ev.ID.Hex(), err)
+				return nil, fmt.Errorf("checkpoint %s: %w", ev.ID.Hex(), err)
 			}
 			nodes = append(nodes, assistantCheckpointNode{id: ev.ID.Hex(), cp: cp})
 		case <-eose:
-			return newestAssistantCheckpoint(nodes)
+			return nodes, nil
 		}
 	}
 }

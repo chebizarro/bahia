@@ -1,27 +1,14 @@
-// Package localstore is the daemon's per-process Nostr event store: a
-// rebuildable cache of the events its inbound subscriptions received, plus the
-// per-(relay, filter) resume cursors those subscriptions keep.
+// Package localstore holds the daemon's Nostr event replica and inbound
+// subscription cursors in bbolt. Ordinary inbound history may be pruned, but
+// relay-accepted assistant checkpoints and session projections must survive
+// relay pruning. A damaged database is never silently replaced: recovery
+// requires the operator to restore or repair the durable replica.
 //
-// It is a cache, not a source of truth. Relays are canonical: deleting the file
-// is always safe, and the daemon rebuilds it by syncing from its relays. A file
-// that cannot be opened because it is corrupt is moved aside and recreated for
-// the same reason. The one thing relays cannot rebuild is the daemon's own
-// output whose delivery the outbox abandoned (see Undelivered): that event and
-// its marker are restored from the outbox's retained failed entries when the
-// publisher starts, so they outlive a deleted store file as long as the outbox
-// retains the entry.
-//
-// Events live in a fiatjaf.com/nostr/eventstore bbolt backend (the same pure-Go
-// store the relay sidecar uses). The store keeps what a NIP-01/NIP-09 relay
-// would serve: replaceable and addressable events collapse to their latest
-// version per coordinate, and a kind-5 deletion request removes the
-// requester's events it names and keeps them from coming back. Coordinates
-// the eventstore's tag index cannot hold (an empty d, a d or `a` coordinate
-// over 100 bytes) are resolved through package boltcoord, as in the relay
-// sidecar, and so are filters on such tag values, through
-// boltcoord's tag index. Cursors live in a separate bucket of
-// the same file, so the events and the cursors that describe them are deleted
-// together.
+// Events use the fiatjaf.com/nostr/eventstore bbolt backend. Replaceable and
+// addressable coordinates collapse to their NIP-01 latest version, NIP-09
+// deletions are applied, and coordinates beyond the backend's tag-index limit
+// use boltcoord. Cursors and events share the same file so a resume cursor
+// cannot outlive the events it describes.
 package localstore
 
 import (
@@ -43,6 +30,7 @@ import (
 	"fiatjaf.com/nostr/eventstore"
 	"fiatjaf.com/nostr/eventstore/boltdb"
 	"github.com/openagentsinc/bahia/internal/boltcoord"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"go.etcd.io/bbolt"
 )
 
@@ -57,8 +45,9 @@ var (
 	// tagBucket indexes the tag values the eventstore does not (empty, or
 	// over 100 bytes; see boltcoord.Store), so QueryEvents answers filters on
 	// them. Every write and delete goes through Store.coords.
-	tagBucket  = []byte("bahiaLocalTags")
-	metaBucket = []byte("bahiaLocalMeta")
+	tagBucket                         = []byte("bahiaLocalTags")
+	metaBucket                        = []byte("bahiaLocalMeta")
+	assistantCheckpointAcceptedBucket = []byte("bahiaAssistantCheckpointAccepted")
 )
 
 // coordinateRepairMarker records that the store has been brought up to what
@@ -104,13 +93,8 @@ var openStores = struct {
 }{byPath: make(map[string]*sharedStore)}
 
 // Open opens (or shares) the store at path, creating its directory. A second
-// Open of the same path in this process shares the first handle's database:
-// the daemon builds a replacement App on SIGHUP before stopping the running
-// one, and bbolt's exclusive file lock would otherwise make that wait fail.
-//
-// If the file exists but is not a readable store, it is renamed to
-// "<path>.corrupt-<unix>" and a fresh store is created: the contents are a
-// cache that the relays rebuild.
+// Open of the same path in one process shares the first handle's database.
+// Corruption is an error rather than an implicit reset of assistant history.
 func Open(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("local event store path is required")
@@ -129,15 +113,8 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("create local event store directory: %w", err)
 	}
 	backend, err := openBackend(abs)
-	if err != nil && isCorruptStoreError(err) {
-		aside := fmt.Sprintf("%s.corrupt-%d", abs, time.Now().Unix())
-		if renameErr := os.Rename(abs, aside); renameErr != nil {
-			return nil, fmt.Errorf("open local event store %s: %w (moving it aside failed: %v)", abs, err, renameErr)
-		}
-		backend, err = openBackend(abs)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("open local event store %s (is another process using it?): %w", abs, err)
+		return nil, fmt.Errorf("open local event store %s: %w", abs, err)
 	}
 	shared := &sharedStore{path: abs, backend: backend, refs: 1}
 	store := &Store{shared: shared}
@@ -162,7 +139,7 @@ func openBackend(path string) (*boltdb.BoltBackend, error) {
 		return nil, err
 	}
 	if err := backend.DB.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket, undeliveredBucket} {
+		for _, name := range [][]byte{cursorBucket, deletionBucket, tagBucket, metaBucket, undeliveredBucket, assistantCheckpointAcceptedBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -296,6 +273,35 @@ func (s *Store) saveDeletionLocked(request nostr.Event) error {
 	return nil
 }
 
+// MarkAssistantCheckpointAccepted records that the exact signed event reached
+// relay OK and is held locally. A pre-OK publisher cache copy is not enough
+// to authorize local recovery. The marker and event survive process restart.
+func (s *Store) MarkAssistantCheckpointAccepted(id nostr.ID) error {
+	s.shared.saveMu.Lock()
+	defer s.shared.saveMu.Unlock()
+	var held *nostr.Event
+	for ev := range s.backend().QueryEvents(nostr.Filter{IDs: []nostr.ID{id}}, 1) {
+		held = &ev
+	}
+	if held == nil || !assistantCheckpointEvent(*held) || !held.CheckID() || !held.VerifySignature() {
+		return fmt.Errorf("assistant checkpoint %s is not a retained signed event", id.Hex())
+	}
+	return s.backend().DB.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket(assistantCheckpointAcceptedBucket).Put(id[:], []byte{1})
+	})
+}
+
+// AssistantCheckpointAccepted reports whether relay acceptance was durably
+// recorded for this event. A pre-OK cache copy returns false.
+func (s *Store) AssistantCheckpointAccepted(id nostr.ID) (bool, error) {
+	var accepted bool
+	err := s.backend().DB.View(func(tx *bbolt.Tx) error {
+		accepted = len(tx.Bucket(assistantCheckpointAcceptedBucket).Get(id[:])) != 0
+		return nil
+	})
+	return accepted, err
+}
+
 // DeleteEvent removes one event. Deleting an absent id is not an error.
 // Removing a kind-5 request also lifts its deletions for events stored later;
 // the events it already removed stay removed.
@@ -305,6 +311,11 @@ func (s *Store) DeleteEvent(id nostr.ID) error {
 	held := slices.Collect(s.backend().QueryEvents(nostr.Filter{IDs: []nostr.ID{id}}, 1))
 	if len(held) == 0 || held[0].ID != id {
 		return nil
+	}
+	if accepted, err := s.AssistantCheckpointAccepted(id); err != nil {
+		return err
+	} else if accepted {
+		return fmt.Errorf("accepted assistant checkpoint %s cannot be deleted", id.Hex())
 	}
 	if held[0].Kind == nostr.KindDeletion {
 		if err := s.deletions().Unindex(held[0]); err != nil {
@@ -444,7 +455,7 @@ func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
 	}
 	var expired []nostr.ID
 	for ev := range s.QueryEvents(nostr.Filter{Until: until - 1}) {
-		if ev.Kind.IsRegular() && ev.Kind != nostr.KindDeletion {
+		if ev.Kind.IsRegular() && ev.Kind != nostr.KindDeletion && !assistantCheckpointEvent(ev) {
 			expired = append(expired, ev.ID)
 		}
 	}
@@ -454,6 +465,30 @@ func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
 		}
 	}
 	return len(expired), nil
+}
+
+// assistantCheckpointEvent identifies execution-journal evidence. Even an
+// unmarked pre-OK copy may only add a refusal, not authorize recovery; keeping
+// older signed copies lets unknown-session lookup fail closed after pruning.
+func assistantCheckpointEvent(ev nostr.Event) bool {
+	if ev.Kind != nostr.Kind(domain.AssistantExecutionCheckpointKind) {
+		return false
+	}
+	var domainTag, typeTag, schemaTag string
+	for _, tag := range ev.Tags {
+		if len(tag) < 2 {
+			continue
+		}
+		switch tag[0] {
+		case domain.AssistantCheckpointTagDomain:
+			domainTag = tag[1]
+		case domain.AssistantCheckpointTagType:
+			typeTag = tag[1]
+		case domain.AssistantCheckpointTagSchema:
+			schemaTag = tag[1]
+		}
+	}
+	return domainTag == domain.AssistantDomain && typeTag == domain.AssistantCheckpointTypeExecution && schemaTag == domain.AssistantExecutionCheckpointSchema
 }
 
 // PruneExpiredEvents deletes stored events of any kind whose NIP-40

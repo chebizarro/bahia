@@ -556,6 +556,7 @@ type assistantStackOptions struct {
 	// checkpointPublisher replaces the relay as the checkpoint store's
 	// publisher only, so a test can hold or fail checkpoint publication.
 	checkpointPublisher AssistantEventPublisher
+	localStore          AssistantLocalEventStore
 }
 
 type assistantStack struct {
@@ -584,7 +585,7 @@ func newAssistantStack(t *testing.T, relay *assistantTestRelay, signer nostr.Sig
 	if opts.checkpointPublisher != nil {
 		checkpointPublisher = opts.checkpointPublisher
 	}
-	st.store = NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: checkpointPublisher, Subscriber: relay, Signer: signer, KeyProvider: keys, Now: assistantTestClock})
+	st.store = NewAssistantExecutionStore(AssistantExecutionStoreConfig{Publisher: checkpointPublisher, Subscriber: relay, Signer: signer, KeyProvider: keys, LocalStore: opts.localStore, Now: assistantTestClock})
 	st.transcript = NewAssistantTranscriptStore(AssistantTranscriptStoreConfig{Publisher: relay, Subscriber: relay, Signer: signer, Identity: AssistantIdentity{AgentID: "assistant-test", Pubkey: pk.Hex()}, KeyProvider: keys, Now: assistantTestClock})
 	st.observer = &AssistantExecutionObserver{Subscriber: relay, ReissueWait: func(ctx context.Context, _ int) error {
 		select {
@@ -602,7 +603,7 @@ func newAssistantStack(t *testing.T, relay *assistantTestRelay, signer nostr.Sig
 	if opts.iterativeFactory != nil {
 		iterative = opts.iterativeFactory(st.transcript)
 	}
-	st.engine = NewAssistantExecutionEngine(AssistantExecutionEngineConfig{Store: st.store, Runtime: runtime, Observer: st.observer, Batch: opts.batch, Iterative: iterative, Transcript: st.transcript, ScopeResolver: opts.scope, Evidence: opts.evidence, Publisher: relay, Signer: signer, Subscriber: relay, Identity: AssistantIdentity{AgentID: "assistant-test", Pubkey: pk.Hex()}, Lifecycle: lifecycle, Now: assistantTestClock})
+	st.engine = NewAssistantExecutionEngine(AssistantExecutionEngineConfig{Store: st.store, Runtime: runtime, Observer: st.observer, Batch: opts.batch, Iterative: iterative, Transcript: st.transcript, ScopeResolver: opts.scope, Evidence: opts.evidence, Publisher: relay, LocalStore: opts.localStore, Signer: signer, Subscriber: relay, Identity: AssistantIdentity{AgentID: "assistant-test", Pubkey: pk.Hex()}, Lifecycle: lifecycle, Now: assistantTestClock})
 	t.Cleanup(st.crash)
 	return st
 }
