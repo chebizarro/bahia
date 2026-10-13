@@ -728,7 +728,9 @@ func (c HiveCIDependencyGiteaConfig) Format(state fmt.State, verb rune) {
 func (c HiveCIDependencyGiteaConfig) MarshalJSON() ([]byte, error) { return marshalRedactedJSON(c) }
 func (c HiveCIDependencyGiteaConfig) MarshalYAML() (any, error)    { return marshalRedactedYAML(c) }
 
-func (c HiveCIPolicyConfig) String() string                    { return stringRedactedConfig(c) }
-func (c HiveCIPolicyConfig) Format(state fmt.State, verb rune) { formatRedactedConfig(state, verb, c) }
-func (c HiveCIPolicyConfig) MarshalJSON() ([]byte, error)      { return marshalRedactedJSON(c) }
-func (c HiveCIPolicyConfig) MarshalYAML() (any, error)         { return marshalRedactedYAML(c) }
+func (c HiveCIDispatchPolicyConfig) String() string { return stringRedactedConfig(c) }
+func (c HiveCIDispatchPolicyConfig) Format(state fmt.State, verb rune) {
+	formatRedactedConfig(state, verb, c)
+}
+func (c HiveCIDispatchPolicyConfig) MarshalJSON() ([]byte, error) { return marshalRedactedJSON(c) }
+func (c HiveCIDispatchPolicyConfig) MarshalYAML() (any, error)    { return marshalRedactedYAML(c) }

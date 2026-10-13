@@ -397,7 +397,6 @@ hiveci:
     - repo_coordinate: 30617:owner:astillero
       workflow_path: .gitea/workflows/release.yml
       service_name: astillero
-      environment_name: edge-01-production
       build_dependencies:
         - name: cascadia-go
           clone_url: https://git.sharegap.net/cascadia/cascadia-go.git
@@ -420,6 +419,30 @@ hiveci:
 	}
 }
 
+func TestLoadRejectsHiveCIDispatchPolicySeedFields(t *testing.T) {
+	for _, field := range []string{"environment_name: edge-01-production", "branch_pattern: main", "metadata: {}", "service_id: 0199c693-7b5f-7a42-b13e-fb6107ff039c", "environment_id: 0199c693-7b5f-7a42-b13e-fb6107ff039d", "id: 0199c693-7b5f-7a42-b13e-fb6107ff039b"} {
+		t.Run(strings.Split(field, ":")[0], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			content := "dev_mode: true\nhiveci:\n  policies:\n    - repo_coordinate: 30617:owner:astillero\n      enabled: false\n      " + field + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "hiveci.policies[0]."+strings.Split(field, ":")[0]) || !strings.Contains(err.Error(), "hiveci-policy intents") {
+				t.Fatalf("Load() error = %v, want explicit policy-seed migration", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsHiveCIDispatchPolicySeedEnv(t *testing.T) {
+	t.Setenv("BAHIA_HIVECI__POLICIES__0__BRANCH_PATTERN", "main")
+	_, err := Load("")
+	if err == nil || !strings.Contains(err.Error(), "hiveci.policies[0].branch_pattern") {
+		t.Fatalf("Load() error = %v, want explicit policy-seed migration", err)
+	}
+}
+
 func TestLoadHiveCIRejectsUnsafeBuildDependencyConfiguration(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -437,7 +460,7 @@ func TestLoadHiveCIRejectsUnsafeBuildDependencyConfiguration(t *testing.T) {
 			cfg.HiveCI.Enabled = true
 			cfg.HiveCI.TrustedCIPubkeys = []string{"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}
 			cfg.HiveCI.DependencyGitea = HiveCIDependencyGiteaConfig{BaseURL: "https://git.sharegap.net", Token: "fleet-read-token"}
-			cfg.HiveCI.Policies = []HiveCIPolicyConfig{{
+			cfg.HiveCI.Policies = []HiveCIDispatchPolicyConfig{{
 				RepoCoordinate: "30617:owner:astillero", WorkflowPath: ".gitea/workflows/release.yml", ServiceName: "astillero",
 				BuildDependencies: []HiveCIBuildDependencyConfig{{Name: "drydock", CloneURL: test.cloneURL}},
 			}}
