@@ -641,8 +641,8 @@ func (r *CanonicalRepository) mirrorRelease(ctx context.Context, release domain.
 // Index rebuild and migration ---------------------------------------------------
 
 // RebuildIndex replays the canonical policies, result states and accepted
-// releases into the optional SQL index. It never removes rows; one failed
-// row does not stop the rest.
+// releases into the optional SQL index. The PostgreSQL projection archives
+// rows absent from canonical heads while preserving historical release FKs.
 func (r *CanonicalRepository) RebuildIndex(ctx context.Context) error {
 	if r == nil || r.index == nil {
 		return nil
@@ -655,9 +655,17 @@ func (r *CanonicalRepository) RebuildIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, policy := range policies {
-		if err := r.index.EnsurePipelinePolicy(ctx, policy); err != nil {
-			failed = append(failed, fmt.Errorf("policy %s: %w", policy.ID, err))
+	if reconciler, ok := r.index.(interface {
+		ReconcilePipelinePolicies(context.Context, []domain.HiveCIPipelinePolicy) error
+	}); ok {
+		if err := reconciler.ReconcilePipelinePolicies(ctx, policies); err != nil {
+			failed = append(failed, fmt.Errorf("policies: %w", err))
+		}
+	} else {
+		for _, policy := range policies {
+			if err := r.index.EnsurePipelinePolicy(ctx, policy); err != nil {
+				failed = append(failed, fmt.Errorf("policy %s: %w", policy.ID, err))
+			}
 		}
 	}
 	states, err := r.canonical.ListResultStates(ctx, "", "")
@@ -708,72 +716,4 @@ func (r *CanonicalRepository) RebuildIndex(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failed...)
-}
-
-// BackfillMarker records that the one-time SQL-era backfill ran.
-// *localstore.Outbox satisfies it.
-type BackfillMarker interface {
-	GetControlRecord(family, id string) ([]byte, error)
-	PutControlRecord(family, id string, value []byte) error
-}
-
-const hiveCIBackfillMarker = "hiveci-canonical-v1"
-
-// BackfillFromIndex publishes, once, the Hive-CI state that exists only in
-// the SQL index because it was written before the store became canonical:
-// every pipeline policy (keeping its SQL id) and the processing state of
-// every unfinished result, so the relay replay of its signed event finds the
-// state it had. The marker is written only after everything was admitted.
-func (r *CanonicalRepository) BackfillFromIndex(ctx context.Context, marker BackfillMarker) error {
-	if r == nil || r.index == nil || marker == nil {
-		return nil
-	}
-	if err := r.available(); err != nil {
-		return err
-	}
-	if done, err := marker.GetControlRecord("bootstrap", hiveCIBackfillMarker); err != nil || string(done) == "1" {
-		return err
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	retained, err := r.canonical.ListPipelinePolicies(ctx)
-	if err != nil {
-		return err
-	}
-	known := make(map[string]struct{}, len(retained))
-	for _, policy := range retained {
-		known[policyKeyOf(policy)] = struct{}{}
-	}
-	policies, err := r.index.ListPolicies(ctx)
-	if err != nil {
-		return err
-	}
-	for _, policy := range policies {
-		if _, ok := known[policyKeyOf(policy)]; ok {
-			continue
-		}
-		if err := r.canonical.PublishPipelinePolicy(ctx, policy); err != nil {
-			return fmt.Errorf("backfill Hive-CI policy %s: %w", policy.ID, err)
-		}
-	}
-	pending, err := r.index.ListPendingResults(ctx)
-	if err != nil {
-		return err
-	}
-	for _, result := range pending {
-		existing, err := r.resultState(ctx, result.ResultEventID)
-		if err != nil {
-			return err
-		}
-		if existing != nil {
-			continue
-		}
-		if err := r.canonical.PublishResultState(ctx, domain.HiveCIResultState{
-			ResultEventID: result.ResultEventID, RunEventID: result.RunEventID, ProcessingState: result.ProcessingState,
-			ProcessingError: result.ProcessingError, RetryCount: result.RetryCount, LastRetryAt: result.LastRetryAt, UpdatedAt: r.now(),
-		}); err != nil {
-			return fmt.Errorf("backfill Hive-CI result %s: %w", result.ResultEventID, err)
-		}
-	}
-	return marker.PutControlRecord("bootstrap", hiveCIBackfillMarker, []byte("1"))
 }

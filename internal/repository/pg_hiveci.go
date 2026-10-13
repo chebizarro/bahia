@@ -485,6 +485,7 @@ func (r *PgHiveCIRepository) ListPolicies(ctx context.Context) ([]domain.HiveCIP
 		SELECT id, repo_coordinate, workflow_path, branch_pattern, service_id, environment_id,
 		       enabled, metadata, created_at, updated_at
 		FROM hiveci_pipeline_policies
+		WHERE archived_at IS NULL
 		ORDER BY repo_coordinate, workflow_path, branch_pattern
 	`)
 	if err != nil {
@@ -509,7 +510,7 @@ func (r *PgHiveCIRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, rep
 		SELECT id, repo_coordinate, workflow_path, branch_pattern, service_id, environment_id,
 		       enabled, metadata, created_at, updated_at
 		FROM hiveci_pipeline_policies
-		WHERE repo_coordinate = $1 AND workflow_path = $2 AND enabled = true
+		WHERE repo_coordinate = $1 AND workflow_path = $2 AND enabled = true AND archived_at IS NULL
 		ORDER BY branch_pattern NULLS FIRST, updated_at DESC
 		LIMIT 1
 	`, repo, workflow)
@@ -525,7 +526,28 @@ func (r *PgHiveCIRepository) GetPolicyByRepoAndWorkflow(ctx context.Context, rep
 }
 
 func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy domain.HiveCIPipelinePolicy) error {
-	// This is a derived index of the canonical id-addressed policy.
+	return r.withProjectionTx(ctx, func(tx pgx.Tx) error {
+		return ensurePipelinePolicyIndex(ctx, tx, policy)
+	})
+}
+
+// ReconcilePipelinePolicies atomically projects the complete canonical head set.
+// Historical SQL-only policies remain as archived FK targets for accepted releases.
+func (r *PgHiveCIRepository) ReconcilePipelinePolicies(ctx context.Context, policies []domain.HiveCIPipelinePolicy) error {
+	return r.withProjectionTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE hiveci_pipeline_policies SET archived_at = now() WHERE archived_at IS NULL`); err != nil {
+			return fmt.Errorf("archiving noncanonical hiveci policies: %w", err)
+		}
+		for _, policy := range policies {
+			if err := ensurePipelinePolicyIndex(ctx, tx, policy); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func ensurePipelinePolicyIndex(ctx context.Context, tx pgx.Tx, policy domain.HiveCIPipelinePolicy) error {
 	metadata := policy.Metadata
 	if metadata == nil {
 		metadata = map[string]any{}
@@ -534,15 +556,24 @@ func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy do
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	// The selector is a uniqueness constraint, not the policy identity. A
+	// SQL-only row may have the same selector but a different canonical ID.
+	if _, err := tx.Exec(ctx, `UPDATE hiveci_pipeline_policies SET archived_at = now()
+		WHERE id <> $1 AND archived_at IS NULL AND repo_coordinate = $2
+		AND workflow_path = $3 AND branch_pattern IS NOT DISTINCT FROM NULLIF($4, '')
+		AND service_id = $5 AND environment_id = $6`, policy.ID, policy.RepoCoordinate,
+		policy.WorkflowPath, policy.BranchPattern, policy.ServiceID, policy.EnvironmentID); err != nil {
+		return fmt.Errorf("archiving superseded hiveci policy: %w", err)
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO hiveci_pipeline_policies
-			(id, repo_coordinate, workflow_path, branch_pattern, service_id, environment_id, enabled, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10)
+			(id, repo_coordinate, workflow_path, branch_pattern, service_id, environment_id, enabled, metadata, created_at, updated_at, archived_at)
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, NULL)
 		ON CONFLICT (id) DO UPDATE SET
 			repo_coordinate = EXCLUDED.repo_coordinate, workflow_path = EXCLUDED.workflow_path,
 			branch_pattern = EXCLUDED.branch_pattern, service_id = EXCLUDED.service_id,
 			environment_id = EXCLUDED.environment_id, enabled = EXCLUDED.enabled,
-			metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at
+			metadata = EXCLUDED.metadata, updated_at = EXCLUDED.updated_at, archived_at = NULL
 	`, policy.ID, policy.RepoCoordinate, policy.WorkflowPath, policy.BranchPattern,
 		policy.ServiceID, policy.EnvironmentID, policy.Enabled, metadataJSON, policy.CreatedAt, policy.UpdatedAt)
 	if err != nil {
@@ -552,7 +583,7 @@ func (r *PgHiveCIRepository) EnsurePipelinePolicy(ctx context.Context, policy do
 }
 
 func (r *PgHiveCIRepository) DeletePipelinePolicy(ctx context.Context, id uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM hiveci_pipeline_policies WHERE id = $1`, id)
+	_, err := r.pool.Exec(ctx, `UPDATE hiveci_pipeline_policies SET archived_at = now() WHERE id = $1 AND archived_at IS NULL`, id)
 	return err
 }
 
