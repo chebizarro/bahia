@@ -34,6 +34,11 @@ vi.mock('../../src/lib/nostr/boot.js', () => ({
   getServicePubkey: () => 'a'.repeat(64),
   onStoreRefresh: (cb) => { mock.listeners.add(cb); return () => mock.listeners.delete(cb); }
 }));
+// Attribution visibility folding is covered by security-attribution.test.js and
+// sbom-projection.test.js; these routing/decryption tests grant everything.
+vi.mock('../../src/lib/stores/collections/security-attribution.js', () => ({
+  visibleSecuritySubjects: () => ({ has: () => true })
+}));
 vi.mock('../../src/lib/stores/auth-roles.svelte.js', () => ({
   contentKeyFor: () => mock.key,
   contentKeyStateFor: () => ({ key: mock.key, status: mock.key ? 'ready' : 'key unavailable' }),
