@@ -7,15 +7,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
+
+	"fiatjaf.com/nostr"
 )
 
 const (
-	RelayPolicyProjectionBackupSchema = "bahia.relay-policy-projection-backup.v1"
+	RelayPolicyProjectionBackupSchema = "bahia.relay-policy-projection-backup.v2"
 	relayPolicySchema                 = "bahia.relay-settings.v1"
 	maxRelayPolicyBackupPayload       = 1 << 20
+	maxRelayPolicyBackupEvent         = 2 << 20
 )
 
 var relayPolicyBackupHex64 = regexp.MustCompile("^[0-9a-f]{64}$")
@@ -31,6 +35,7 @@ type RelayPolicyProjectionBackup struct {
 	EventAcceptedAt  time.Time       `json:"event_accepted_at"`
 	PolicySchema     string          `json:"policy_schema"`
 	CanonicalPayload json.RawMessage `json:"canonical_payload"`
+	SignedEvent      json.RawMessage `json:"signed_event"`
 	PayloadHash      string          `json:"payload_hash"`
 	SourceRelay      string          `json:"source_relay,omitempty"`
 	LastSyncAt       time.Time       `json:"last_sync_at"`
@@ -52,6 +57,7 @@ func NewRelayPolicyProjectionBackup(projection RelayPolicyProjection, exportedAt
 		EventAcceptedAt:  projection.EventAcceptedAt.UTC(),
 		PolicySchema:     strings.TrimSpace(projection.Schema),
 		CanonicalPayload: append(json.RawMessage(nil), projection.CanonicalPayload...),
+		SignedEvent:      append(json.RawMessage(nil), projection.SignedEvent...),
 		PayloadHash:      strings.ToLower(strings.TrimSpace(projection.PayloadHash)),
 		SourceRelay:      strings.TrimSpace(projection.SourceRelay),
 		LastSyncAt:       projection.LastSyncAt.UTC(),
@@ -78,6 +84,26 @@ func ValidateRelayPolicyProjectionBackup(backup RelayPolicyProjectionBackup) err
 	if len(backup.CanonicalPayload) == 0 || len(backup.CanonicalPayload) > maxRelayPolicyBackupPayload || !json.Valid(backup.CanonicalPayload) {
 		return fmt.Errorf("relay policy projection backup canonical_payload must be valid JSON")
 	}
+	if len(backup.SignedEvent) == 0 || len(backup.SignedEvent) > maxRelayPolicyBackupEvent {
+		return fmt.Errorf("relay policy projection backup signed_event is required")
+	}
+	var event nostr.Event
+	if err := json.Unmarshal(backup.SignedEvent, &event); err != nil || !event.CheckID() || !event.VerifySignature() {
+		return fmt.Errorf("relay policy projection backup signed_event has invalid id or Schnorr signature")
+	}
+	if event.Kind != 30900 || !strings.EqualFold(event.PubKey.Hex(), backup.AuthorPubkey) ||
+		!strings.EqualFold(event.ID.Hex(), backup.EventID) || !event.CreatedAt.Time().UTC().Equal(backup.EventCreatedAt.UTC()) {
+		return fmt.Errorf("relay policy projection backup signed_event provenance mismatch")
+	}
+	if !backupEventHasTag(event.Tags, "d", "relay-settings:operator") ||
+		!backupEventHasTag(event.Tags, "domain", "relay-settings") ||
+		!backupEventHasTag(event.Tags, "schema", relayPolicySchema) {
+		return fmt.Errorf("relay policy projection backup signed_event is not relay settings state")
+	}
+	var signedPayload, canonicalPayload any
+	if json.Unmarshal([]byte(event.Content), &signedPayload) != nil || json.Unmarshal(backup.CanonicalPayload, &canonicalPayload) != nil || !reflect.DeepEqual(signedPayload, canonicalPayload) {
+		return fmt.Errorf("relay policy projection backup signed_event content mismatch")
+	}
 	var payloadHeader struct {
 		Schema string `json:"schema"`
 	}
@@ -96,6 +122,15 @@ func ValidateRelayPolicyProjectionBackup(backup RelayPolicyProjectionBackup) err
 		return fmt.Errorf("relay policy projection backup payload hash mismatch")
 	}
 	return nil
+}
+
+func backupEventHasTag(tags nostr.Tags, key, value string) bool {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == key && tag[1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 func DecodeRelayPolicyProjectionBackup(value any) (RelayPolicyProjectionBackup, error) {

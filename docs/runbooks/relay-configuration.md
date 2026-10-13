@@ -31,6 +31,15 @@ they are in force until the canonical settings are received.
    next delivery round, and the relay-set events are republished. Nothing
    polls.
 
+The policy record, audit facts, and service DM relay lists enter the daemon's
+outbox before relay I/O. Each needs the configured service write-relay quorum;
+an incomplete round remains queued. If the new policy changes the write set
+while its own event is pending, subsequent rounds use the new effective set.
+Relay-policy projection backups contain the complete signed policy event;
+restore rejects the old v1 backup format and verifies the event ID and Schnorr
+signature against the configured service author. A projection predating signed
+event retention must be received from a relay again before it can be exported.
+
 Each canonical list governs only when it is non-empty; an empty list leaves
 the bootstrap list in force. The same effective lists drive:
 
@@ -103,6 +112,9 @@ quorum at its own relay count.
 | `refused` | why the latest canonical settings were refused (`warn`); the last accepted settings stay in force |
 
 `relay_policy_projection` reports the canonical record's event id and hash.
+Its `confirmation=relay_confirmed` detail means the accepted head arrived as
+an EVENT from a configured relay in the current subscription, before or after
+EOSE. A PostgreSQL or local projection read alone reports `cached`.
 
 ## Migration: 2026-10-11 production relay set
 

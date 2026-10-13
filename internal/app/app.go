@@ -2808,7 +2808,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				return check
 			}
 			confirmation := "cached"
-			if projection.RelayConfirmedAt != nil {
+			if relaySettingsHydrator.IsLive() {
 				confirmation = "relay_confirmed"
 			}
 			check.Message = "validated relay policy projection is hydrated"

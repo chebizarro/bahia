@@ -6,10 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
+	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/repository"
@@ -22,14 +22,19 @@ func TestRelayPolicyProjectionBackupRestoreRoundTripPreservesProvenanceAndStaysC
 	payload := []byte(`{"schema":"bahia.relay-settings.v1","browser_relays":["wss://relay.example"]}`)
 	sum := sha256.Sum256(payload)
 	now := time.Date(2026, 8, 3, 6, 0, 0, 0, time.UTC)
+	event := nostr.Event{Kind: 30900, CreatedAt: nostr.Timestamp(now.Add(-time.Minute).Unix()), Tags: nostr.Tags{{"d", "relay-settings:operator"}, {"domain", "relay-settings"}, {"schema", "bahia.relay-settings.v1"}}, Content: string(payload)}
+	require.NoError(t, event.Sign(nostr.Generate()))
+	signedEvent, err := json.Marshal(event)
+	require.NoError(t, err)
 	confirmedAt := now
 	projectionStore := &memoryRelayPolicyBackupStore{projection: repository.RelayPolicyProjection{
-		AuthorPubkey:     strings.Repeat("a", 64),
-		EventID:          strings.Repeat("b", 64),
+		AuthorPubkey:     event.PubKey.Hex(),
+		EventID:          event.ID.Hex(),
 		EventCreatedAt:   now.Add(-time.Minute),
 		EventAcceptedAt:  now,
 		Schema:           "bahia.relay-settings.v1",
 		CanonicalPayload: payload,
+		SignedEvent:      signedEvent,
 		PayloadHash:      hex.EncodeToString(sum[:]),
 		SourceRelay:      "wss://relay.example",
 		LastSyncAt:       now,
@@ -93,6 +98,7 @@ func (s *memoryRelayPolicyBackupStore) RestoreCached(_ context.Context, backup r
 		EventAcceptedAt:  backup.EventAcceptedAt,
 		Schema:           backup.PolicySchema,
 		CanonicalPayload: append([]byte(nil), backup.CanonicalPayload...),
+		SignedEvent:      append([]byte(nil), backup.SignedEvent...),
 		PayloadHash:      backup.PayloadHash,
 		SourceRelay:      backup.SourceRelay,
 		LastSyncAt:       backup.LastSyncAt,
