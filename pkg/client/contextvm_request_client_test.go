@@ -14,22 +14,6 @@ import (
 	"github.com/openagentsinc/bahia/internal/controlplane"
 )
 
-type recordingOperatorKeyer struct {
-	nostr.Keyer
-	encryptCalls int
-	decryptCalls int
-}
-
-func (s *recordingOperatorKeyer) Encrypt(ctx context.Context, plaintext string, recipient nostr.PubKey) (string, error) {
-	s.encryptCalls++
-	return s.Keyer.Encrypt(ctx, plaintext, recipient)
-}
-
-func (s *recordingOperatorKeyer) Decrypt(ctx context.Context, ciphertext string, sender nostr.PubKey) (string, error) {
-	s.decryptCalls++
-	return s.Keyer.Decrypt(ctx, ciphertext, sender)
-}
-
 func wrappedContextVMResult(t *testing.T, operatorPubkey nostr.PubKey, outerRequest, innerRequest nostr.Event, responseSecret nostr.SecretKey, tamperSignature bool, result any) *nostr.Event {
 	t.Helper()
 	wrapperSecret := nostr.Generate()
@@ -177,16 +161,6 @@ func (f *fakeOperatorTransport) Close() {
 	f.closed = true
 }
 
-func (f *fakeOperatorTransport) onlyPublished(t *testing.T) nostr.Event {
-	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.published) != 1 {
-		t.Fatalf("published count = %d, want 1", len(f.published))
-	}
-	return f.published[0]
-}
-
 func (f *fakeOperatorTransport) onlyFilter(t *testing.T) nostr.Filter {
 	t.Helper()
 	f.mu.Lock()
@@ -235,21 +209,6 @@ func decodePublishedContextVMRequest(t *testing.T, event nostr.Event) contextVMR
 func signedContextVMResult(t *testing.T, privateKey string, request nostr.Event, result any) *nostr.Event {
 	t.Helper()
 	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID.Hex(), "", "reply"}, {"p", request.PubKey.Hex()}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, contextVMResponseContent(t, request, result))
-}
-
-func signedContextVMError(t *testing.T, privateKey string, request nostr.Event, message string) *nostr.Event {
-	t.Helper()
-	return signedContextVMErrorCode(t, privateKey, request, -32000, message)
-}
-
-func signedContextVMErrorCode(t *testing.T, privateKey string, request nostr.Event, code int, message string) *nostr.Event {
-	t.Helper()
-	rpc := decodePublishedContextVMRequest(t, request)
-	body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": rpc.ID, "error": map[string]any{"code": code, "message": message}})
-	if err != nil {
-		t.Fatalf("encode ContextVM error: %v", err)
-	}
-	return signedOperatorReply(t, privateKey, controlplane.KindContextVMMessage, nostr.Tags{{"e", request.ID.Hex(), "", "reply"}, {"p", request.PubKey.Hex()}, {controlplane.ContextVMRoutingTag, controlplane.ContextVMWireVersion}}, string(body))
 }
 
 func contextVMResponseContent(t *testing.T, request nostr.Event, result any) string {
