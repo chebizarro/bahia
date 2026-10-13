@@ -1,0 +1,98 @@
+name: Assistant Joined E2E
+
+on:
+  pull_request:
+    paths:
+      - 'internal/service/assistant*'
+      - 'internal/service/assistant*/**'
+      - 'internal/app/**'
+      - 'internal/mcp/**'
+      - 'cmd/bahia-assistant-e2e-provider/**'
+      - 'web/src/lib/**/assistant*'
+      - 'web/src/lib/**/assistant*/**'
+      - 'web/tests/e2e/assistant-unified-execution.spec.js'
+      - 'web/tests/e2e/harnesses/assistant-joined.js'
+      - 'web/tests/e2e/harnesses/run-assistant-joined.js'
+      - 'web/tests/e2e/relay-harness.js'
+      - 'web/playwright.joined.config.js'
+      - 'web/package.json'
+      - 'web/pnpm-lock.yaml'
+      - 'deploy/signet-dev/**'
+      - 'scripts/signet_dev_seed.py'
+      - 'scripts/signet_live_interop.py'
+      - '.github/workflows/assistant-joined-e2e.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'internal/service/assistant*'
+      - 'internal/service/assistant*/**'
+      - 'internal/app/**'
+      - 'internal/mcp/**'
+      - 'cmd/bahia-assistant-e2e-provider/**'
+      - 'web/src/lib/**/assistant*'
+      - 'web/src/lib/**/assistant*/**'
+      - 'web/tests/e2e/assistant-unified-execution.spec.js'
+      - 'web/tests/e2e/harnesses/assistant-joined.js'
+      - 'web/tests/e2e/harnesses/run-assistant-joined.js'
+      - 'web/tests/e2e/relay-harness.js'
+      - 'web/playwright.joined.config.js'
+      - 'web/package.json'
+      - 'web/pnpm-lock.yaml'
+      - 'deploy/signet-dev/**'
+      - 'scripts/signet_dev_seed.py'
+      - 'scripts/signet_live_interop.py'
+      - '.github/workflows/assistant-joined-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  joined:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # The disposable Signet image is built from public, immutable source; no
+      # repository secret or preloaded runner image is needed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: chebizarro/nostrc
+          ref: eaf62ae4c436e649888817b5cce7aafc5321ca8a
+          path: nostrc
+          submodules: recursive
+          persist-credentials: false
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 10
+          package_json_file: web/package.json
+          cache: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 26
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Build disposable Signet image
+        working-directory: .
+        run: docker build -f deploy/signet-dev/Dockerfile --build-context nostrc=nostrc --build-context scripts=scripts -t bahia-signet-dev:local deploy/signet-dev
+      - run: pnpm run test:e2e:joined
+      - name: Upload joined harness logs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: assistant-joined-e2e-logs
+          path: |
+            web/test-results/assistant-joined-harness/
+            web/test-results/assistant-joined/
+            web/playwright-report/assistant-joined/
+          if-no-files-found: warn
