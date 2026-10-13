@@ -322,13 +322,21 @@ applies by serial, backup job ids are UUIDv7.
 **Backup run admission is currently paused in production.** The async
 history/ACK/status code below is a non-admitting prerequisite exercised by
 tests, not a live intake promise: `backupRunAsyncIntakeEnabled` is false and
-`StageRunAdmission` refuses until terminal signed status settlement
-(bahia-cd0wr.1), canonical credential recovery that does not depend on
+`StageRunAdmission` refuses until canonical credential recovery that does not depend on
 PostgreSQL (bahia-2o3on) and an exactly-once executor are available. The
 single active service-key writer is the signer's responsibility (see §1.1);
 Bahia builds no cross-process fence. A new signed request does not stage
 a run or return `pending`/`accepted`; a retained pending request also reports
-intake unavailable. An already-admitted, fully ACKed historical record may
+intake unavailable. Existing ledger requests are re-examined on run-coordinate
+relay EVENT/EOSE, a wake, or their bounded retry/expiration deadline. An
+expired request or a definitive same-coordinate history conflict becomes a
+local refusal, then the reconciler signs one non-expiring `30315` `rejected`
+status at `intent-status:<requester>:<coordinate>` and commits it with an
+operator-relay outbox row. Its timestamp is strictly above the durable floor
+of earlier service statuses on that coordinate. A refused or partial relay
+round leaves the same signed event pinned for outbox retry; replay reports
+terminal rejection only after exact operator-relay quorum proof, including
+after ordinary settled-row pruning. An already-admitted, fully ACKed historical record may
 still be recognized by exact-ID replay. No backup execution is enabled.
 
 When admission is enabled after those prerequisites, the protocol accepts only

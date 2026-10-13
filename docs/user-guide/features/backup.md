@@ -26,16 +26,19 @@ Use the Backup UI or:
 **Backup run intake and execution are currently paused.** The
 `request_backup_run` MCP tool still requires an exact operator-signed event,
 but a new production request does not stage a queued run or return `pending` or
-`accepted`. A retained pending request is also reported as unavailable; an
-already-admitted, fully ACKed historical request can be recognized on exact-ID
+`accepted`. A retained unexpired pending request is also reported as unavailable;
+an expired or definitively refused retained request has one signed rejection
+status queued to the operator relays. Replay reports that rejection as settled
+only after relay quorum accepts it; otherwise the same event remains available
+for outbox retry. An already-admitted, fully ACKed historical request can be recognized on exact-ID
 replay. Do not treat a PostgreSQL run row or local relay observation as an
 admission receipt.
 
 The implemented but disabled admission protocol is tested to stage a signed
 queued state only after exact configuration proofs, then report `pending`
 until both the run state and final signed accepted status reach their required
-relay quorums. It must not be enabled before the deployment-wide signer and
-outbox fences, authoritative history seal, and terminal status settlement are
+relay quorums. It must not be enabled before signer-enforced single-writer
+custody, canonical credential recovery, and exactly-once execution are
 available. A queued state would still not start execution or prove repository
 credential recovery. Retention request intake remains unavailable.
 Verification should prove that stored data can be read and checked, not only

@@ -58,6 +58,15 @@ can retry the same signed event ID. Exhaustion alone never signs a rejection
 because one relay may already hold the event; MCP reports acceptance only
 after both the run and final-status proofs exist.
 
+A pre-admission backup request retained in the local pending ledger may expire
+or meet a definitive run-coordinate conflict. Its `rejected` kind-30315
+terminal status is staged atomically with an operator-relay outbox row. The
+ledger keeps that exact status ID and, once the publisher records quorum OK,
+the durable proof. Partial OK, `CLOSED`, and `blocked:`/`invalid:`/
+`auth-required:` refusal cannot mark it delivered. Failed rows stay pinned
+for same-ID retry, and settled rows may be pruned only after the proof is
+recorded. The ledger remains the replay authority; PostgreSQL is not involved.
+
 ## Write relays and quorum
 
 A publisher's **write relays** are the relays each delivery round targets and

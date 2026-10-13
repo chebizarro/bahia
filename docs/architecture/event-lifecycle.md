@@ -24,7 +24,9 @@ same set of events always yields the same state regardless of arrival order:
 3. **NIP-40 expiration.** An event whose `expiration` tag is in the past is
    ignored on arrival, and a live event is dropped when its expiration passes
    (the web sweeps every five minutes; the sidecar sweeps stored events).
-   Intent-status events (`30315`) expire after seven days.
+   Ordinary intent-status events (`30315`) expire after seven days. Backup-run
+   admission terminal `accepted` and `rejected` statuses omit expiration: the
+   exact signed event stays retryable until operator-relay quorum accepts it.
 
 Validation precedes all three: the event id must equal the NIP-01 serialized
 hash, the Schnorr signature must verify for `pubkey`, and kind-specific
