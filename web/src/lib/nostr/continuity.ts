@@ -4,10 +4,8 @@ import {
   CONTINUITY_PROFILE,
   CONTINUITY_STATUS,
   FAILOVER_POLICY,
-  FAILOVER_REQUEST,
   HEARTBEAT_OBSERVATION,
   RECOVERY_PROGRESS,
-  RECOVERY_REQUEST,
   RECOVERY_WORKFLOW,
   REPLICATION_POLICY,
   STANDBY_NODE_DEFINITION,
@@ -40,10 +38,8 @@ export const CONTINUITY_DEFINITION_KINDS = [
   REPLICATION_POLICY,
   RECOVERY_WORKFLOW
 ];
-export const CONTINUITY_COMMAND_KINDS = [FAILOVER_REQUEST, RECOVERY_REQUEST];
 export const CONTINUITY_TOPOLOGY_SOURCE_KINDS = [
   ...CONTINUITY_DEFINITION_KINDS,
-  ...CONTINUITY_COMMAND_KINDS,
   HEARTBEAT_OBSERVATION,
   CASCADIA_CONTROLPLANE_STATE
 ];
@@ -55,16 +51,6 @@ export interface ContinuityNostrEvent {
   created_at?: number;
   tags?: string[][];
   content?: string;
-}
-
-export interface ContinuityRequestDTO {
-  id: string;
-  request_type: 'failover' | 'recovery';
-  service_key: string;
-  worker_pubkey: string;
-  reason: string;
-  created_at: string;
-  pubkey: string;
 }
 
 interface ContinuityProfileDefinition {
@@ -125,7 +111,7 @@ function newestFirst(left: ContinuityNostrEvent, right: ContinuityNostrEvent): n
 // Trusted-author policy by kind. Nothing here is read without `authors`.
 // - 30351 continuity status, 30353 recovery progress and 30900 worker state are
 //   projections the Bahia service signs: every deployment-seeded service key.
-// - 31400-31404 definitions, 38430/38431 failover/recovery commands and 30315
+// - 31400-31404 definitions and 30315
 //   continuity heartbeats are operator-authored. The daemon acts on them only
 //   when signed by `nostr.authorized_pubkeys` (worker identity is data inside a
 //   heartbeat, not its signing authority). The daemon publishes that list as
@@ -154,7 +140,6 @@ export function continuityFilterUnits({ serviceAuthors = [], operatorAuthors = [
     ] : [] },
     { name: 'operator', filters: operatorAuthors.length ? [
       { kinds: CONTINUITY_DEFINITION_KINDS, authors: operatorAuthors },
-      { kinds: CONTINUITY_COMMAND_KINDS, authors: operatorAuthors },
       { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], authors: operatorAuthors }
     ] : [] }
   ];
@@ -227,38 +212,11 @@ export function teardownContinuityStoreBinding() {
   binding = null;
 }
 
-export function continuityRequestsFromEvents(events: ContinuityNostrEvent[] = []): ContinuityRequestDTO[] {
-  const seen = new Set<string>();
-  return events
-    .filter((event) => CONTINUITY_COMMAND_KINDS.includes(Number(event?.kind)))
-    .filter((event) => {
-      const id = text(event.id);
-      if (!id || seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    })
-    .map((event): ContinuityRequestDTO => {
-      const content = contentObject(event);
-      const requestType = event.kind === FAILOVER_REQUEST ? 'failover' : 'recovery';
-      return {
-        id: text(event.id),
-        request_type: requestType,
-        service_key: continuityEventServiceKey(event, content),
-        worker_pubkey: text(content.worker_pubkey) || eventTagValue(event, 'worker') || eventTagValue(event, 'p'),
-        reason: text(content.reason) || eventTagValue(event, 'reason'),
-        created_at: eventCreatedAtISO(event),
-        pubkey: text(event.pubkey)
-      };
-    })
-    .sort((left, right) => right.created_at.localeCompare(left.created_at) || right.id.localeCompare(left.id));
-}
-
 function continuityDashboardSnapshot(events: ContinuityNostrEvent[]) {
   const statuses = continuityStatusesFromEvents(events);
   return {
     statuses,
     assessments: deriveContinuityAssessments(events, statuses),
-    requests: continuityRequestsFromEvents(events),
     events,
     // Cached events render at once; `ready` is kept for existing consumers and
     // `synced` reports relay catch-up as a badge, never as a gate.
