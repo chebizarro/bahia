@@ -76,7 +76,7 @@ func TestR3WorkerAdvertisementUsesWorkerAuthorAndCursor(t *testing.T) {
 	pool := &fakePool{events: []*nostr.Event{&ad}}
 	nc, err := NewNostrClient(NostrClientConfig{StorePath: filepath.Join(t.TempDir(), "events.db"), ServicePubkey: nostr.GetPublicKey(serviceSK).Hex(), Pool: pool})
 	require.NoError(t, err)
-	defer nc.Close()
+	t.Cleanup(func() { require.NoError(t, nc.Close()) })
 	events, result, err := nc.SyncAndQueryWorkerAdvertisements(t.Context(), []string{workerPub.Hex()})
 	require.NoError(t, err)
 	require.True(t, result.Fresh)

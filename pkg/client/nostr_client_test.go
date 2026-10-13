@@ -156,7 +156,7 @@ func TestSyncAndQueryReturnsServiceList(t *testing.T) {
 		EOSETimeout:   2 * time.Second,
 	})
 	require.NoError(t, err)
-	defer c.Close()
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
 
 	events, result, err := c.SyncAndQuery(context.Background(), "service")
 	require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestCursorPersistence(t *testing.T) {
 		EOSETimeout:   2 * time.Second,
 	})
 	require.NoError(t, err)
-	defer c2.Close()
+	t.Cleanup(func() { require.NoError(t, c2.Close()) })
 
 	// Second sync should only receive ev2 (cursor skips ev1).
 	result2, err := c2.Sync(context.Background(), "service")
@@ -260,7 +260,7 @@ func TestEOSETimeoutServesStaleStore(t *testing.T) {
 		EOSETimeout:   100 * time.Millisecond,
 	})
 	require.NoError(t, err)
-	defer c.Close()
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
 
 	result, err := c.Sync(context.Background(), "service")
 	require.NoError(t, err)
@@ -293,7 +293,7 @@ func TestSubscribeErrorServesStale(t *testing.T) {
 		EOSETimeout:   100 * time.Millisecond,
 	})
 	require.NoError(t, err)
-	defer c.Close()
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
 
 	result, err := c.Sync(context.Background(), "service")
 	require.NoError(t, err)
