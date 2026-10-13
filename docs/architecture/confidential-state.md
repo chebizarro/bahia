@@ -54,6 +54,13 @@ layer. Members decrypt the AEAD layer (metadata) only; secret value reveal
 remains a ContextVM request (`services/secrets-reveal`) with permission
 checks.
 
+Org-member records use a keyed opaque UUID `d` coordinate, so a relay cannot
+test candidate member pubkeys against the roster. The stable coordinate uses the
+confidential-dedupe system key and is re-minted if that key changes; readers
+coalesce retained legacy and new coordinates by decrypted org/member identity
+and NIP-01 event order. Rotation re-asserts retained records on their existing
+coordinates, not a relay-side migration.
+
 Secret record names, service IDs and environment IDs are AEAD metadata, never
 relay-visible tags. The `secret-registry` event retains its opaque secret UUID
 `d` coordinate and indexed `t` topic; readers decrypt before filtering by

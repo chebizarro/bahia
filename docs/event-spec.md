@@ -340,7 +340,9 @@ service pubkey:
 | Security (execution) | `security-target`, `security-run`, `security-schedule`, `security-finding`, `security-finding-detail` | `security:target:<hash>`, `security:run:<id>` | fleet-OCK ciphertext |
 | Security (details) | `security-findings`, `security-audit` | per run | protected (NIP-42) |
 | Runtime | `runtime-instance-health`, `route-canary`, `runtime-observation` | `runtime:recovery:…`, `runtime:maintenance:…`, `route:<svc>:<env>:<unit>:<host>` | health and canary public; observations protected |
-| Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, `org:member:<org>:<pubkey>`, `org:invite:<org>:<id>` | OCK ciphertext |
+| Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, keyed opaque member UUID, `org:invite:<org>:<id>` | OCK ciphertext |
+
+The `org-member` cp-state `d` is a stable keyed opaque UUID while the confidential-dedupe system key is unchanged. Org and member identities, including tombstones, are in OCK content, not relay-visible tags. Readers also accept retained `org:member:<org>:<pubkey>` records and select the latest decrypted record per `(org_id, pubkey)` by `created_at`, then lowest event id. OCK rotation re-asserts retained records on their existing coordinates; it does not migrate or delete relay history.
 | Secrets, notifications | `secret-registry`, `notification-channel`, `notification-log` | secret: bare opaque UUID; other families: `<prefix>:<id>`; log is one latest-50 window per channel | OCK ciphertext |
 | Payments | `payment-record` | per record | fleet-OCK ciphertext |
 | Adoption, Hive-CI | `adoption-binding`; `hiveci-policy`, `hiveci-result`, `hiveci-initiation`, `hiveci-release` | `adoption:binding:<svc>:<env>`; `hiveci:policy:<uuidv7>`, `hiveci:result:<event>`, `hiveci:initiation:<event>` | binding public; Hive-CI records fleet-OCK ciphertext |

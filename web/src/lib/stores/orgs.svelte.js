@@ -15,7 +15,20 @@ let stopKeys = null;
 let subscribedDetailId = '';
 
 const organizations = () => readConfidentialTopic('org', ORG_REGISTRY).rows;
-const members = () => readConfidentialTopic('org-member', ORG_MEMBER_REGISTRY).rows;
+const members = () => {
+  const latest = new Map();
+  for (const record of readConfidentialTopic('org-member', ORG_MEMBER_REGISTRY, { includeDeleted: true }).rows) {
+    if (!record.org_id || !record.pubkey) continue;
+    const identity = `${record.org_id}:${record.pubkey}`;
+    const prior = latest.get(identity);
+    if (!prior || record.nostr_created_at > prior.nostr_created_at ||
+        (record.nostr_created_at === prior.nostr_created_at && record.nostr_event_id < prior.nostr_event_id)) {
+      latest.set(identity, record);
+    }
+  }
+  return [...latest.values()].filter(record => record.deleted !== true &&
+    !record.event?.tags?.some(tag => tag[0] === 'deleted' && tag[1] === 'true'));
+};
 const invites = () => readConfidentialTopic('org-invite', ORG_INVITE_REGISTRY).rows;
 
 export function resetOrgsState() {
