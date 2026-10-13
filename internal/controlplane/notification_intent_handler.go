@@ -46,6 +46,7 @@ type NotificationTestDispatcher interface {
 // See docs/architecture/intents-and-authority.md.
 type NotificationIntentHandler struct {
 	registry       NotificationIntentCRUD
+	owners         NotificationOwnershipReader
 	publisher      NotificationIntentPublisher
 	notifier       NotificationChannelChangeNotifier
 	testDispatcher NotificationTestDispatcher
@@ -56,6 +57,7 @@ type NotificationIntentHandler struct {
 // NotificationIntentHandlerConfig configures the notification intent handler.
 type NotificationIntentHandlerConfig struct {
 	Registry       NotificationIntentCRUD
+	Owners         NotificationOwnershipReader
 	Publisher      NotificationIntentPublisher
 	Notifier       NotificationChannelChangeNotifier
 	TestDispatcher NotificationTestDispatcher
@@ -71,6 +73,7 @@ func NewNotificationIntentHandler(cfg NotificationIntentHandlerConfig) *Notifica
 	}
 	return &NotificationIntentHandler{
 		registry:       cfg.Registry,
+		owners:         cfg.Owners,
 		publisher:      cfg.Publisher,
 		notifier:       cfg.Notifier,
 		testDispatcher: cfg.TestDispatcher,
@@ -102,6 +105,9 @@ func (h *NotificationIntentHandler) handleChannelTest(ctx context.Context, inten
 	if h.registry == nil || h.testDispatcher == nil {
 		return fmt.Errorf("notification channel test is not configured")
 	}
+	if err := h.requireOwner(ctx, intent, id, true); err != nil {
+		return err
+	}
 	ch, err := h.registry.GetChannelByID(ctx, id)
 	if err != nil {
 		return err
@@ -129,9 +135,18 @@ func (h *NotificationIntentHandler) handleCreateOrUpdate(ctx context.Context, in
 	if err != nil {
 		return fmt.Errorf("parse notification channel intent: %w", err)
 	}
+	if intent.Coordinate != ch.ID.String() || ch.OrgID == uuid.Nil || ch.OrgID != intent.OrgID {
+		return fmt.Errorf("notification channel must match the signed organization and coordinate")
+	}
+	if err := h.requireOwner(ctx, intent, ch.ID, false); err != nil {
+		return err
+	}
 
 	// Level-triggered: try to load existing.
-	existing, _ := h.registry.GetChannelByID(ctx, ch.ID)
+	existing, err := h.registry.GetChannelByID(ctx, ch.ID)
+	if err != nil {
+		return err
+	}
 	if existing == nil {
 		if intent.ExpectedUpdatedAt != nil {
 			return &revisionConflictError{entityType: "notification", entityID: ch.ID, expected: *intent.ExpectedUpdatedAt}
@@ -145,6 +160,12 @@ func (h *NotificationIntentHandler) handleCreateOrUpdate(ctx context.Context, in
 			return fmt.Errorf("create notification channel: %w", err)
 		}
 	} else {
+		if err := h.requireOwner(ctx, intent, ch.ID, true); err != nil {
+			return err
+		}
+		if existing.OrgID != intent.OrgID {
+			return fmt.Errorf("notification channel owner is inconsistent with canonical state")
+		}
 		if intent.ExpectedUpdatedAt != nil && !intent.RevisionMatches(existing.UpdatedAt) {
 			return &revisionConflictError{entityType: "notification", entityID: ch.ID, expected: *intent.ExpectedUpdatedAt, actual: existing.UpdatedAt}
 		}
@@ -178,17 +199,35 @@ func (h *NotificationIntentHandler) handleCreateOrUpdate(ctx context.Context, in
 }
 
 func (h *NotificationIntentHandler) handleDelete(ctx context.Context, intent *Intent) error {
-	idStr, _ := intent.Content["id"].(string)
+	idStr, provided := intent.Content["id"].(string)
+	if _, exists := intent.Content["id"]; exists && (!provided || idStr == "") {
+		return fmt.Errorf("delete intent has an invalid channel id")
+	}
 	channelID, err := uuid.Parse(idStr)
 	if err != nil || channelID == uuid.Nil {
+		if idStr != "" {
+			return fmt.Errorf("delete intent has an invalid channel id")
+		}
 		channelID, err = uuid.Parse(intent.Coordinate)
 		if err != nil || channelID == uuid.Nil {
 			return fmt.Errorf("delete intent must carry entity id")
 		}
 	}
+	if intent.Coordinate != channelID.String() {
+		return fmt.Errorf("notification channel coordinate does not match id")
+	}
+	if err := h.requireOwner(ctx, intent, channelID, true); err != nil {
+		return err
+	}
 
 	// Load before deleting for the notifier.
-	existing, _ := h.registry.GetChannelByID(ctx, channelID)
+	existing, err := h.registry.GetChannelByID(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	if existing != nil && existing.OrgID != intent.OrgID {
+		return fmt.Errorf("notification channel owner is inconsistent with canonical state")
+	}
 
 	if err := h.registry.DeleteChannel(ctx, channelID); err != nil {
 		return fmt.Errorf("delete notification channel: %w", err)
@@ -210,6 +249,23 @@ func (h *NotificationIntentHandler) handleDelete(ctx context.Context, intent *In
 		zap.String("channel_id", channelID.String()),
 		zap.String("intent_id", intent.IntentID),
 	)
+	return nil
+}
+
+func (h *NotificationIntentHandler) requireOwner(ctx context.Context, intent *Intent, id uuid.UUID, mustExist bool) error {
+	if h.owners == nil || intent == nil || id == uuid.Nil || intent.OrgID == uuid.Nil {
+		return fmt.Errorf("canonical notification ownership is unavailable")
+	}
+	owner, found, err := h.owners.OwnerOf(ctx, id)
+	if err != nil {
+		return err
+	}
+	if mustExist && !found {
+		return fmt.Errorf("notification channel has no canonical owner")
+	}
+	if found && (owner == uuid.Nil || owner != intent.OrgID) {
+		return fmt.Errorf("notification channel belongs to another organization")
+	}
 	return nil
 }
 
@@ -268,10 +324,15 @@ func notificationChannelFromIntentContent(intent *Intent) (*domain.NotificationC
 		ch.Enabled = enabled
 	}
 
-	// OrgID from content overrides tag when present.
-	if orgStr, ok := content["org_id"].(string); ok && orgStr != "" {
-		if orgID, err := uuid.Parse(orgStr); err == nil && orgID != uuid.Nil {
-			ch.OrgID = orgID
+	// The content may repeat the signed org, but cannot change it.
+	if raw, exists := content["org_id"]; exists {
+		orgStr, ok := raw.(string)
+		if !ok || orgStr == "" {
+			return nil, fmt.Errorf("notification channel org_id must match the signed org tag")
+		}
+		orgID, err := uuid.Parse(orgStr)
+		if err != nil || orgID == uuid.Nil || orgID != intent.OrgID {
+			return nil, fmt.Errorf("notification channel org_id must match the signed org tag")
 		}
 	}
 

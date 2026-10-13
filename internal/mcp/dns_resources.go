@@ -21,15 +21,19 @@ type Resource struct {
 
 // GetResources returns discoverable MCP resources exposed by Bahia.
 func (s *Server) GetResources(ctx context.Context) ([]Resource, error) {
-	resources, err := s.listDNSResources(ctx)
-	if err != nil {
-		return nil, err
+	resources := make([]Resource, 0)
+	if s.isFleetReader(ctx) {
+		dnsResources, err := s.listDNSResources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fipsResources, err := s.listFIPSMeshResources(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resources = append(resources, dnsResources...)
+		resources = append(resources, fipsResources...)
 	}
-	fipsResources, err := s.listFIPSMeshResources(ctx)
-	if err != nil {
-		return nil, err
-	}
-	resources = append(resources, fipsResources...)
 
 	// Add documentation resources
 	docsResources, err := s.listDocsResources(ctx)

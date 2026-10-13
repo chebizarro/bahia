@@ -19,7 +19,9 @@ func TestMCPStoreReadParityWithoutDatabase(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server := newTestServerWithOptions(nil, zap.NewNop(), ServerDeps{})
 	fixture := attachCanonicalMCPFixture(t, server)
-	pub := nostrpool.NewF74bCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server))
+	encryptor := fixture.confidentialEncryptor(t, server)
+	pub := nostrpool.NewF74bCanonicalPublisher(fixture.projector, encryptor)
+	channelPublisher := nostrpool.NewNotificationCanonicalPublisher(fixture.projector, encryptor, nil, zap.NewNop())
 	created := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	packageIntent := &domain.PackageIntent{ID: uuid.New(), RequestEventID: "request-event-1", Operation: domain.PackageOperation("repository_apply"), RepositoryName: "libs", RequesterPubkey: "operator", Status: domain.PackageIntentStatusSucceeded, CreatedAt: created, UpdatedAt: created, ResultPayload: map[string]any{"status": "succeeded"}}
 	require.NoError(t, pub.PublishPackageIntent(ctx, packageIntent))
@@ -32,6 +34,7 @@ func TestMCPStoreReadParityWithoutDatabase(t *testing.T) {
 	profile := &domain.ToolProfileState{ServiceID: toolIntent.ServiceID, EnvironmentID: toolIntent.EnvironmentID, CurrentToolsetHash: "hash", CurrentImageDigest: "sha256:abc", InstalledTools: []domain.ResolvedTool{{Name: "jq", Manager: "apt", Version: "1.7"}}, UpdatedAt: created}
 	require.NoError(t, pub.PublishToolProfile(ctx, profile, false))
 	channelID := uuid.New()
+	require.NoError(t, channelPublisher.PublishChannel(ctx, &domain.NotificationChannel{ID: channelID, OrgID: uuid.New(), Name: "alerts", ChannelType: domain.ChannelTypeNostrDM, CreatedAt: created, UpdatedAt: created}))
 	log := domain.NotificationLog{ID: uuid.New(), ChannelID: channelID, EventType: "deployment.failed", Payload: map[string]any{"service": "api"}, Status: domain.NotificationStatusRetrying, Attempts: 2, LastError: "rate limited", CreatedAt: created, UpdatedAt: created}
 	require.NoError(t, pub.PublishNotificationWindow(ctx, channelID, []domain.NotificationLog{log}, false))
 	for _, family := range []int{nostrpool.KindPackageIntentState, nostrpool.KindToolProvisionIntentState, nostrpool.KindToolDenylistState, nostrpool.KindToolProfileState, nostrpool.KindNotificationLogState} {

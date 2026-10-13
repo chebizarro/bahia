@@ -14,6 +14,7 @@ import (
 
 	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/mcp"
@@ -55,7 +56,7 @@ type principalFixture struct {
 func newPrincipalFixture(t *testing.T) principalFixture {
 	t.Helper()
 	f := principalFixture{state: &recordingMCPStateStore{}}
-	f.server = newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{StateStore: f.state, ServicePubkey: nostr.Generate().Public().Hex(), AuthorizedPubkeys: []string{allowedOperator}})
+	f.server = newAppTestMCPServer(nil, zap.NewNop(), mcp.ServerDeps{StateStore: f.state, ServicePubkey: nostr.Generate().Public().Hex(), AuthorizedPubkeys: []string{allowedOperator}, TrustSet: controlplane.NewTrustSet([]string{allowedOperator}, zap.NewNop())})
 	f.adapter = assistantMCPRuntimeAdapter{server: f.server}
 	registry, err := mcp.NewAssistantToolRegistryForServerWithExternal(f.server, nil)
 	if err != nil {

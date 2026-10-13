@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	"github.com/google/uuid"
@@ -126,7 +127,22 @@ func (s *Server) notificationWindow(ctx context.Context) ([]domain.NotificationL
 		if err := json.Unmarshal(rec.Content, &window); err != nil {
 			return nil, err
 		}
-		logs = append(logs, window.Logs...)
+		windowChannelID, err := uuid.Parse(stringFromRecord(rec.Fields, "channel_id"))
+		if err != nil || windowChannelID == uuid.Nil {
+			continue
+		}
+		for _, log := range window.Logs {
+			if log.ChannelID != windowChannelID {
+				continue
+			}
+			channel, err := s.readStateOne(ctx, nostrpool.KindNotificationChannelRegistry, "id", log.ChannelID.String())
+			if err != nil {
+				return nil, fmt.Errorf("notification canonical owner unavailable")
+			}
+			if channel != nil {
+				logs = append(logs, log)
+			}
+		}
 	}
 	sort.SliceStable(logs, func(i, j int) bool {
 		if !logs[i].CreatedAt.Equal(logs[j].CreatedAt) {

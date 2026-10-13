@@ -2560,9 +2560,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// enabled. The dispatcher's OnChannelChanged method is the event-driven
 	// channel-change notifier; no DB polling runs.
 	if enabledDomains["notification"] && notifRepo != nil {
+		notifOwners, err := controlplane.NewLocalNotificationOwnershipReader(localEventStore, confidentialEncryptor, servicePubkey)
+		if err != nil {
+			return nil, fmt.Errorf("configure canonical notification ownership: %w", err)
+		}
 		intentProcessor.RegisterHandler("notification", controlplane.NewNotificationIntentHandler(
 			controlplane.NotificationIntentHandlerConfig{
 				Registry:       notifRepo,
+				Owners:         notifOwners,
 				Publisher:      notifCanonical,
 				Notifier:       notifDispatcher,
 				TestDispatcher: notifDispatcher,
@@ -2705,6 +2710,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 	mcpDeps := mcp.ServerDeps{
 		IntentProcessor:      intentProcessor,
+		TrustSet:             trustSet,
 		StateStore:           localEventStore,
 		ServicePubkey:        servicePubkey,
 		ConfidentialReader:   confidentialEncryptor,

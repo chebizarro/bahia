@@ -10,6 +10,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -18,6 +19,16 @@ import (
 type memNotificationRepo struct {
 	mu       sync.RWMutex
 	channels map[uuid.UUID]*domain.NotificationChannel
+}
+
+type testNotificationOwners struct{ repo *memNotificationRepo }
+
+func (r testNotificationOwners) OwnerOf(ctx context.Context, id uuid.UUID) (uuid.UUID, bool, error) {
+	channel, err := r.repo.GetChannelByID(ctx, id)
+	if err != nil || channel == nil {
+		return uuid.Nil, false, err
+	}
+	return channel.OrgID, true, nil
 }
 
 func newMemNotificationRepo() *memNotificationRepo {
@@ -145,6 +156,7 @@ func newNotificationIntentFixture(t *testing.T) *notificationIntentFixture {
 
 	handler := NewNotificationIntentHandler(NotificationIntentHandlerConfig{
 		Registry:  repo,
+		Owners:    testNotificationOwners{repo: repo},
 		Publisher: publisher,
 		Notifier:  notifier,
 		Logger:    logger,
@@ -433,6 +445,41 @@ func TestNotificationIntentHandler_PermissionIsManageSettings(t *testing.T) {
 	if perm2 != domain.PermManageSettings {
 		t.Errorf("expected PermManageSettings for delete, got %v", perm2)
 	}
+}
+
+func TestNotificationCrossTenantDenialIsSignedAndSanitized(t *testing.T) {
+	requesterKey, requester := testNostrKeypair()
+	orgA := testOrgID()
+	orgB := uuid.New()
+	channel := &domain.NotificationChannel{ID: uuid.New(), OrgID: orgB, Name: "org-b-private-channel", Config: map[string]any{"secret": "org-b-webhook-secret"}}
+	repo := newMemNotificationRepo()
+	require.NoError(t, repo.CreateChannel(t.Context(), channel))
+	statuses := &statusCollector{}
+	statusSigner, err := NewPrivateKeySigner(nostr.Generate().Hex())
+	require.NoError(t, err)
+	status := NewIntentStatusPublisher(statuses.publish, statusSigner, zap.NewNop())
+	trust := NewTrustSet(nil, zap.NewNop(), WithBootstrapOwners(map[string]string{orgA.String(): requester}))
+	processor := NewIntentProcessor(trust, nil, status, IntentProcessorConfig{EnabledDomains: map[string]bool{"notification": true}}, zap.NewNop())
+	processor.RegisterHandler("notification", NewNotificationIntentHandler(NotificationIntentHandlerConfig{Registry: repo, Owners: testNotificationOwners{repo: repo}}))
+	request := makeTestNotificationIntent(t, "delete", map[string]interface{}{"id": channel.ID.String()}, uuid.NewString(), requester)
+	requestSigner, err := NewPrivateKeySigner(requesterKey)
+	require.NoError(t, err)
+	require.NoError(t, SignGoNostrEvent(t.Context(), requestSigner, request))
+	require.True(t, request.CheckID())
+	require.True(t, request.VerifySignature())
+	require.Error(t, processor.ProcessRelayIntent(t.Context(), request))
+	stored, err := repo.GetChannelByID(t.Context(), channel.ID)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.Len(t, statuses.events, 1)
+	response := statuses.events[0]
+	require.True(t, response.CheckID())
+	require.True(t, response.VerifySignature())
+	wire, err := json.Marshal(response)
+	require.NoError(t, err)
+	require.Contains(t, string(wire), `access_denied`)
+	require.NotContains(t, string(wire), channel.Name)
+	require.NotContains(t, string(wire), "org-b-webhook-secret")
 }
 
 func TestNotificationIntentHandler_EventDrivenNotifier(t *testing.T) {

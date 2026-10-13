@@ -229,9 +229,13 @@ func TestCallTool_NotificationLogListAndMarkRead(t *testing.T) {
 	ctx := authorizedMCPContext()
 	server, repo, _ := newTestMCPNotificationServer()
 	fixture := attachCanonicalMCPFixture(t, server)
+	encryptor := fixture.confidentialEncryptor(t, server)
 	server.notificationRepo = nostrpool.NewCanonicalNotificationRepository(repo,
-		nostrpool.NewF74bCanonicalPublisher(fixture.projector, fixture.confidentialEncryptor(t, server)))
+		nostrpool.NewF74bCanonicalPublisher(fixture.projector, encryptor))
 	channelID := uuid.New()
+	if err := nostrpool.NewNotificationCanonicalPublisher(fixture.projector, encryptor, nil, zap.NewNop()).PublishChannel(ctx, &domain.NotificationChannel{ID: channelID, OrgID: uuid.New(), Name: "alerts", ChannelType: domain.ChannelTypeNostrDM}); err != nil {
+		t.Fatal(err)
+	}
 	pendingDeployID := uuid.New()
 	pendingBillingID := uuid.New()
 	sentDeployID := uuid.New()

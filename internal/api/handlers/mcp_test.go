@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/openagentsinc/bahia/internal/auth"
 	mcpserver "github.com/openagentsinc/bahia/internal/mcp"
 	"go.uber.org/zap"
 )
@@ -47,6 +48,7 @@ func TestMCPHandler_HandleJSONRPCResourcesList(t *testing.T) {
 
 	body := []byte(`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), auth.SystemPrincipal("fleet-resource-test")))
 	w := httptest.NewRecorder()
 
 	h.HandleJSONRPC(w, req)
@@ -81,6 +83,7 @@ func TestMCPHandler_HandleJSONRPCResourcesListHasNoMeshWithoutStoreEvent(t *test
 
 	body := []byte(`{"jsonrpc":"2.0","id":3,"method":"resources/list"}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req = req.WithContext(auth.ContextWithPrincipal(req.Context(), auth.SystemPrincipal("fleet-resource-test")))
 	w := httptest.NewRecorder()
 
 	h.HandleJSONRPC(w, req)
