@@ -29,9 +29,8 @@ func closedBurstRelay(t *testing.T, burst int) *httptest.Server {
 			return
 		}
 		t.Cleanup(func() {
-			if err := conn.CloseNow(); err != nil {
-				t.Errorf("close conn: %v", err)
-			}
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
 		})
 		ctx := r.Context()
 		for {
@@ -87,9 +86,8 @@ func TestLibrarySubscriptionClosedWhileEventsInFlight(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := relay.Close(); err != nil {
-			t.Errorf("close relay: %v", err)
-		}
+		// The peer or test may already have closed this socket; cleanup is best-effort.
+		_ = relay.Close()
 	})
 
 	for round := range rounds {

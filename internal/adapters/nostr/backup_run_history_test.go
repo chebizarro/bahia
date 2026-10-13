@@ -141,9 +141,8 @@ func TestBackupRunHistoryStalledEOSECannotProveAbsenceAndRetriesOnFreshConnectio
 			return
 		}
 		t.Cleanup(func() {
-			if err := conn.CloseNow(); err != nil {
-				t.Errorf("close conn: %v", err)
-			}
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
 		})
 		for {
 			_, msg, err := conn.Read(r.Context())
@@ -400,9 +399,8 @@ func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
 			return
 		}
 		t.Cleanup(func() {
-			if err := conn.CloseNow(); err != nil {
-				t.Errorf("close conn: %v", err)
-			}
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
 		})
 		for {
 			_, msg, err := conn.Read(r.Context())
