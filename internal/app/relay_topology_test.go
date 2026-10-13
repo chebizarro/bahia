@@ -222,7 +222,7 @@ func TestRelayTopologyCoordinatorReconfiguresPoolsFromCanonicalSnapshot(t *testi
 func TestRelayTopologyCoordinatorPreservesSidecarPrecedence(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Nostr.ControlledRelays = []string{"wss://old-upstream.example", "wss://external-service.example", "wss://external-contextvm.example"}
-	cfg.Nostr.Relays = []string{"wss://old-upstream.example"}
+	cfg.Nostr.Relays = []string{"wss://external-service.example"}
 	cfg.Nostr.Sidecar.Enabled = true
 	cfg.Nostr.Sidecar.BackendURL = "ws://relay:3334"
 	cfg.Nostr.Sidecar.MirrorExternal = true
@@ -259,6 +259,14 @@ func TestRelayTopologyCoordinatorPreservesSidecarPrecedence(t *testing.T) {
 	}
 	if got, want := servicePool.URLs(), []string{"ws://relay:3334", "wss://loom.example"}; !slices.Equal(got, want) {
 		t.Fatalf("service pool URLs = %v, want sidecar mirror boundary %v", got, want)
+	}
+	if err := coordinator.ApplySnapshot(context.Background(), controlplane.RelayPolicyState{
+		Schema: controlplane.RelaySettingsSchema, ServiceRelays: []string{"wss://old-upstream.example"},
+	}); err == nil {
+		t.Fatal("canonical settings moved the sidecar's fixed mirror target without a sidecar reload")
+	}
+	if got, want := servicePool.URLs(), []string{"ws://relay:3334", "wss://loom.example"}; !slices.Equal(got, want) {
+		t.Fatalf("refused target change altered service pool: %v, want %v", got, want)
 	}
 }
 
@@ -316,5 +324,50 @@ func TestRelayTopologyCoordinatorDoesNotCollapseServicePoolWhenSnapshotOnlyMoves
 	}
 	if got, want := servicePool.URLs(), []string{"wss://old-service.example"}; !slices.Equal(got, want) {
 		t.Fatalf("service pool URLs = %v, want retained %v", got, want)
+	}
+}
+
+func TestControlPlanePublisherUsesIndependentQuorum(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.PublishQuorum = 2
+	if got := controlPlanePublisherNostrConfig(cfg).PublishQuorum; got != 2 {
+		t.Fatalf("inherited publisher quorum = %d, want 2", got)
+	}
+	one := 1
+	cfg.ControlPlanePublishQuorum = &one
+	if got := controlPlanePublisherNostrConfig(cfg).PublishQuorum; got != 1 {
+		t.Fatalf("explicit publisher quorum = %d, want 1", got)
+	}
+	if cfg.PublishQuorum != 2 {
+		t.Fatal("control-plane override changed service publisher configuration")
+	}
+}
+
+func TestControlPlanePublishQuorumHealth(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.PublishQuorum = 2
+	check := controlPlanePublishQuorumHealth(cfg, 1)
+	if check.Status != HealthStatusWarn || check.Details["requested_quorum"] != "2" || check.Details["effective_quorum"] != "1" {
+		t.Fatalf("capped default health = %+v", check)
+	}
+	one := 1
+	cfg.ControlPlanePublishQuorum = &one
+	check = controlPlanePublishQuorumHealth(cfg, 1)
+	if check.Status != HealthStatusPass || check.Details["effective_quorum"] != "1" {
+		t.Fatalf("explicit quorum health = %+v", check)
+	}
+}
+
+func TestCanonicalPoolReconfigurationRefusesExplicitControlPlaneQuorumShortfall(t *testing.T) {
+	cfg := config.Defaults().Nostr
+	cfg.ServiceRelays = []string{"wss://first.example", "wss://second.example"}
+	cfg.ContextVMRelays = []string{"wss://first.example", "wss://second.example"}
+	cfg.ControlledRelays = []string{"wss://first.example", "wss://second.example"}
+	two := 2
+	cfg.ControlPlanePublishQuorum = &two
+	coordinator := newRelayTopologyCoordinator(relayTopologyCoordinatorConfig{NostrConfig: cfg, Logger: zap.NewNop()})
+	state := controlplane.RelayPolicyState{ServiceRelays: []string{"wss://first.example"}}
+	if err := coordinator.ValidateSnapshot(state); err == nil {
+		t.Fatal("canonical service fallback would shrink control-plane pool below explicit quorum")
 	}
 }

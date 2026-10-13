@@ -59,6 +59,7 @@ Important defaults:
 | `db.host`, `db.port`, `db.user`, `db.name` | `localhost`, `5432`, `bahia`, `bahia` |
 | `db.password`, `db.sslmode` | empty, `require` |
 | `nostr.publish_enabled`, `publish_quorum` | `true`, `1` (at most the number of service write relays; `-1` = all) |
+| `nostr.control_plane_publish_quorum` | unset (inherits service quorum, capped to the control-plane pool with a startup warning and WARN health; explicit value must fit that pool) |
 | `nostr.controlled_relays` | empty = the sidecar alone; required when publishing with a service identity and any control-plane relay is not the sidecar; the sidecar URLs are always controlled |
 | `nostr.allowed_public_relays` | empty (public relays are rejected in every relay list) |
 | `nostr.closed_retry_budget` | `5` |

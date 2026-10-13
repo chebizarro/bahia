@@ -115,11 +115,23 @@ The web container receives its runtime seed through `PUBLIC_BAHIA_BOOTSTRAP_RELA
 
 The sidecar stores and serves the fleet's events and enforces write policy. `nostr.sidecar.read_auth_mode` defaults to `enforce`; unset or unknown values also resolve to `enforce`. Protected REQ and COUNT filters require NIP-42 AUTH by an admitted fleet operator, organization member, or configured allowed reader. `warn` logs the decision without denying; `off` disables this read gate.
 
+When `nostr.sidecar.mirror_external` is enabled, the sidecar asynchronously
+replicates its accepted, stored events to external `nostr.service_relays` that
+are explicitly listed in `nostr.controlled_relays`. It exposes per-relay
+backlog and failures at its `/ready` and `/metrics` endpoints. The daemon
+still receives only the sidecar's OK: quorum 2 requires direct daemon writes
+to two relays, not mirror mode. See the [relay configuration runbook](../runbooks/relay-configuration.md).
+
 Clients handle `AUTH`, `OK`, `EOSE`, and `CLOSED`. A connection alone is not evidence that a filter caught up or a publish succeeded.
 
 ## Publish outbox
 
 The daemon stores publish work until `nostr.publish_quorum` of its service write relays accept it. Exhausted entries move to failed state and mark their canonical coordinate undelivered. Readiness reports this as `canonical_delivery` with warning details.
+
+The read-model outbox publisher has an optional independent
+`nostr.control_plane_publish_quorum`. An explicit value must fit its
+control-plane pool; when unset it inherits `publish_quorum` but warns at
+startup and in readiness health if its smaller pool caps the default.
 
 Every outbound relay frame — publications inline and redelivered, NIP-42 AUTH frames, NIP-77 reconcile uploads, NIP-46 signer requests, from the daemon and standalone agents alike — crosses one process-wide admission controller before relay I/O: per-lane and aggregate event budgets, a per-relay wire budget, duplicate suppression from a bounded receipt cache, a shared circuit breaker that any `rate-limited:` feedback opens, and a file-backed emergency kill switch. Admission refusals are back-pressure: the outbox entry stays pending and is retried; they never count against the attempt budget and never abandon an entry. Configuration lives under `nostr.outbound` (`BAHIA_NOSTR_OUTBOUND_*`); the `nostr_outbound_admission` health check reports the gate status with content-free counters. See the [outbound admission runbook](../runbooks/nostr-outbound-admission.md).
 

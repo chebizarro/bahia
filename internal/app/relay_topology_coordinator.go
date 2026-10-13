@@ -179,6 +179,14 @@ func (c *relayTopologyCoordinator) ValidateSnapshot(state controlplane.RelayPoli
 // validateLocked validates state and records a refusal. Callers hold applyMu.
 func (c *relayTopologyCoordinator) validateLocked(state controlplane.RelayPolicyState) error {
 	err := controlplane.ValidateRelayPolicy(c.nostrConfig, state)
+	if err == nil && c.nostrConfig.ControlPlanePublishQuorum != nil && *c.nostrConfig.ControlPlanePublishQuorum > 0 {
+		if relays, changes := c.controlPlaneRelaysForSnapshot(state); changes {
+			count := len(c.nostrConfig.ControlPlaneWriteRelays(config.ControlPlaneRelays{ContextVM: relays}))
+			if quorum := *c.nostrConfig.ControlPlanePublishQuorum; quorum > count {
+				err = fmt.Errorf("canonical relay settings control-plane pool gives %d write relays, fewer than nostr.control_plane_publish_quorum %d", count, quorum)
+			}
+		}
+	}
 	if err == nil {
 		return nil
 	}
@@ -274,6 +282,11 @@ func (c *relayTopologyCoordinator) reconfigurePools(ctx context.Context, state c
 
 	if reconfigureControlPlane && c.controlPlanePool != nil {
 		c.logReconfigureResult("control_plane", c.controlPlanePool.ReconfigureRelayURLsContext(ctx, controlPlaneRelays))
+		if requested, effective, capped := c.nostrConfig.ResolveControlPlanePublishQuorum(len(c.controlPlanePool.URLs())); capped {
+			c.logger.Warn("control-plane publish quorum capped by its relay pool after canonical reconfiguration",
+				zap.Int("requested_quorum", requested), zap.Int("effective_quorum", effective),
+				zap.Int("relay_count", len(c.controlPlanePool.URLs())))
+		}
 	}
 	if reconfigureContextVM && c.contextVMRequestPool != nil {
 		c.logReconfigureResult("contextvm_request", c.contextVMRequestPool.ReconfigureRelayURLsContext(ctx, contextVMRelays))

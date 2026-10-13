@@ -94,8 +94,36 @@ is unset.
 that many service write relays: configuration with fewer fails validation and
 canonical settings with fewer are refused. With two Bahia-controlled service
 relays, set `publish_quorum: 2` so a publish is durable only when both hold it.
-The control-plane read-model publisher (sidecar or ContextVM relays) caps the
-quorum at its own relay count.
+With `nostr.sidecar.mirror_external: true`, the daemon writes only to the
+sidecar. Its own write set has one relay, so `nostr.publish_quorum: 2` is a
+configuration error; a sidecar OK is never counted as an external OK. The
+sidecar asynchronously forwards accepted, stored events to the external
+`nostr.service_relays` listed in `nostr.controlled_relays`, requiring each
+external relay's OK (or duplicate OK) before its durable per-relay cursor
+advances. It resumes unacknowledged events after restart and reacts to new
+stored events without delivery polling. Public relay targets are refused.
+The external mirror set is fixed by the sidecar's loaded configuration;
+canonical relay settings that would change it are refused until the sidecar and daemon
+configuration are reloaded. If synchronous two-relay durability is required,
+keep `mirror_external: false` and write the sidecar plus the fixed external
+relay directly from the daemon with quorum 2. Mirroring is additional
+replication, not a quorum proof. Ephemeral events are not stored or replayed
+by this durable mirror. The mirror publishes EVENT frames, so it processes
+per-relay OK/OK-false, NIP-42 AUTH and transport disconnects; NIP-01 CLOSED
+is a REQ response and no external REQ is opened by this outbound mirror.
+
+The control-plane read-model publisher (read models, docs, SBOM and config
+fabric) uses its own relay pool: the sidecar alone when enabled, otherwise the
+ContextVM relays (falling back to browser relays). Optional
+`nostr.control_plane_publish_quorum` overrides its threshold (`-1` means every
+control-plane relay). An explicit value greater than that pool's relay count
+fails configuration validation; canonical relay settings that would shrink an
+explicit quorum are refused. When unset, it inherits `publish_quorum`, capped
+at the control-plane pool size. A cap is not silent: startup logs a warning and
+`control_plane_publish_quorum` readiness health reports WARN with
+`requested_quorum`, `effective_quorum` and `relay_count`. This is a direct
+control-plane publisher threshold; asynchronous sidecar mirroring is not a
+second OK for that publisher.
 
 ## Health
 
@@ -110,6 +138,15 @@ quorum at its own relay count.
 | `controlled_relays` | the guard's set |
 | `static_service_relays`, `drift` | static lists that differ from the canonical ones (`warn`) |
 | `refused` | why the latest canonical settings were refused (`warn`); the last accepted settings stay in force |
+
+The sidecar's `GET /ready` reports each mirror relay's cursor, backlog and
+last failure; it returns `warn` while any target is behind or unreachable.
+Its `GET /metrics` exports `bahia_relay_sidecar_mirror_backlog_events`,
+`bahia_relay_sidecar_mirror_failure` and
+`bahia_relay_sidecar_mirror_skipped_events_total` per relay.
+
+`control_plane_publish_quorum` reports the read-model publisher's requested
+and effective acceptance counts, and warns when the inherited default is capped.
 
 `relay_policy_projection` reports the canonical record's event id and hash.
 Its `confirmation=relay_confirmed` detail means the accepted head arrived as
