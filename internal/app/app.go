@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"reflect"
 	"sort"
@@ -24,6 +25,7 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	"github.com/openagentsinc/bahia/internal/adapters/blossom"
 	"github.com/openagentsinc/bahia/internal/adapters/build"
 	dnsAdapter "github.com/openagentsinc/bahia/internal/adapters/dns"
@@ -1484,7 +1486,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		backupCanonical.SetRunPendingWake(backupHistory.Wake)
 		bgManager.RegisterWithOptions(backupHistory, RunnerRequired(false))
 		healthProvider.RegisterCheck("backup_run_history", func() HealthCheck {
-			message := "backup run admission paused: credential recovery and exactly-once execution are not yet available"
+			message := "backup run admission disabled by default"
+			if cfg.BackupRun.AsyncIntakeEnabled {
+				message = "backup run history and fenced admission available"
+			}
 			if last := backupHistory.LastError(); last != "" {
 				message += "; " + last
 			}
@@ -1508,19 +1513,34 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		healthProvider.RegisterCheck("backup_run_status", func() HealthCheck {
 			if backupStatus.LastError() != "" {
 				return HealthCheck{Name: "backup_run_status", Status: HealthStatusWarn,
-					Message: "backup run terminal-status reconciliation delayed; new run admission paused"}
+					Message: "backup run accepted-status reconciliation delayed"}
 			}
 			return HealthCheck{Name: "backup_run_status", Status: HealthStatusPass,
-				Message: "backup run terminal-status reconciler available; new run admission paused"}
+				Message: "backup run accepted-status reconciler available"}
 		})
 	}
 	backupRunReceipts, backupReceiptErr := controlplane.NewLocalBackupRunReceipts(localEventStore, localOutbox, servicePubkey)
 	if backupReceiptErr != nil {
 		logger.Warn("backup run canonical receipt reader unavailable", zap.Error(backupReceiptErr))
 	}
+	if cfg.BackupRun.AsyncIntakeEnabled {
+		if !enabledDomains["backup"] || !cfg.Nostr.PublishEnabled || backupHistory == nil || backupRunReceipts == nil ||
+			secretValues == nil || secretText == nil || secretResolver == nil || runtimeApplyLock == nil ||
+			serviceKeyer == nil || nostrPub == nil || controlPlanePub == nil || intentStatus == nil || backupRegistry == nil ||
+			cfg.Nostr.ServiceSignerMethod() == config.NostrSignerLocal || servicePubkey == "" ||
+			controlPlanePool == nil || relayPool == nil || len(controlPlanePool.URLs()) == 0 || len(relayPool.URLs()) == 0 {
+			return nil, fmt.Errorf("bahia-cd0wr: backup async intake requires enabled domain, signer-enforced single writer, Signet, local outbox, relay history/quorum, and executor fence")
+		}
+		if err := localOutbox.VerifyBackupRunAdmissionReady(); err != nil {
+			return nil, fmt.Errorf("bahia-cd0wr: backup async intake local ledger: %w", err)
+		}
+		if _, err := exec.LookPath("kopia"); err != nil {
+			return nil, fmt.Errorf("bahia-cd0wr: backup async intake requires Kopia binary: %w", err)
+		}
+	}
 	// Register the intent handler when the backup domain is enabled.
 	if enabledDomains["backup"] && backupRegistry != nil {
-		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
+		backupHandler := controlplane.NewBackupIntentHandler(
 			controlplane.BackupIntentHandlerConfig{
 				Registry:                 backupRegistry,
 				SQLRepositoryUnavailable: !dbAvailable,
@@ -1530,10 +1550,36 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				RunAdmission:             backupCanonical,
 				RunPending:               backupCanonical,
 				RunCredentialRecords:     secretText,
+				RunAsyncIntakeEnabled:    cfg.BackupRun.AsyncIntakeEnabled,
 				Status:                   intentStatus,
 				Logger:                   logger,
 			},
-		))
+		)
+		intentProcessor.RegisterHandler("backup", backupHandler)
+		if cfg.BackupRun.AsyncIntakeEnabled {
+			backupHistory.SetAdmission(backupHandler.AdmitPendingRun)
+			backupExecutor, err := controlplane.NewBackupRunExecutor(localOutbox, intentStatus, backupCanonical,
+				backupAdapter.NewKopiaBackend(), secretText, secretResolver, runtimeApplyLock,
+				controlPlanePub.Target(), nostrPub.Target(),
+				func(ctx context.Context, ev nostr.Event, entityType string) error {
+					if ev.Kind == 30315 {
+						return nostrPub.Enqueue(ctx, ev, entityType, nil)
+					}
+					return controlPlanePub.Enqueue(ctx, ev, entityType, nil)
+				}, logger)
+			if err != nil {
+				return nil, fmt.Errorf("configure canonical backup executor: %w", err)
+			}
+			controlPlanePub.OnDelivered(backupExecutor.Notify)
+			nostrPub.OnDelivered(backupExecutor.Notify)
+			bgManager.RegisterWithOptions(backupExecutor)
+			healthProvider.RegisterCheck("backup_run_executor", func() HealthCheck {
+				if last := backupExecutor.LastError(); last != "" {
+					return HealthCheck{Name: "backup_run_executor", Status: HealthStatusWarn, Message: last}
+				}
+				return HealthCheck{Name: "backup_run_executor", Status: HealthStatusPass, Message: "canonical single-snapshot executor available"}
+			})
+		}
 		logger.Info("backup intent handler registered")
 	}
 	// --- end B1 wiring ---

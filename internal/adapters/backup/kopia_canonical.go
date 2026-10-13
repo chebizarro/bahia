@@ -21,24 +21,21 @@ type CanonicalSnapshot struct {
 	ID string
 }
 
-// createCanonicalSnapshot performs the tagged external effect. The caller owns
+// CreateCanonicalSnapshot performs the tagged external effect. The caller owns
 // the resolved, version-pinned Signet value and must zeroize it after return.
 // The value is a JSON object containing config (Kopia repository config JSON)
 // and password (Kopia repository password), never a filesystem path.
-func (b *KopiaBackend) createCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, recipe *domain.BackupRecipe, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, error) {
+func (b *KopiaBackend) CreateCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, recipe *domain.BackupRecipe, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, error) {
 	if runID == uuid.Nil || recipe == nil || repo == nil || recipe.RepositoryID != repo.ID || credential == nil {
 		return CanonicalSnapshot{}, fmt.Errorf("%w: canonical Kopia snapshot inputs are incomplete", service.ErrBackupBackendConfiguration)
 	}
-	source, err := kopiaSourcePath(recipe.TargetRef)
+	effectArgs, err := CanonicalSnapshotEffectArgs(recipe, runID)
 	if err != nil {
-		return CanonicalSnapshot{}, err
-	}
-	if err := validateRecipePathScope(recipe); err != nil {
 		return CanonicalSnapshot{}, err
 	}
 	var result CanonicalSnapshot
 	err = b.withCanonicalConfig(ctx, repo, credential, func(cfg *kopiaCommandConfig) error {
-		args := append(cfg.baseArgs(), "snapshot", "create", "--json", "--tags", canonicalRunTag(runID), "--tags", canonicalStepTag, source)
+		args := append(cfg.baseArgs(), effectArgs...)
 		stdout, err := b.runCanonical(ctx, cfg, args...)
 		if err != nil {
 			return err
@@ -53,11 +50,10 @@ func (b *KopiaBackend) createCanonicalSnapshot(ctx context.Context, repo *domain
 	return result, err
 }
 
-// observeCanonicalSnapshot queries Kopia's own tagged manifests. A missing
-// manifest after an effect-started receipt is NOT permission to repeat create:
-// the caller must require operator recovery because a failed or incomplete
-// upload may have caused effects not represented by a complete manifest.
-func (b *KopiaBackend) observeCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, bool, error) {
+// ObserveCanonicalSnapshot queries Kopia's own tagged manifests, including
+// incomplete ones. Only a successful listing with no tagged manifest allows
+// the executor to retry an interrupted create.
+func (b *KopiaBackend) ObserveCanonicalSnapshot(ctx context.Context, repo *domain.BackupRepository, runID uuid.UUID, credential *secretstore.Value) (CanonicalSnapshot, bool, error) {
 	if runID == uuid.Nil || repo == nil || credential == nil {
 		return CanonicalSnapshot{}, false, fmt.Errorf("%w: canonical Kopia observation inputs are incomplete", service.ErrBackupBackendConfiguration)
 	}
@@ -95,6 +91,23 @@ func (b *KopiaBackend) observeCanonicalSnapshot(ctx context.Context, repo *domai
 const canonicalStepTag = "bahia-step:snapshot-create"
 
 func canonicalRunTag(runID uuid.UUID) string { return "bahia-run:" + runID.String() }
+
+// CanonicalSnapshotEffectArgs is the nonsecret exact effect argument vector
+// bound into the local receipt. The ephemeral --config-file path is added only
+// at invocation time and is never persisted.
+func CanonicalSnapshotEffectArgs(recipe *domain.BackupRecipe, runID uuid.UUID) ([]string, error) {
+	if recipe == nil || runID == uuid.Nil {
+		return nil, fmt.Errorf("%w: canonical snapshot inputs are incomplete", service.ErrBackupBackendConfiguration)
+	}
+	source, err := kopiaSourcePath(recipe.TargetRef)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRecipePathScope(recipe); err != nil {
+		return nil, err
+	}
+	return []string{"snapshot", "create", "--json", "--tags", canonicalRunTag(runID), "--tags", canonicalStepTag, source}, nil
+}
 
 func (b *KopiaBackend) withCanonicalConfig(ctx context.Context, repo *domain.BackupRepository, credential *secretstore.Value, effect func(*kopiaCommandConfig) error) error {
 	if b == nil || b.runner == nil || strings.TrimSpace(b.config.BinaryPath) == "" || repo == nil || repo.Backend != domain.BackupBackendKopia {

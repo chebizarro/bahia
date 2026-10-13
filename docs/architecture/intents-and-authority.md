@@ -325,12 +325,14 @@ applies by serial, backup job ids are UUIDv7.
 **Backup run admission is currently paused in production.** The async
 history/ACK/status code below is a non-admitting prerequisite exercised by
 tests, not a live intake promise: `backupRunAsyncIntakeEnabled` is false and
-`StageRunAdmission` refuses until canonical credential recovery that does not depend on
-PostgreSQL (bahia-2o3on) and an exactly-once executor are available. The
-single active service-key writer is the signer's responsibility (see §1.1);
-Bahia builds no cross-process fence. A new signed request does not stage
-a run or return `pending`/`accepted`; a retained pending request also reports
-intake unavailable. Existing ledger requests are re-examined on run-coordinate
+The direct `StageRunAdmission` path refuses: only the live relay-history
+proof callback may stage a run. New async intake is off by default and
+requires `backup_run.async_intake_enabled: true` plus startup checks for a
+remote signer, Signet, writable original bbolt ledger, Kopia, relay sets,
+and the runtime effect fence. The single active service-key writer remains
+the signer's responsibility (see §1.1); Bahia does not manufacture a
+cross-process signer fence. With intake disabled, a new signed request does
+not stage a run or return `pending`/`accepted`. Existing ledger requests are re-examined on run-coordinate
 relay EVENT/EOSE, a wake, or their bounded retry/expiration deadline. An
 expired request or a definitive same-coordinate history conflict becomes a
 local refusal, then the reconciler signs one non-expiring `30315` `rejected`
@@ -340,9 +342,9 @@ of earlier service statuses on that coordinate. A refused or partial relay
 round leaves the same signed event pinned for outbox retry; replay reports
 terminal rejection only after exact operator-relay quorum proof, including
 after ordinary settled-row pruning. An already-admitted, fully ACKed historical record may
-still be recognized by exact-ID replay. No backup execution is enabled.
+still be recognized by exact-ID replay.
 
-When admission is enabled after those prerequisites, the protocol accepts only
+When admission is enabled, the protocol accepts only
 a fresh, complete operator-signed run intent with an author-minted UUIDv7 and
 an exact, immutable execution snapshot. Before staging a run, it verifies
 that each referenced service-signed recipe, repository, and policy version has
@@ -354,7 +356,8 @@ accepted, until the outbox records quorum delivery with an accepted relay.
 The durable admission record retains the exact signed event and relay-policy
 quorum proof after the settled delivery row is pruned; a separate
 processed-intent cache marker never substitutes for it. The delivery callback
-wakes a status reconciler, which signs and durably queues one final kind-30315
+wakes a status reconciler, which moves the pending ledger record to accepted
+and signs and durably queues one kind-30315
 `accepted` result only after that run-state ACK. The accepted status remains
 pinned for same-ID retry until its own operator-relay quorum ACK; MCP
 replay reports `accepted` only after both proofs. Startup reconciliation
@@ -369,9 +372,16 @@ same-second pre-admission rejection cannot win by event-ID tie-break. Generic
 backup-run status publication reserves its timestamp before operator-relay I/O
 under the same admission lock used to stage the run; a relay success followed
 by outbox failure cannot escape the timestamp floor, and a later rejection
-cannot race past an admitted coordinate. No backup execution starts
-from this queued state: canonical credential resolution and step checkpoint
-recovery are not available.
+cannot race past an admitted coordinate. The single-snapshot executor starts
+only after both exact quorum proofs. Its bbolt receipt binds intent ID,
+credential reference, step ID, and nonsecret Kopia arguments before the
+external effect. Kopia's run/step tags decide restart recovery: a complete
+tagged snapshot finishes the checkpoint without re-running; a successful
+empty list permits retry; an incomplete or failed list requires operator
+recovery under `bahia-cd0wr`. Signed, non-expiring step `30315` and terminal
+run-state/status events are retained before outbox publication and replayed
+by event ID. Multi-step, filtered, policy/verification, and non-Kopia runs
+remain fail-closed under `bahia-cd0wr`.
 
 MCP
 `request_backup_run` does not mint an unsigned in-process intent: it requires
@@ -382,15 +392,16 @@ observation is not a relay `OK`, delivery quorum, or acceptance receipt.
 The signed payload binds run UUIDv7, recipe, repository, policy, backend,
 target, verification mode, immutable service-signed configuration event IDs,
 and the exact configuration snapshot. Repositories with a credential profile
-also require an immutable credential-version ID in the snapshot. A version ID
-is a binding, not proof that a secret can be recovered; canonical credential
-resolution and execution checkpoint recovery are still required before a run
-may execute. If admission is enabled after those prerequisites, MCP would
-report `pending` during staged delivery, with no provisional pending relay
-status. After run-state quorum delivery, the reconciler would stage the final
-accepted status without requiring a request replay. MCP would report
+also require a pinned Signet `{credential_id, version}` reference in the
+snapshot; the former `credential_version_id` field is rejected. Kopia
+config/password are resolved at execution with `expected_version`, materialized
+only in a private ephemeral invocation, and never enter durable events or
+receipts. When intake is enabled, MCP reports `pending` during staged delivery,
+with no provisional pending relay status. After run-state quorum delivery,
+the reconciler stages the accepted status without requiring a request replay.
+MCP reports
 acceptance only after that status also reaches relay quorum; the canonical
-queued run state would be independently observable on relays. None of this is
+queued run state is independently observable on relays. None of this is
 the response to a new production request while intake is paused.
 
 The bounded canonical LLM lifecycle accepts only valid fleet-operator-signed,

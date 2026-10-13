@@ -10,22 +10,22 @@ import (
 	"github.com/openagentsinc/bahia/internal/secretstore"
 )
 
-// errBackupCredentialMoved requires a fresh signed operator decision. A
+// ErrBackupCredentialMoved requires a fresh signed operator decision. A
 // credential change cannot silently change the input to an accepted run.
-var errBackupCredentialMoved = errors.New("backup repository credential version moved; fresh signed run required")
+var ErrBackupCredentialMoved = errors.New("backup repository credential version moved; fresh signed run required")
 
-type kopiaCredentialRecords interface {
+type KopiaCredentialRecords interface {
 	CurrentReference(context.Context, string) (domain.SecretCredentialRef, error)
 }
 
-type kopiaCredentialValues interface {
+type KopiaCredentialValues interface {
 	Resolve(context.Context, uuid.UUID) (secretstore.Resolved, error)
 }
 
-// resolvePinnedKopiaCredential binds the signed {credential_id, version} to
+// ResolvePinnedKopiaCredential binds the signed {credential_id, version} to
 // the current canonical secret record, then asks Signet for expected_version.
 // The caller must zeroize the returned value after the one Kopia invocation.
-func resolvePinnedKopiaCredential(ctx context.Context, snapshot *domain.BackupExecutionSnapshot, records kopiaCredentialRecords, values kopiaCredentialValues) (*secretstore.Value, error) {
+func ResolvePinnedKopiaCredential(ctx context.Context, snapshot *domain.BackupExecutionSnapshot, records KopiaCredentialRecords, values KopiaCredentialValues) (*secretstore.Value, error) {
 	if snapshot == nil || snapshot.CredentialRef == nil || records == nil || values == nil {
 		return nil, fmt.Errorf("bahia-cd0wr: pinned Signet backup credential resolver is unavailable")
 	}
@@ -41,12 +41,12 @@ func resolvePinnedKopiaCredential(ctx context.Context, snapshot *domain.BackupEx
 		return nil, err
 	}
 	if current != *snapshot.CredentialRef {
-		return nil, errBackupCredentialMoved
+		return nil, ErrBackupCredentialMoved
 	}
 	resolved, err := values.Resolve(ctx, secretID)
 	if err != nil {
 		if errors.Is(err, secretstore.ErrVersionMismatch) {
-			return nil, errors.Join(errBackupCredentialMoved, err)
+			return nil, errors.Join(ErrBackupCredentialMoved, err)
 		}
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func resolvePinnedKopiaCredential(ctx context.Context, snapshot *domain.BackupEx
 		if resolved.Value != nil {
 			resolved.Value.Zeroize()
 		}
-		return nil, errBackupCredentialMoved
+		return nil, ErrBackupCredentialMoved
 	}
 	current, err = records.CurrentReference(ctx, secretID.String())
 	if err != nil || current != *snapshot.CredentialRef {
@@ -62,7 +62,7 @@ func resolvePinnedKopiaCredential(ctx context.Context, snapshot *domain.BackupEx
 		if err != nil {
 			return nil, err
 		}
-		return nil, errBackupCredentialMoved
+		return nil, ErrBackupCredentialMoved
 	}
 	return resolved.Value, nil
 }

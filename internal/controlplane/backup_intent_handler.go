@@ -11,6 +11,7 @@ import (
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	backupAdapter "github.com/openagentsinc/bahia/internal/adapters/backup"
 	nostradapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -493,6 +494,9 @@ func (h *BackupIntentHandler) verifyRunInputs(ctx context.Context, requested *do
 		requested.ExecutionSnapshot.Policy != nil || len(requested.ExecutionSnapshot.Recipe.Include) != 0 ||
 		len(requested.ExecutionSnapshot.Recipe.Exclude) != 0 {
 		return fmt.Errorf("bahia-cd0wr: only a single unfiltered Kopia snapshot without verification or policy is enabled")
+	}
+	if _, err := backupAdapter.CanonicalSnapshotEffectArgs(&requested.ExecutionSnapshot.Recipe, requested.ID); err != nil {
+		return fmt.Errorf("bahia-cd0wr: unsupported Kopia snapshot input: %w", err)
 	}
 	proof, ok := h.runReceipts.(backupExecutionConfigProof)
 	if !ok {
