@@ -78,21 +78,6 @@ func hiveCITestPubkey(t *testing.T) string {
 	return pubkey
 }
 
-func mergedWithClosed(closed nostrAdapter.RelayClosed) *nostrAdapter.MergedSubscription {
-	closedCh := make(chan nostrAdapter.RelayClosed, 1)
-	closedCh <- closed
-	return &nostrAdapter.MergedSubscription{Closed: closedCh}
-}
-
-func mergedWithEvents(events ...*nostr.Event) *nostrAdapter.MergedSubscription {
-	eventsCh := make(chan *nostr.Event, len(events))
-	for _, ev := range events {
-		eventsCh <- ev
-	}
-	close(eventsCh)
-	return &nostrAdapter.MergedSubscription{Events: eventsCh}
-}
-
 func newTestHiveRepo() *testHiveRepo {
 	return &testHiveRepo{runs: map[string]domain.HiveCIWorkflowRun{}, results: map[string]domain.HiveCIWorkflowResult{}}
 }

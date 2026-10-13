@@ -467,13 +467,13 @@ func (c *NostrClient) validStateEvent(ev nostr.Event, topics []string) bool {
 
 // hashFilter produces a deterministic hash of a filter for cursor keying.
 func hashFilter(f nostr.Filter) string {
-	h := sha256.New()
+	var encoded []byte
 	// Deterministic serialisation: kinds, authors, tags (sorted).
 	for _, k := range f.Kinds {
-		fmt.Fprintf(h, "k:%d;", k)
+		encoded = fmt.Appendf(encoded, "k:%d;", k)
 	}
 	for _, a := range f.Authors {
-		fmt.Fprintf(h, "a:%s;", a.Hex())
+		encoded = fmt.Appendf(encoded, "a:%s;", a.Hex())
 	}
 	if f.Tags != nil {
 		var keys []string
@@ -485,10 +485,11 @@ func hashFilter(f nostr.Filter) string {
 			vals := make([]string, len(f.Tags[k]))
 			copy(vals, f.Tags[k])
 			sort.Strings(vals)
-			fmt.Fprintf(h, "t:%s=%s;", k, strings.Join(vals, ","))
+			encoded = fmt.Appendf(encoded, "t:%s=%s;", k, strings.Join(vals, ","))
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	digest := sha256.Sum256(encoded)
+	return hex.EncodeToString(digest[:])[:16]
 }
 
 // buildDomainTopics builds the domain → topics map from the projector's

@@ -347,9 +347,7 @@ func TestNoPubkeyLeaksInEnvelopes(t *testing.T) {
 			t.Fatalf("member pubkey appears in key-envelope d-tag: %s", env.DTag)
 		}
 		if strings.Contains(env.Content, memberAPubkey) {
-			// Content is NIP-44 encrypted — the pubkey should not appear in ciphertext.
-			// But actually the NIP-44 ciphertext is base64, so the hex pubkey won't appear.
-			// This is a defence-in-depth check.
+			t.Fatal("member pubkey appears in encrypted envelope content")
 		}
 	}
 
@@ -981,49 +979,3 @@ func findMemberEnvelopeForVersion(t *testing.T, ctx context.Context, envelopes [
 }
 
 // --- Test 14: Legacy EncryptedDomainHandlers path — add member wraps OCK ---
-
-// lifecycleTrackingPublisher records key lifecycle calls made by the publisher.
-type lifecycleTrackingPublisher struct {
-	published []memberPublishEvent
-	encryptor *ConfidentialEncryptor
-	rotations []string // orgIDs that triggered RotateKey
-	wraps     []struct{ OrgID, Pubkey string }
-}
-
-type memberPublishEvent struct {
-	OrgID   uuid.UUID
-	Pubkey  string
-	Deleted bool
-	Role    domain.Role
-}
-
-func (p *lifecycleTrackingPublisher) PublishOrg(_ context.Context, _ *domain.Organization, _ bool) error {
-	return nil
-}
-func (p *lifecycleTrackingPublisher) PublishMember(ctx context.Context, member *domain.OrgMember, deleted bool, prevRole ...domain.Role) error {
-	p.published = append(p.published, memberPublishEvent{
-		OrgID: member.OrgID, Pubkey: member.Pubkey, Deleted: deleted, Role: member.Role,
-	})
-	// Drive key lifecycle exactly as OrgCanonicalPublisher does.
-	orgID := member.OrgID.String()
-	if deleted {
-		if err := p.encryptor.RotateKey(ctx, orgID); err == nil {
-			p.rotations = append(p.rotations, orgID)
-		}
-	} else {
-		if err := p.encryptor.WrapKeyForMember(ctx, orgID, member.Pubkey); err == nil {
-			p.wraps = append(p.wraps, struct{ OrgID, Pubkey string }{orgID, member.Pubkey})
-		}
-		if len(prevRole) > 0 && prevRole[0] != "" {
-			if domain.RoleWeight(member.Role) < domain.RoleWeight(prevRole[0]) {
-				if err := p.encryptor.RotateKey(ctx, orgID); err == nil {
-					p.rotations = append(p.rotations, orgID)
-				}
-			}
-		}
-	}
-	return nil
-}
-func (p *lifecycleTrackingPublisher) PublishInvite(_ context.Context, _ *domain.OrgInvite, _ bool) error {
-	return nil
-}

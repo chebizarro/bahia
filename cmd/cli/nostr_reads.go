@@ -66,13 +66,15 @@ func readCLIStateEvents(cmd *cobra.Command, domain string) ([]nostr.Event, error
 	if err != nil {
 		return nil, fmt.Errorf("create Nostr client: %w", err)
 	}
-	defer nc.Close()
+	// Read-only client cleanup is best-effort after query completion.
+	defer func() { _ = nc.Close() }()
 	events, result, err := nc.SyncAndQuery(cmd.Context(), domain)
 	if err != nil {
 		return nil, fmt.Errorf("sync %s state: %w", domain, err)
 	}
 	if !result.Fresh {
-		fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
+		// Advisory status is best-effort; it does not affect the signed result.
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
 	}
 	return events, nil
 }

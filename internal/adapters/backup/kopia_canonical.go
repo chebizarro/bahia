@@ -135,7 +135,8 @@ func (b *KopiaBackend) withCanonicalConfig(ctx context.Context, repo *domain.Bac
 	if err != nil {
 		return fmt.Errorf("%w: create private Kopia config directory", service.ErrBackupBackendExecution)
 	}
-	defer os.RemoveAll(dir)
+	// Cleanup is best-effort; do not turn an otherwise successful backup into a failed one.
+	defer func() { _ = os.RemoveAll(dir) }()
 	if err := os.Chmod(dir, 0700); err != nil {
 		return fmt.Errorf("%w: restrict Kopia config directory", service.ErrBackupBackendExecution)
 	}
@@ -145,7 +146,8 @@ func (b *KopiaBackend) withCanonicalConfig(ctx context.Context, repo *domain.Bac
 		return fmt.Errorf("%w: create private Kopia config file", service.ErrBackupBackendExecution)
 	}
 	if _, err := file.Write(held.Config); err != nil {
-		file.Close()
+		// The write error takes precedence over closing the failed file.
+		_ = file.Close()
 		return fmt.Errorf("%w: write private Kopia config file", service.ErrBackupBackendExecution)
 	}
 	if err := file.Close(); err != nil {

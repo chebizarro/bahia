@@ -100,7 +100,7 @@ func (s *managementReplyStream) setDown(err error) {
 	s.subErr = err
 	for id, waiter := range s.pending {
 		select {
-		case waiter <- managementReply{err: fmt.Errorf("Signet reply subscription ended: %w", err)}:
+		case waiter <- managementReply{err: fmt.Errorf("signet reply subscription ended: %w", err)}:
 		default:
 		}
 		delete(s.pending, id)
@@ -163,7 +163,7 @@ func (s *managementReplyStream) readReplies(ctx context.Context) (caughtUp bool,
 				if gaveUp := sub.GaveUp(); gaveUp != nil {
 					return caughtUp, gaveUp
 				}
-				return caughtUp, errors.New("Signet management reply subscription closed")
+				return caughtUp, errors.New("signet management reply subscription closed")
 			}
 			if !s.markSeen(ev.ID.Hex()) {
 				continue
@@ -226,7 +226,7 @@ func (s *managementReplyStream) openReply(ctx context.Context, gift *nostr.Event
 		return none, err
 	}
 	if seal.Kind != nostr.KindSeal || seal.PubKey != s.signetPK || !seal.CheckID() || !seal.VerifySignature() {
-		return none, errors.New("Signet management seal is invalid")
+		return none, errors.New("signet management seal is invalid")
 	}
 	rumorJSON, err := s.bunker.NIP44Decrypt(ctx, seal.PubKey, seal.Content)
 	if err != nil {
@@ -237,7 +237,7 @@ func (s *managementReplyStream) openReply(ctx context.Context, gift *nostr.Event
 		return none, err
 	}
 	if rumor.Kind != nostr.KindDirectMessage || rumor.PubKey != s.signetPK || !rumor.CheckID() {
-		return none, errors.New("Signet management rumor is invalid")
+		return none, errors.New("signet management rumor is invalid")
 	}
 	addressed := false
 	for _, tag := range rumor.Tags {
@@ -246,7 +246,7 @@ func (s *managementReplyStream) openReply(ctx context.Context, gift *nostr.Event
 		}
 	}
 	if !addressed {
-		return none, errors.New("Signet management rumor has no recipient")
+		return none, errors.New("signet management rumor has no recipient")
 	}
 	var resp signetJSONRPCResponse
 	if err := json.Unmarshal([]byte(rumor.Content), &resp); err != nil {

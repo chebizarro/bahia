@@ -95,20 +95,6 @@ func newRelayFirstTestProjector(source ProjectionSource, sink relaySink) *Projec
 	return newTestProjector(cfg, source, sink, nil, zap.NewNop())
 }
 
-// projectAlone signs the registry record a projector with no shared history
-// publishes for the cached row (the bus event's audit fact aside), the
-// reference shape both writers must produce.
-func projectAlone(t *testing.T, source ProjectionSource, eventType events.EventType, legacyKind int, id uuid.UUID) gonostr.Event {
-	t.Helper()
-	sink := &captureProjectionPublisher{}
-	newRelayFirstTestProjector(source, sink).handleEvent(context.Background(), events.Event{Type: eventType, EntityID: id.String()})
-	records := sink.byKind(legacyKind)
-	if len(records) != 1 {
-		t.Fatalf("reference projection of %s published %d records, want 1", id, len(records))
-	}
-	return records[0]
-}
-
 func relayFirstTestTimes() (created, updated time.Time) {
 	created = time.Date(2026, 9, 30, 10, 0, 0, 123456000, time.UTC)
 	return created, created.Add(90*time.Minute + 789*time.Microsecond)
@@ -281,7 +267,7 @@ func TestRelayFirstAndProjectorShareTheCoordinateCreatedAtFloor(t *testing.T) {
 		t.Fatalf("relay-first events = %d, want 2", len(h.relayFirst.events))
 	}
 	live, tombstone := h.relayFirst.events[0], h.relayFirst.events[1]
-	if !(live.CreatedAt < tombstone.CreatedAt) {
+	if live.CreatedAt >= tombstone.CreatedAt {
 		t.Fatalf("created_at not strictly increasing: live=%d tombstone=%d", live.CreatedAt, tombstone.CreatedAt)
 	}
 	if eventDTag(live) != eventDTag(tombstone) {

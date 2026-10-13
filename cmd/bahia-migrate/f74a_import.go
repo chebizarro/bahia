@@ -56,12 +56,14 @@ func runF74aImport(ctx context.Context, cfg *config.Config, pool *pgxpool.Pool, 
 	if err != nil {
 		return reportError(stderr, "opening exclusive local event store (stop daemon first): %v", err)
 	}
-	defer store.Close()
+	// The committed store operation determines the command result; close is best-effort.
+	defer func() { _ = store.Close() }()
 	outbox, err := localstore.OpenOutbox(cfg.Nostr.LocalStore.ResolvedOutboxPath())
 	if err != nil {
 		return reportError(stderr, "opening exclusive local outbox (stop daemon first): %v", err)
 	}
-	defer outbox.Close()
+	// The committed store operation determines the command result; close is best-effort.
+	defer func() { _ = outbox.Close() }()
 	if moved := outbox.MovedAside(); moved != "" {
 		return reportError(stderr, "local outbox corruption moved %s aside; recover it before importing", moved)
 	}

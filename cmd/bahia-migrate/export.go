@@ -148,7 +148,8 @@ func runLegacyExport(ctx context.Context, cfg *config.Config, outputDir string, 
 	if err != nil {
 		return reportError(stderr, "export read-only snapshot: %v", cfg.DB.RedactError(err))
 	}
-	defer tx.Rollback(context.Background())
+	// Read-only rollback is best-effort; the snapshot result takes precedence.
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	if err := verifyExportReadOnly(ctx, tx); err != nil {
 		return reportError(stderr, "export refused write-capable database role: %v", err)
 	}

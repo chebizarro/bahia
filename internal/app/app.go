@@ -335,8 +335,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		orgMemberRepo = repository.NewPgOrgMemberRepository(pool)
 		orgInviteRepo = repository.NewPgOrgInviteRepository(pool)
 		dnsZoneRepo = repository.NewPgDNSZoneRepository(pool)
-		dnsPolicyRepo = repository.NewPgDNSPolicyRepository(pool)
-		dnsRecordOverrideRepo = repository.NewPgDNSRecordOverrideRepository(pool)
 		contextVMResponseStore = repository.NewPgContextVMResponseStore(pool)
 		if pool != nil {
 			relayPolicyProjectionRepo = repository.NewPgRelayPolicyProjectionRepository(pool)
@@ -372,7 +370,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// DNS and ML desired registry records live in the durable local store.
 	// PostgreSQL is a derived index and must not seed canonical state at boot.
 	dnsZoneRepo = repository.NewLocalDNSZoneRepository(localOutbox)
-	dnsPolicyRepo = repository.NewLocalDNSPolicyRepository(localOutbox)
+	localDNSPolicyRepo := repository.NewLocalDNSPolicyRepository(localOutbox)
+	dnsPolicyRepo = localDNSPolicyRepo
 	dnsRecordOverrideRepo = repository.NewLocalDNSRecordOverrideRepository(localOutbox)
 	dnsEndpointRepo = repository.NewLocalDNSEndpointRepository(localOutbox)
 	dnsBackendRepo = repository.NewLocalDNSBackendRepository(localOutbox)
@@ -1218,34 +1217,27 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		if err != nil {
 			return nil, err
 		}
-		if dnsZoneRepo != nil {
-			for i := range dnsZones {
-				if err := dnsZoneRepo.(*repository.LocalDNSZoneRepository).SeedConfigured(ctx, &dnsZones[i]); err != nil {
-					return nil, fmt.Errorf("persisting configured DNS zone %q: %w", dnsZones[i].Name, err)
-				}
+		for i := range dnsZones {
+			if err := dnsZoneRepo.(*repository.LocalDNSZoneRepository).SeedConfigured(ctx, &dnsZones[i]); err != nil {
+				return nil, fmt.Errorf("persisting configured DNS zone %q: %w", dnsZones[i].Name, err)
 			}
-			persistedZones, err := dnsZoneRepo.List(ctx)
-			if err != nil {
-				return nil, fmt.Errorf("loading persisted DNS zones: %w", err)
-			}
-			dnsZones = persistedZones
 		}
+		persistedZones, err := dnsZoneRepo.List(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("loading persisted DNS zones: %w", err)
+		}
+		dnsZones = persistedZones
 		dnsProjector = reconcile.NewDNSProjector(runtimeServiceRead, runtimeEnvironmentRead, runtimeStateRead, runtimeObservationRead, canonicalRuntime, canonicalRuntime, canonicalRuntime, cfg.DNS, logger)
 		dnsProjector.SetManualEndpointSource(dnsEndpointRepo)
 		dnsProjector.SetZoneSource(dnsZoneRepo)
 		dnsProjector.SetContinuityStatusReader(continuityDNSStatusReader{reader: continuityStatusStore})
-		if policySource, ok := dnsPolicyRepo.(reconcile.DNSPolicySource); ok {
-			dnsProjector.SetPolicySource(policySource)
-		}
+		dnsProjector.SetPolicySource(localDNSPolicyRepo)
 		dnsReconciler = reconcile.NewDNSReconciler(dnsProjector, dnsZones, dnsResolverBridge{resolver: dnsResolver}, cfg.DNS.ReconcileInterval, logger)
 		dnsReconciler.SetCanonicalReadiness(bootstrapper.ReadySignal())
 		dnsReconciler.SetPublisher(publisher)
 		dnsReconciler.SetPersistenceSources(dnsZoneRepo, dnsRecordOverrideRepo)
 		dnsReconciler.SetupSubscriptions(publisher)
-		var dnsPersistence controlplane.DNSPersistenceOperator
-		if dnsZoneRepo != nil && dnsRecordOverrideRepo != nil {
-			dnsPersistence = dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo}
-		}
+		dnsPersistence := controlplane.DNSPersistenceOperator(dnsRepositoryPersistenceAdapter{zones: dnsZoneRepo, overrides: dnsRecordOverrideRepo})
 		dnsOperator = newDNSControlPlaneOperator(dnsReconciler, dnsZones, dnsResolver.Refs(), dnsPersistence, dnsPolicyRepo)
 		configuredBackends := (configDNSBackendProjectionSource{backends: cfg.DNS.Backends, zones: dnsZones, resolver: dnsResolver}).ListDNSBackendStates(ctx)
 		for i := range configuredBackends {

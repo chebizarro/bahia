@@ -219,7 +219,7 @@ func (r *CanonicalPackageRepository) UpsertIntent(ctx context.Context, intent *d
 	}
 	// PostgreSQL may retain a terminal row when a stale transition races it.
 	// Publish the persisted winner, not the caller's attempted transition.
-	stored, err := r.PackageControlPlaneRepository.GetIntentByRequestEventID(ctx, intent.RequestEventID)
+	stored, err := r.GetIntentByRequestEventID(ctx, intent.RequestEventID)
 	if err != nil {
 		return err
 	}
@@ -308,7 +308,7 @@ func NewCanonicalNotificationRepository(inner repository.NotificationRepository,
 	return &CanonicalNotificationRepository{NotificationRepository: inner, publisher: publisher}
 }
 func (r *CanonicalNotificationRepository) publishWindow(ctx context.Context, channelID uuid.UUID) error {
-	logs, err := r.NotificationRepository.ListLogsByChannel(ctx, channelID, NotificationLogWindowLimit)
+	logs, err := r.ListLogsByChannel(ctx, channelID, NotificationLogWindowLimit)
 	if err != nil {
 		return err
 	}

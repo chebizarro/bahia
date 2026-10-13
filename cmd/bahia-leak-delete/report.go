@@ -112,7 +112,8 @@ func loadReport(path string, oldPubkey nostr.PubKey) (*report, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	// The report is read-only; close cannot change its parsed contents.
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, maxReportBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read report %s: %w", path, err)
@@ -296,7 +297,7 @@ func normalizeRelays(raw []string) ([]string, error) {
 	var out []string
 	for _, value := range raw {
 		url := nostr.NormalizeURL(strings.TrimSpace(value))
-		if url == "" || !(strings.HasPrefix(url, "wss://") || strings.HasPrefix(url, "ws://")) {
+		if !strings.HasPrefix(url, "wss://") && !strings.HasPrefix(url, "ws://") {
 			return nil, fmt.Errorf("invalid relay URL %q", value)
 		}
 		if !slices.Contains(out, url) {

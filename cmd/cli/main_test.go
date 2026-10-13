@@ -179,7 +179,11 @@ func TestAuthInspectUsesNostrSigner(t *testing.T) {
 		t.Fatal(err)
 	}
 	if closeSigner != nil {
-		defer closeSigner()
+		t.Cleanup(func() {
+			if err := closeSigner(); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 	pubkey, err := signer.GetPublicKey(context.Background())
 	if err != nil {

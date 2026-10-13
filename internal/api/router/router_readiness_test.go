@@ -2,7 +2,6 @@ package router_test
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -109,9 +108,4 @@ func getHealthResponse(t *testing.T, url string, wantStatus int) dto.HealthRespo
 	var health dto.HealthResponse
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&health))
 	return health
-}
-
-func closeResponseBodyReadiness(t *testing.T, body io.Closer) {
-	t.Helper()
-	require.NoError(t, body.Close())
 }

@@ -50,7 +50,7 @@ func TestLocalDNSMLRecordsSurviveReopenAndDeletion(t *testing.T) {
 
 	store, err = localstore.OpenOutbox(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	loadedZone, err = NewLocalDNSZoneRepository(store).Get(ctx, zone.Name)
 	require.NoError(t, err)
 	require.Nil(t, loadedZone)

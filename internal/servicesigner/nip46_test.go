@@ -349,7 +349,7 @@ func (s configFabricNIP46Signer) GetPublicKey(ctx context.Context) (string, erro
 	return pubkey.Hex(), err
 }
 func (s configFabricNIP46Signer) Sign(ctx context.Context, event *nostr.Event) error {
-	return s.Keyer.SignEvent(ctx, event)
+	return s.SignEvent(ctx, event)
 }
 
 type configFabricNIP46Publisher struct{ events []nostr.Event }

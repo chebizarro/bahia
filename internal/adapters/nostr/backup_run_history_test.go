@@ -31,10 +31,18 @@ func TestBackupRunHistoryStagesOnceWithLiveProof(t *testing.T) {
 	dir := t.TempDir()
 	store, err := localstore.Open(filepath.Join(dir, "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	service, actor := gonostr.Generate(), gonostr.Generate()
 	projector := withTestServiceKey(&Projector{enabled: true, logger: zap.NewNop()}, service.Hex())
 	publisher := &Publisher{localOutbox: outbox, ownEvents: store, target: repository.NostrPublishTargetControlPlane,
@@ -91,7 +99,11 @@ func TestBackupRunHistoryRequiresExactAllRelayEOSEAndStableConnection(t *testing
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	service := gonostr.Generate().Public()
 	coordinate := "backup-run:run-1"
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -128,7 +140,10 @@ func TestBackupRunHistoryStalledEOSECannotProveAbsenceAndRetriesOnFreshConnectio
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		t.Cleanup(func() {
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
+		})
 		for {
 			_, msg, err := conn.Read(r.Context())
 			if err != nil {
@@ -159,7 +174,11 @@ func TestBackupRunHistoryStalledEOSECannotProveAbsenceAndRetriesOnFreshConnectio
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	result := make(chan error, 1)
 	go func() {
@@ -191,7 +210,11 @@ func TestBackupRunHistoryRunnerPersistsRetryThenRefusesExpiredRequestAfterRestar
 	dir := t.TempDir()
 	store, err := localstore.Open(filepath.Join(dir, "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	outboxPath := filepath.Join(dir, "outbox.db")
 	outbox, err := localstore.OpenOutbox(outboxPath)
 	require.NoError(t, err)
@@ -223,7 +246,11 @@ func TestBackupRunHistoryRunnerPersistsRetryThenRefusesExpiredRequestAfterRestar
 	require.NoError(t, outbox.Close())
 	outbox, err = localstore.OpenOutbox(outboxPath)
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	runner, err = NewBackupRunHistoryRunner(outbox, pool, store, zap.NewNop())
 	require.NoError(t, err)
 	runner.now = func() time.Time { return now.Add(time.Minute) }
@@ -244,7 +271,11 @@ func TestBackupRunHistoryLocalPreledgerCoordinateVetoesEmptyRelay(t *testing.T) 
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	service := gonostr.Generate()
 	coordinate := "backup-run:old-coordinate"
 	// No modern topic tag or envelope is required for the veto.
@@ -264,10 +295,18 @@ func TestBackupRunHistoryCoordinateConflictWakesTerminalStatusWithoutExpiry(t *t
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	actor, service := gonostr.Generate(), gonostr.Generate()
 	now := time.Now().UTC().Truncate(time.Second)
 	coordinate := "backup-run:conflict"
@@ -306,10 +345,18 @@ func TestBackupRunHistoryInspectionCrossingExpiryWakesTerminalStatus(t *testing.
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	actor, service := gonostr.Generate(), gonostr.Generate()
 	now := time.Now().UTC().Truncate(time.Second)
 	coordinate := "backup-run:deadline"
@@ -351,7 +398,10 @@ func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		t.Cleanup(func() {
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
+		})
 		for {
 			_, msg, err := conn.Read(r.Context())
 			if err != nil {
@@ -389,7 +439,11 @@ func TestBackupRunHistoryProofRejectsTerminalCLOSEDAfterEOSE(t *testing.T) {
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	proof, err := pool.InspectBackupRunHistory(ctx, store, gonostr.Generate().Public(), "backup-run:closed-after-eose")
@@ -414,7 +468,11 @@ func TestBackupRunHistoryProofAndCancellationAfterEOSENeverPass(t *testing.T) {
 	defer pool.Close()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	ctx, cancel := context.WithCancel(t.Context())
 	proof, err := pool.InspectBackupRunHistory(ctx, store, gonostr.Generate().Public(), "backup-run:cancel-after-eose")
 	require.NoError(t, err)

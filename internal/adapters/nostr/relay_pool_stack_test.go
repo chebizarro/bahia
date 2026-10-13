@@ -544,10 +544,9 @@ func TestRelayPoolAwaitUnavailableRelaysWaitsForRecovery(t *testing.T) {
 // given limitations and answers a REQ with EOSE, or CLOSED "invalid:" when it
 // breaks max_filters. It records the filters of every REQ.
 type nip11LimitRelay struct {
-	url    string
-	mu     sync.Mutex
-	reqs   [][]gonostr.Filter
-	closed []string
+	url  string
+	mu   sync.Mutex
+	reqs [][]gonostr.Filter
 }
 
 func newNIP11LimitRelay(t *testing.T, limitation map[string]int) *nip11LimitRelay {
@@ -563,7 +562,10 @@ func newNIP11LimitRelay(t *testing.T, limitation map[string]int) *nip11LimitRela
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		t.Cleanup(func() {
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
+		})
 		for {
 			_, msg, err := conn.Read(r.Context())
 			if err != nil {

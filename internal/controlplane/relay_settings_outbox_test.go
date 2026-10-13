@@ -36,10 +36,18 @@ func TestRelaySettingsFactsRetryAgainstCurrentServiceWriteSet(t *testing.T) {
 	pool.Connect(ctx)
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	events, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
 	require.NoError(t, err)
-	defer events.Close()
+	t.Cleanup(func() {
+		if err := events.Close(); err != nil {
+			t.Errorf("close events: %v", err)
+		}
+	})
 	signer, err := NewPrivateKeySigner(testServiceKey)
 	require.NoError(t, err)
 	writeRelays := []string{first, refusing}

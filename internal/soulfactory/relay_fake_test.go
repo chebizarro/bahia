@@ -104,7 +104,8 @@ func (e *fakeRelayEndpoint) serve(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.CloseNow()
+	// The peer may already have closed this test socket.
+	defer func() { _ = conn.CloseNow() }()
 	conn.SetReadLimit(1 << 24)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()

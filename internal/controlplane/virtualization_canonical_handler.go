@@ -591,7 +591,8 @@ func (h *virtualizationRuntime) ensureNoPendingReferencedEffects(kind domain.Vir
 		if err := json.Unmarshal(raw, &r); err != nil {
 			return err
 		}
-		if r.Effect == nil || !(kind == domain.VirtualizationHostResource && r.Effect.VM.HostID == id || kind == domain.VMImageResource && r.Effect.VM.ImageID == id) {
+		if r.Effect == nil || (kind != domain.VirtualizationHostResource || r.Effect.VM.HostID != id) &&
+			(kind != domain.VMImageResource || r.Effect.VM.ImageID != id) {
 			continue
 		}
 		if r.Canonical == nil {

@@ -398,9 +398,10 @@ func (r *concordAuthorityResolver) predecessor(edition concordEdition) (*concord
 		if candidate.version == edition.version-1 && candidate.hash == edition.prev {
 			found = true
 			_, state := r.check(*candidate)
-			if state == concordUnresolved {
+			switch state {
+			case concordUnresolved:
 				pending = true
-			} else if state == concordEligible {
+			case concordEligible:
 				authorized = candidate
 			}
 		}

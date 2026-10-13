@@ -89,7 +89,7 @@ func (p *OperationalViewPublisher) publishBlossom(ctx context.Context, family in
 		return fmt.Errorf("confidential encryptor not configured; refusing plaintext Blossom publication")
 	}
 	if len(content) > 32768 {
-		return fmt.Errorf("Blossom record exceeds 32768 bytes")
+		return fmt.Errorf("blossom record exceeds 32768 bytes")
 	}
 	topic := cpStateFamilies[family].topic
 	encrypted, err := p.encryptor.EncryptConfidential(ctx, kinds.FleetOCKScope, content, family, coordinate, topic, nil)

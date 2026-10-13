@@ -95,7 +95,7 @@ func TestStateSyncRejectsTamperedEvent(t *testing.T) {
 	pool := &fakePool{events: []*nostr.Event{&ev}}
 	client, err := NewNostrClient(NostrClientConfig{StorePath: filepath.Join(t.TempDir(), "events.db"), ServicePubkey: nostr.GetPublicKey(sk).Hex(), Pool: pool})
 	require.NoError(t, err)
-	defer client.Close()
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	events, result, err := client.SyncAndQuery(t.Context(), "state")
 	require.NoError(t, err)
 	require.True(t, result.Fresh)
@@ -119,7 +119,7 @@ func TestClosedRelayEOSEIsNotFresh(t *testing.T) {
 		Pool: closedEOSEPool{}, EOSETimeout: 10 * time.Millisecond,
 	})
 	require.NoError(t, err)
-	defer client.Close()
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	result, err := client.Sync(t.Context(), "state")
 	require.NoError(t, err)
 	require.False(t, result.Fresh)
@@ -132,7 +132,7 @@ func TestCancelledStateSyncReturnsError(t *testing.T) {
 		Pool: closedEOSEPool{}, EOSETimeout: time.Second,
 	})
 	require.NoError(t, err)
-	defer client.Close()
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = client.Sync(ctx, "state")

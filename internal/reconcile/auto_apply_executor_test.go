@@ -149,7 +149,11 @@ func TestCanonicalAutoApplyProcessCrashReplay(t *testing.T) {
 			require.FileExists(t, marker)
 			outbox, err := localstore.OpenOutbox(path)
 			require.NoError(t, err)
-			defer outbox.Close()
+			t.Cleanup(func() {
+				if err := outbox.Close(); err != nil {
+					t.Errorf("close outbox: %v", err)
+				}
+			})
 			lock, err := service.NewRuntimeApplyLock(path)
 			require.NoError(t, err)
 			executor := &CanonicalAutoApplyExecutor{

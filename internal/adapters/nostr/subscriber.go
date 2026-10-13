@@ -300,7 +300,7 @@ func (s *Subscriber) LoomStatusComplete() bool {
 
 // ErrLoomStatusProofIncomplete means no signed absence assertion may be
 // admitted while one worker-status relay is unproved.
-var ErrLoomStatusProofIncomplete = errors.New("Loom kind-30100 relay completeness proof unavailable")
+var ErrLoomStatusProofIncomplete = errors.New("loom kind-30100 relay completeness proof unavailable")
 
 // WithLoomStatusProof pins both the relay topology and the subscriber's
 // revocable EOSE proof across a local outbox admission. admit must not perform

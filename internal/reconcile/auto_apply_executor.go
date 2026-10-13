@@ -392,9 +392,10 @@ func (e *CanonicalAutoApplyExecutor) finish(ctx context.Context, snapshot ApplyS
 func (e *CanonicalAutoApplyExecutor) refuse(ctx context.Context, receipt *autoApplyReceipt, cause error) error {
 	phase := "recovery_required"
 	if errors.Is(cause, ErrFreshDecisionRequired) {
-		if receipt.Phase == "accepted" {
+		switch receipt.Phase {
+		case "accepted":
 			phase = "refused"
-		} else if receipt.Phase == "effect_observed" {
+		case "effect_observed":
 			phase = "superseded"
 		}
 	}

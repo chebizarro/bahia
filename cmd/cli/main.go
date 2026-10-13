@@ -126,7 +126,8 @@ func authCommands() *cobra.Command {
 				return err
 			}
 			if closeSigner != nil {
-				defer closeSigner()
+				// Signer teardown is best-effort after identity inspection.
+				defer func() { _ = closeSigner() }()
 			}
 			pubkey, err := signer.GetPublicKey(cmd.Context())
 			if err != nil {

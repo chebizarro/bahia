@@ -76,7 +76,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	// Logger sync is best-effort during process shutdown.
+	defer func() { _ = logger.Sync() }()
 	readAuthMode := config.RelaySidecarConfig{ReadAuthMode: *readAuth}.NormalizedReadAuthMode()
 
 	serviceKey := nostr.MustSecretKeyFromHex(serviceSecretHex)

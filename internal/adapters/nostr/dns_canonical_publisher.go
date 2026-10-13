@@ -234,9 +234,7 @@ func (p *DNSCanonicalPublisher) PublishBackend(ctx context.Context, backend doma
 	}
 	if len(backend.ZoneRefs) > 0 {
 		zoneNames := make([]string, len(backend.ZoneRefs))
-		for i, z := range backend.ZoneRefs {
-			zoneNames[i] = z
-		}
+		copy(zoneNames, backend.ZoneRefs)
 		content["zones"] = zoneNames
 	}
 	return p.projector.publishReplaceableJSON(ctx, int(kinds.CPStateFamilyDNSBackend), dnsBackendDTag(backend.Ref), tags, content, "dns_backend.projection", nil)

@@ -71,11 +71,15 @@ func deletionRequest(author nostr.PubKey, targets []scannedEvent, createdAt nost
 }
 
 // printPlan writes each request's e and k tags and its relay states.
-func printPlan(w io.Writer, recorded, planned []deletion, relays []string) {
-	write := func(label string, del deletion) {
-		fmt.Fprintf(w, "%s: %d events\n", label, len(del.Targets))
+func printPlan(w io.Writer, recorded, planned []deletion, relays []string) error {
+	write := func(label string, del deletion) error {
+		if _, err := fmt.Fprintf(w, "%s: %d events\n", label, len(del.Targets)); err != nil {
+			return err
+		}
 		for _, tag := range del.Event.Tags {
-			fmt.Fprintf(w, "  [%q, %q]\n", tag[0], tag[1])
+			if _, err := fmt.Fprintf(w, "  [%q, %q]\n", tag[0], tag[1]); err != nil {
+				return err
+			}
 		}
 		for _, relay := range relays {
 			status := outcomePending
@@ -85,15 +89,23 @@ func printPlan(w io.Writer, recorded, planned []deletion, relays []string) {
 					status += " (" + outcome.Reason + ")"
 				}
 			}
-			fmt.Fprintf(w, "  relay %s: %s\n", relay, status)
+			if _, err := fmt.Fprintf(w, "  relay %s: %s\n", relay, status); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
 	for _, del := range recorded {
-		write("deletion "+del.Event.ID.Hex(), del)
+		if err := write("deletion "+del.Event.ID.Hex(), del); err != nil {
+			return err
+		}
 	}
 	for i, del := range planned {
-		write(fmt.Sprintf("new deletion %d (unsigned)", i+1), del)
+		if err := write(fmt.Sprintf("new deletion %d (unsigned)", i+1), del); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // publisher delivers the report's signed deletions. Each round publishes
@@ -191,7 +203,8 @@ func (p *publisher) record(del *deletion, relay string, answer relayAnswer) {
 	if outcome.Reason != "" {
 		line += " (" + outcome.Reason + ")"
 	}
-	fmt.Fprintln(p.out, line)
+	// Relay delivery must continue even if progress output is unavailable.
+	_, _ = fmt.Fprintln(p.out, line)
 }
 
 type relayAnswer struct {
@@ -247,7 +260,7 @@ func classify(result nostradapter.PublishResult) relayAnswer {
 
 // summarize prints each relay's tally and reports whether every deletion is
 // done on every relay.
-func summarize(w io.Writer, r *report, relays []string) bool {
+func summarize(w io.Writer, r *report, relays []string) (bool, error) {
 	complete := true
 	for _, relay := range relays {
 		counts := map[string]int{}
@@ -269,9 +282,11 @@ func summarize(w io.Writer, r *report, relays []string) bool {
 				parts = append(parts, fmt.Sprintf("%s=%d", status, counts[status]))
 			}
 		}
-		fmt.Fprintf(w, "relay %s: %d deletions: %s\n", relay, len(r.Deletions), strings.Join(parts, " "))
+		if _, err := fmt.Fprintf(w, "relay %s: %d deletions: %s\n", relay, len(r.Deletions), strings.Join(parts, " ")); err != nil {
+			return false, err
+		}
 	}
-	return complete
+	return complete, nil
 }
 
 func waitTimer(ctx context.Context, d time.Duration) error {

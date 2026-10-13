@@ -15,9 +15,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// queuedPublish is what the outbox publisher returns below the publish quorum:
+// errQueuedPublish is what the outbox publisher returns below the publish quorum:
 // the signed event is durable and still being retried.
-var queuedPublish = fmt.Errorf("nostr event accepted by 0 of 1 required relays: %w", nostrutil.ErrPublishIncomplete)
+var errQueuedPublish = fmt.Errorf("nostr event accepted by 0 of 1 required relays: %w", nostrutil.ErrPublishIncomplete)
 
 // queuedSignedPublisher signs and records every event and reports it queued.
 type queuedSignedPublisher struct {
@@ -36,7 +36,7 @@ func (p *queuedSignedPublisher) PublishSignedEvent(_ context.Context, ev *nostr.
 		return err
 	}
 	p.events = append(p.events, *ev)
-	return queuedPublish
+	return errQueuedPublish
 }
 
 func (p *queuedSignedPublisher) PublishSignedEventWithResults(ctx context.Context, ev *nostr.Event) ([]sbomadapter.PublishOKResult, error) {

@@ -745,7 +745,9 @@ func cliCreateEntityID(cmd *cobra.Command, entity, raw string) (string, error) {
 		return "", fmt.Errorf("invalid --id: %w", err)
 	}
 	if !supplied {
-		fmt.Fprintf(cmd.ErrOrStderr(), "%s id %s (pass --id %s to retry this create)\n", entity, id, id)
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "%s id %s (pass --id %s to retry this create)\n", entity, id, id); err != nil {
+			return "", err
+		}
 	}
 	return id.String(), nil
 }

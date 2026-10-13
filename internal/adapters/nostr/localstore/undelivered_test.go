@@ -118,7 +118,7 @@ func TestUndeliveredMarkerSurvivesReopen(t *testing.T) {
 	require.NoError(t, store.Close())
 	reopened, err := Open(path)
 	require.NoError(t, err)
-	defer reopened.Close()
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	markers, err := reopened.ListUndelivered()
 	require.NoError(t, err)
 	require.Len(t, markers, 1)

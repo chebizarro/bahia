@@ -106,7 +106,11 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("open DNS agent event store: %w", err)
 	}
-	defer store.Close()
+	defer func() {
+		if err := store.Close(); err != nil {
+			logger.Warn("close DNS agent event store", zap.Error(err))
+		}
+	}()
 	agentKeyer, err := nostrutil.NewLocalKeyer(normalizedKey)
 	if err != nil {
 		return fmt.Errorf("configure DNS agent key: %w", err)
@@ -163,7 +167,7 @@ func run(args []string) error {
 				}
 			}
 			if gaveUp := sub.GaveUp(); gaveUp != nil {
-				logger.Error("zone sync subscription gave up â waiting for topology change", zap.Error(gaveUp))
+				logger.Error("zone sync subscription gave up — waiting for topology change", zap.Error(gaveUp))
 
 				if err := pool.WaitForTopologyChange(ctx); err != nil {
 					return

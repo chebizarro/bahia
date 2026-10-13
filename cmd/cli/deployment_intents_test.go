@@ -96,7 +96,11 @@ func TestCLIDeploymentRuntimeIntentsMatchD69FixturesAndStayInOutboxWithoutStatus
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	entries, err := outbox.ListEntries([]string{localstore.OutboxPending}, 20)
 	if err != nil {
 		t.Fatal(err)

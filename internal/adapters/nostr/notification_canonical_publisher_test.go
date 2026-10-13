@@ -112,7 +112,7 @@ func TestNotificationPublishRoundTripFullConfig(t *testing.T) {
 	}
 
 	// Verify the org-visible layer was called (service-inner also exists).
-	if encryptor.lastServiceOnlyPlain == nil || len(encryptor.lastServiceOnlyPlain) == 0 {
+	if len(encryptor.lastServiceOnlyPlain) == 0 {
 		t.Fatal("expected service-inner to be present for notification with credentials")
 	}
 

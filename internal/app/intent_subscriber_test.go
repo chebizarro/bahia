@@ -260,13 +260,14 @@ func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 		require.NoError(t, err)
 		intent.Actor = actor
 		err = app.IntentProcessor.ProcessInProcess(context.Background(), intent)
-		if domainName == "service" || domainName == "policy" {
+		switch domainName {
+		case "service", "policy":
 			require.ErrorContains(t, err, "disabled", domainName)
 			require.Empty(t, handler.received(), domainName)
-		} else if domainName == "hiveci-policy" || domainName == "virtualization" || domainName == "hostname" {
+		case "hiveci-policy", "virtualization", "hostname":
 			require.ErrorContains(t, err, "no write relays configured")
 			require.Len(t, handler.received(), 1, domainName)
-		} else {
+		default:
 			require.NoError(t, err, domainName)
 			require.Len(t, handler.received(), 1, domainName)
 		}

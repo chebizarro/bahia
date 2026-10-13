@@ -450,7 +450,7 @@ func concordTagUint(tags nostr.Tags, name string) (uint64, error) {
 // exposed to production callers.
 func foldConcordControlPlane(events []*nostr.Event, address nostr.PubKey, convKey [32]byte, community [32]byte, owner nostr.PubKey) (*concordControlFold, error) {
 	if owner == nostr.ZeroPK {
-		return nil, fmt.Errorf("Control Plane owner is unset")
+		return nil, fmt.Errorf("control plane owner is unset")
 	}
 	raw, err := collectConcordControlPlane(events, address, convKey)
 	if err != nil {
@@ -499,7 +499,7 @@ func (m *concordMembership) fetchConcordControlPlane(
 	}
 	owner, err := nostr.PubKeyFromHex(bundle.Owner)
 	if err != nil {
-		return nil, fmt.Errorf("Control Plane owner: %w", err)
+		return nil, fmt.Errorf("control plane owner: %w", err)
 	}
 	return foldConcordControlPlane(plane.Events, address, read.ConversationKey, communityID32, owner)
 }

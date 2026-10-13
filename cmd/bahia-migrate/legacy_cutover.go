@@ -190,7 +190,8 @@ func runLegacyCutover(ctx context.Context, pool *pgxpool.Pool, outboxPath string
 	if err != nil {
 		return reportError(stderr, "legacy-cutover begin census: %v", err)
 	}
-	defer tx.Rollback(ctx)
+	// Read-only rollback is best-effort; the snapshot result takes precedence.
+	defer func() { _ = tx.Rollback(ctx) }()
 	report, err := censusLegacy(ctx, pgLegacyCounter{tx: tx}, time.Now())
 	if err != nil {
 		return reportError(stderr, "legacy-cutover census incomplete (no marker written): %v", err)
@@ -218,7 +219,8 @@ func runLegacyCutover(ctx context.Context, pool *pgxpool.Pool, outboxPath string
 	if err != nil {
 		return reportError(stderr, "legacy-cutover requires intact exclusive local outbox (stop daemon first): %v", err)
 	}
-	defer outbox.Close()
+	// The committed store operation determines the command result; close is best-effort.
+	defer func() { _ = outbox.Close() }()
 	existing, err := outbox.GetControlRecord(legacyCutoverMarkerFamily, legacyCutoverMarkerID)
 	if err != nil {
 		return reportError(stderr, "legacy-cutover read marker: %v", err)

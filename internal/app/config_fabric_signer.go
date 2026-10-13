@@ -29,7 +29,7 @@ func (s configFabricKeyer) GetPublicKey(ctx context.Context) (string, error) {
 }
 
 func (s configFabricKeyer) Sign(ctx context.Context, event *nostr.Event) error {
-	return s.Keyer.SignEvent(ctx, event)
+	return s.SignEvent(ctx, event)
 }
 
 func newConfigFabricKeyer(cfg config.ConfigFabricConfig, admission *nostrout.Admission, logger *zap.Logger, running *serviceSigner) (*serviceSigner, func(), error) {

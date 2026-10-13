@@ -197,7 +197,11 @@ func TestBackupRunExpiredPendingReplayCannotReportPending(t *testing.T) {
 	intent.Actor = operator.Public().Hex()
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	_, inserted, err := outbox.PutBackupRunPending(localstore.BackupRunPending{
 		IntentID: intent.IntentID, Coordinate: intent.Coordinate, RequestEvent: request,
 		Actor: intent.Actor, ServicePubkey: service.Public().Hex(),

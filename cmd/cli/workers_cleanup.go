@@ -139,7 +139,8 @@ var runWorkersCleanupOrphans = func(cmd *cobra.Command, dryRun bool) error {
 		return err
 	}
 	if closeSigner != nil {
-		defer closeSigner() //nolint:errcheck
+		// Signer teardown must not hide a cleanup or relay result.
+		defer func() { _ = closeSigner() }()
 	}
 
 	relays, err := resolveOperatorRelays(cmd)
@@ -154,13 +155,17 @@ var runWorkersCleanupOrphans = func(cmd *cobra.Command, dryRun bool) error {
 	out := cmd.OutOrStdout()
 
 	if dryRun {
-		fmt.Fprintln(out, "DRY RUN: no deletions will be published")
+		if _, err := fmt.Fprintln(out, "DRY RUN: no deletions will be published"); err != nil {
+			return err
+		}
 	}
 
 	for _, relayURL := range relays {
 		relay, closeRelay, err := cleanupRelayFactory(ctx, cmd, relayURL)
 		if err != nil {
-			fmt.Fprintf(out, "WARN: could not connect to %s: %v\n", relayURL, err)
+			if _, err := fmt.Fprintf(out, "WARN: could not connect to %s: %v\n", relayURL, err); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -171,18 +176,26 @@ var runWorkersCleanupOrphans = func(cmd *cobra.Command, dryRun bool) error {
 		}
 
 		if len(results) == 0 {
-			fmt.Fprintf(out, "%s: no orphaned worker records found\n", relayURL)
+			if _, err := fmt.Fprintf(out, "%s: no orphaned worker records found\n", relayURL); err != nil {
+				return err
+			}
 			continue
 		}
 
 		for _, r := range results {
 			if dryRun {
-				fmt.Fprintf(out, "%s: would delete d=%s (event %s)\n", relayURL, r.DTag, r.EventID)
+				if _, err := fmt.Fprintf(out, "%s: would delete d=%s (event %s)\n", relayURL, r.DTag, r.EventID); err != nil {
+					return err
+				}
 			} else {
-				fmt.Fprintf(out, "%s: deleted d=%s (event %s, deletion %s)\n", relayURL, r.DTag, r.EventID, r.DeletionID)
+				if _, err := fmt.Fprintf(out, "%s: deleted d=%s (event %s, deletion %s)\n", relayURL, r.DTag, r.EventID, r.DeletionID); err != nil {
+					return err
+				}
 			}
 		}
-		fmt.Fprintf(out, "%s: %d orphaned record(s) %s\n", relayURL, len(results), map[bool]string{true: "found", false: "deleted"}[dryRun])
+		if _, err := fmt.Fprintf(out, "%s: %d orphaned record(s) %s\n", relayURL, len(results), map[bool]string{true: "found", false: "deleted"}[dryRun]); err != nil {
+			return err
+		}
 	}
 	return nil
 }

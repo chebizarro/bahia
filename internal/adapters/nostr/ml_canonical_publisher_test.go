@@ -267,21 +267,6 @@ func TestProjectorSnapshotNoLongerPublishesML(t *testing.T) {
 	}
 }
 
-// mlSourceWithRuns wraps fakeProjectionSource, overriding GetMLDeploymentRun
-// to return a seeded run so the worker-refresh path can be tested.
-type mlSourceWithRuns struct {
-	*fakeProjectionSource
-	runs map[uuid.UUID]domain.MLDeploymentRun
-}
-
-func (s *mlSourceWithRuns) GetMLDeploymentRun(_ context.Context, id uuid.UUID) (*domain.MLDeploymentRun, error) {
-	run, ok := s.runs[id]
-	if !ok {
-		return nil, nil
-	}
-	return &run, nil
-}
-
 func TestMLCanonicalPublisher_ProvenanceGraph(t *testing.T) {
 	ctx := context.Background()
 

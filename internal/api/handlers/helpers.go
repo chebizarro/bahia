@@ -44,10 +44,6 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, dto.APIResponse{Error: msg})
 }
 
-func writeMessage(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, dto.APIResponse{Message: msg})
-}
-
 func decodeJSON(r *http.Request, v any) error {
 	defer closeReadBody(r.Body)
 	return json.NewDecoder(r.Body).Decode(v)
@@ -76,18 +72,6 @@ func requireMember(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	if err := authz.RequireMember(); err != nil {
-		writeError(w, http.StatusForbidden, "access denied")
-		return false
-	}
-	return true
-}
-
-func serviceInAuthzOrg(w http.ResponseWriter, r *http.Request, svcOrgID uuid.UUID) bool {
-	orgID := authzOrgID(r)
-	if orgID == uuid.Nil {
-		return true
-	}
-	if svcOrgID != orgID {
 		writeError(w, http.StatusForbidden, "access denied")
 		return false
 	}

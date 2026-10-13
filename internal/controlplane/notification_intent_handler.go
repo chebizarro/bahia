@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -380,26 +379,4 @@ func BuildNotificationIntentContent(ch *domain.NotificationChannel) map[string]i
 		"enabled":      ch.Enabled,
 	}
 	return content
-}
-
-// notificationIntentPayload assists JSON deserialization.
-type notificationIntentPayload struct {
-	ID          string         `json:"id"`
-	OrgID       string         `json:"org_id,omitempty"`
-	Name        string         `json:"name,omitempty"`
-	ChannelType string         `json:"channel_type,omitempty"`
-	Config      map[string]any `json:"config,omitempty"`
-	EventFilter map[string]any `json:"event_filter,omitempty"`
-	Enabled     *bool          `json:"enabled,omitempty"`
-}
-
-// ensureNotificationIntentJSON marshals any to JSON and back into a map.
-func ensureNotificationIntentJSON(v any) map[string]interface{} {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	var out map[string]interface{}
-	_ = json.Unmarshal(data, &out)
-	return out
 }

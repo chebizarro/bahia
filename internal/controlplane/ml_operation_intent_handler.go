@@ -29,68 +29,6 @@ type mlOperationRegistry interface {
 
 var mlOperationNamespace = uuid.MustParse("d744ca11-56ed-4245-a1f7-4296e970922a")
 
-func (h *MLIntentHandler) operationCoordinate(ctx context.Context, op string, content map[string]any) (string, error) {
-	ops, ok := h.registry.(mlOperationRegistry)
-	if !ok {
-		return "", fmt.Errorf("ML operation registry is not configured")
-	}
-	raw, err := json.Marshal(content)
-	if err != nil {
-		return "", err
-	}
-	switch op {
-	case "model-import":
-		model, _ := content["model"].(string)
-		slug := strings.TrimPrefix(strings.TrimSpace(model), "model:")
-		if slug == "" || strings.Contains(slug, ":") {
-			return "", fmt.Errorf("model must be model:<slug>")
-		}
-		return "model:" + slug, nil
-	case "recipe-run":
-		recipe, err := h.resolveRecipe(ctx, raw, ops)
-		if err != nil {
-			return "", err
-		}
-		return "recipe-run:" + recipe.ID.String(), nil
-	case "inference-deploy":
-		var req mlDeployRequest
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return "", err
-		}
-		endpoint, err := h.resolveEndpoint(ctx, req.EndpointID, req.Endpoint, ops)
-		if err != nil {
-			return "", err
-		}
-		return "inference-deploy:" + endpoint.ID.String(), nil
-	case "inference-approval":
-		var req struct {
-			IntentID uuid.UUID `json:"intent_id"`
-		}
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return "", err
-		}
-		if req.IntentID == uuid.Nil {
-			return "", fmt.Errorf("intent_id is required")
-		}
-		return "inference-approval:" + req.IntentID.String(), nil
-	case "inference-rollback":
-		var req struct {
-			EndpointID string `json:"endpoint_id"`
-			Endpoint   string `json:"endpoint"`
-		}
-		if err := json.Unmarshal(raw, &req); err != nil {
-			return "", err
-		}
-		endpoint, err := h.resolveEndpoint(ctx, req.EndpointID, req.Endpoint, ops)
-		if err != nil {
-			return "", err
-		}
-		return "inference-rollback:" + endpoint.ID.String(), nil
-	default:
-		return "", fmt.Errorf("unsupported ML operation %q", op)
-	}
-}
-
 func (h *MLIntentHandler) handleMLOperation(ctx context.Context, intent *Intent, raw []byte) error {
 	ops, ok := h.registry.(mlOperationRegistry)
 	if !ok {

@@ -75,7 +75,11 @@ func TestCanonicalServiceStateRejectsDivergentSignedDesiredSpec(t *testing.T) {
 			require.NoError(t, store.Close())
 			store, err = localstore.Open(path)
 			require.NoError(t, err)
-			defer store.Close()
+			t.Cleanup(func() {
+				if err := store.Close(); err != nil {
+					t.Errorf("close store: %v", err)
+				}
+			})
 			source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
 			require.NoError(t, err)
 			// Even a correct SQL projection cannot repair contradictory signed
@@ -114,7 +118,11 @@ func TestCanonicalDeploymentUnitRejectsAmbiguousSignedEnvironmentBinding(t *test
 		t.Run(tc.name, func(t *testing.T) {
 			store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
 			require.NoError(t, err)
-			defer store.Close()
+			t.Cleanup(func() {
+				if err := store.Close(); err != nil {
+					t.Errorf("close store: %v", err)
+				}
+			})
 			key := gonostr.Generate()
 			unitID, envID, otherEnvID := uuid.New(), uuid.New(), uuid.New()
 			for i := range tc.units {
@@ -198,7 +206,11 @@ func TestCanonicalRuntimeViewsIgnoreAbsentAndDivergentSQL(t *testing.T) {
 		t.Run(index.name, func(t *testing.T) {
 			store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
 			require.NoError(t, err)
-			defer store.Close()
+			t.Cleanup(func() {
+				if err := store.Close(); err != nil {
+					t.Errorf("close store: %v", err)
+				}
+			})
 			key := gonostr.Generate()
 			source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
 			require.NoError(t, err)
@@ -252,7 +264,11 @@ func TestCanonicalDNSProjectionPreservesLLMMLAndWorkerFamilies(t *testing.T) {
 	ctx := context.Background()
 	store, err := localstore.Open(filepath.Join(t.TempDir(), "events.bolt"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	key := gonostr.Generate()
 	serviceID, envID := uuid.New(), uuid.New()
 	canonicalRuntimeFixture(t, store, key, serviceID, envID, "hash", "10.0.0.10")
@@ -310,7 +326,11 @@ func TestCanonicalMLProjectionSurvivesEnvironmentRenameAndRestart(t *testing.T) 
 	require.NoError(t, store.Close())
 	store, err = localstore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	source, err := NewCanonicalRuntimeSource(store, key.Public().Hex())
 	require.NoError(t, err)
 	gotEndpoint, err := source.GetInferenceEndpoint(ctx, endpointID)
@@ -403,7 +423,11 @@ func TestCanonicalStartingMarkerPersistsAcrossCyclesAndRestart(t *testing.T) {
 	require.NoError(t, store.Close())
 	store, err = localstore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	source, err = NewCanonicalRuntimeSource(store, key.Public().Hex())
 	require.NoError(t, err)
 	restarted := &storingRuntimeStatePublisher{t: t, store: store, key: key, at: 400}
@@ -460,7 +484,11 @@ func TestCanonicalRouteOnlyRepairRetainsDNSObservationAcrossRestart(t *testing.T
 	require.NoError(t, store.Close())
 	store, err = localstore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	source, err = NewCanonicalRuntimeSource(store, key.Public().Hex())
 	require.NoError(t, err)
 	project(source)
@@ -503,7 +531,11 @@ func TestCanonicalRuntimeReconcileDoesNotSignFromDivergentSQLAndDedupesRestart(t
 	require.NoError(t, store.Close())
 	store, err = localstore.Open(path)
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	source, err = NewCanonicalRuntimeSource(store, key.Public().Hex())
 	require.NoError(t, err)
 	pub.store = store

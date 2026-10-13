@@ -325,7 +325,8 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	// outbox admissions, not this separate processed cache; backup run replay
 	// has the same rule. Virtualization stays in the cache so a virtualization
 	// intent cannot inherit another domain's processed intent_id.
-	if !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) && p.isProcessed(intent.IntentID) {
+	if !isLLMLifecycleIntent(intent) && (intent.Domain != "backup" || intent.Op != "run") &&
+		(intent.Domain != "tool" || (intent.Op != "approval-response" && intent.Op != "request")) && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if intent.Domain == kinds.VirtualizationDomain && record == nil {
 			return fmt.Errorf("bahia-4f10q.1: processed virtualization marker is corrupt")
@@ -772,7 +773,7 @@ func ParseIntent(ev *nostr.Event) (*Intent, error) {
 	if intent.IntentID == "" {
 		return nil, fmt.Errorf("missing intent_id tag")
 	}
-	if intent.OrgID == uuid.Nil && !(intent.Domain == "org" && intent.Op == "rekey") && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
+	if intent.OrgID == uuid.Nil && (intent.Domain != "org" || intent.Op != "rekey") && intent.Domain != "dns" && intent.Domain != "ml" && intent.Domain != "worker" &&
 		intent.Domain != "adoption" && intent.Domain != "tool" && intent.Domain != "security" && intent.Domain != "sbom" && intent.Domain != "relay" && intent.Domain != "hiveci-policy" {
 		return nil, fmt.Errorf("missing or invalid org tag")
 	}

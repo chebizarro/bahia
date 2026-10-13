@@ -81,7 +81,10 @@ func TestPolicyCoordinateCensusCannotCertifyBadSignatureAsAbsent(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		t.Cleanup(func() {
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
+		})
 		for {
 			_, raw, err := conn.Read(r.Context())
 			if err != nil {

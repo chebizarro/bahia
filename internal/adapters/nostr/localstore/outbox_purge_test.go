@@ -54,7 +54,7 @@ func TestOutboxPurgeEventsRemovesMatchingEntriesInEveryState(t *testing.T) {
 	require.NoError(t, outbox.Close())
 	db, err := bbolt.Open(path, 0o600, &bbolt.Options{ReadOnly: true})
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, db.View(func(tx *bbolt.Tx) error {
 		for _, name := range [][]byte{outboxPendingBucket, outboxPublishedBucket, outboxFailedBucket} {
 			require.NoError(t, tx.Bucket(name).ForEach(func(key, _ []byte) error {
@@ -95,7 +95,7 @@ func TestOutboxPurgeEventsRefusesDeliveryProofsAndReadOnly(t *testing.T) {
 	require.NoError(t, outbox.Close())
 	readOnly, err := OpenOutboxReadOnly(path)
 	require.NoError(t, err)
-	defer readOnly.Close()
+	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
 	_, err = readOnly.PurgeEvents(func(nostr.Event) bool { return true })
 	require.ErrorIs(t, err, ErrReadOnly)
 }

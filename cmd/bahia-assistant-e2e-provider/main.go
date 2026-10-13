@@ -210,7 +210,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer logger.Sync()
+	// Logger sync is best-effort during process shutdown.
+	defer func() { _ = logger.Sync() }()
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
 		logger.Sugar().Errorf("listen on %s: %v", *addr, err)

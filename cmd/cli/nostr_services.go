@@ -51,13 +51,15 @@ func readNostrEvents(cmd *cobra.Command, domainName string, legacyKind int) ([]n
 	if err != nil {
 		return nil, fmt.Errorf("create Nostr client: %w", err)
 	}
-	defer nc.Close()
+	// Read-only client cleanup is best-effort after query completion.
+	defer func() { _ = nc.Close() }()
 	events, result, err := nc.SyncAndQueryFamily(cmd.Context(), legacyKind)
 	if err != nil {
 		return nil, fmt.Errorf("sync %s state: %w", domainName, err)
 	}
 	if !result.Fresh {
-		fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
+		// Advisory status is best-effort; it does not affect the signed result.
+		_, _ = fmt.Fprintln(cmd.ErrOrStderr(), "warning: relay data may be stale (no EOSE within timeout)")
 	}
 	return events, nil
 }

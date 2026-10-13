@@ -59,7 +59,8 @@ func TestSidecarServiceIdentityComesFromRemoteSigner(t *testing.T) {
 	req.Header.Set("Accept", "application/nostr+json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	// The response body is read-only; close cannot affect the assertion.
+	defer func() { _ = resp.Body.Close() }()
 	var info nip11.RelayInformationDocument
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&info))
 	require.NotNil(t, info.PubKey, "NIP-11 must advertise the service pubkey")

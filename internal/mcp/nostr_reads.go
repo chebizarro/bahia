@@ -150,7 +150,7 @@ func (s *Server) readStateFamily(ctx context.Context, legacyKind int) ([]stateRe
 }
 
 func (s *Server) authorizeConfidentialStateRecord(ctx context.Context, family int, fields map[string]any, channelScope string) (bool, error) {
-	permission := domain.PermReadServices
+	var permission domain.Permission
 	var owner uuid.UUID
 	switch family {
 	case nostrpool.KindNotificationChannelRegistry:

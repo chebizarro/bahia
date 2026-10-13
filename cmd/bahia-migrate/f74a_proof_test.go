@@ -73,7 +73,7 @@ func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 	require.NoError(t, outbox.Close())
 	reopened, err := localstore.OpenOutbox(path)
 	require.NoError(t, err)
-	defer reopened.Close()
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	ledger = f74aTestLedger(t, reopened, gonostr.PubKey{})
 	accepted, err = ledger.prove(context.Background(), "semantic_packages", pkg)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestF74aReceiptSurvivesSettledOutboxPruneAndRestart(t *testing.T) {
 func TestF74aReceiptNewPendingAndRefusalInvalidateOldAcceptance(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New()}
 	makeEvent := func(id byte) gonostr.Event {
 		ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}}
@@ -114,7 +114,7 @@ func TestF74aReceiptNewPendingAndRefusalInvalidateOldAcceptance(t *testing.T) {
 func TestF74aAcceptedCoordinateDoesNotProveChangedSourceContent(t *testing.T) {
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "module", Version: "1"}
 	event := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}}
 	event.ID[0] = 1
@@ -163,10 +163,10 @@ func TestF74aObservationMetadataChangeKeepsAcceptedProjectionProof(t *testing.T)
 	dir := t.TempDir()
 	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	_, err = store.SaveEvent(event)
 	require.NoError(t, err)
 	ledger := f74aTestLedger(t, outbox, secret.Public())
@@ -204,10 +204,10 @@ func TestF74aLegacyTombstoneIgnoresMutablePackageFields(t *testing.T) {
 	dir := t.TempDir()
 	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	ledger := f74aTestLedger(t, outbox, secret.Public())
 	history := nostradapter.NewLocalEventRepository(store, nil).Authored(secret.Public().Hex())
 	initialPub := newF74aTestPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(),
@@ -309,7 +309,7 @@ func TestF74aOCKEnvelopesMustAllBeQuorumAccepted(t *testing.T) {
 	ctx := context.Background()
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	ledger := f74aTestLedger(t, outbox, gonostr.PubKey{})
 	ds := []string{"org-key:fleet:v3:service", "org-key:fleet:v3:owner"}
 	manifest := f74aOCKManifest{Version: 3, KeyHash: "hash", Recipients: []string{"service", "owner"}, Coordinates: ds}
@@ -380,10 +380,10 @@ func TestF74aTrackedPublisherHydratesOutboxOnlyCoordinate(t *testing.T) {
 	dir := t.TempDir()
 	outbox, err := localstore.OpenOutbox(filepath.Join(dir, "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	store, err := localstore.Open(filepath.Join(dir, "events.bolt"))
 	require.NoError(t, err)
-	defer store.Close()
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: held, Target: repository.NostrPublishTargetControlPlane})
 	require.NoError(t, err)
 	raw := newF74aTestPublisher(cfg, nostradapter.NewRelayPool(nil, zap.NewNop()), nil, zap.NewNop(), nostradapter.WithPublishTarget(repository.NostrPublishTargetControlPlane), nostradapter.WithLocalOutbox(outbox, store))
@@ -478,10 +478,10 @@ func TestF74aPolicyScopedReceiptRestartReverificationAndRefusal(t *testing.T) {
 	require.NoError(t, events.Close())
 	outbox, err = localstore.OpenOutbox(outboxPath)
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	events, err = localstore.Open(eventsPath)
 	require.NoError(t, err)
-	defer events.Close()
+	t.Cleanup(func() { require.NoError(t, events.Close()) })
 	ledger = f74aDeliveryLedger{store: outbox, outbox: outbox, events: events, author: secret.Public(), policyID: reordered}
 	proved, err = ledger.prove(ctx, "semantic_packages", pkg)
 	require.NoError(t, err)
@@ -576,7 +576,7 @@ func TestF74aPendingReceiptCannotInheritHistoricalACKOnPolicyChange(t *testing.T
 	require.NoError(t, err)
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	pkg := &domain.SBOMPackage{ID: uuid.New(), SBOMID: uuid.New(), Name: "pending"}
 	ev := gonostr.Event{Kind: gonostr.Kind(nostradapter.KindCASControlState), CreatedAt: gonostr.Now(), Tags: gonostr.Tags{{"d", nostradapter.SBOMPackageDTag(pkg)}, {"legacy_kind", itoa(nostradapter.KindSBOMPackageRegistry)}, {"deleted", "false"}}, Content: "{}"}
 	require.NoError(t, ev.Sign(secret))
@@ -613,7 +613,7 @@ func TestF74aOCKManifestReverifiesEveryEnvelopeAfterPolicyChange(t *testing.T) {
 	require.NoError(t, err)
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.bolt"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
 	ledger := f74aDeliveryLedger{store: outbox, outbox: outbox, author: secret.Public(), policyID: oldPolicy}
 	ds := []string{"org-key:fleet:v3:service", "org-key:fleet:v3:owner"}
 	manifest := f74aOCKManifest{Version: 3, KeyHash: "hash", Recipients: []string{"service", "owner"}, Coordinates: ds, PolicyID: oldPolicy}

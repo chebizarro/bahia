@@ -36,18 +36,6 @@ func countLegacy(sink *captureProjectionPublisher, legacyKind int, tombstonesOnl
 	return n
 }
 
-func countWireKind(sink *captureProjectionPublisher, wireKind int) int {
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	n := 0
-	for i := range sink.events {
-		if eventKindInt(&sink.events[i]) == wireKind {
-			n++
-		}
-	}
-	return n
-}
-
 func dedupeTestState(serviceID, envID uuid.UUID, now time.Time) domain.EnvironmentServiceState {
 	artifactID := uuid.New()
 	obsID := uuid.New()

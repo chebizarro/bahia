@@ -28,7 +28,10 @@ func closedBurstRelay(t *testing.T, burst int) *httptest.Server {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		t.Cleanup(func() {
+			// The peer or test may already have closed this socket; cleanup is best-effort.
+			_ = conn.CloseNow()
+		})
 		ctx := r.Context()
 		for {
 			_, msg, err := conn.Read(ctx)
@@ -82,7 +85,10 @@ func TestLibrarySubscriptionClosedWhileEventsInFlight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
-	defer relay.Close()
+	t.Cleanup(func() {
+		// The peer or test may already have closed this socket; cleanup is best-effort.
+		_ = relay.Close()
+	})
 
 	for round := range rounds {
 		sub, err := relay.Subscribe(ctx, gonostr.Filter{Kinds: []gonostr.Kind{1}}, gonostr.SubscriptionOptions{

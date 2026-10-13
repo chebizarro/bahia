@@ -771,7 +771,7 @@ func (s ledgerPurgingStore) Delete(ctx context.Context, requestID string, expect
 		return err
 	}
 	defer unlock()
-	run, err := s.Store.Load(ctx, requestID)
+	run, err := s.Load(ctx, requestID)
 	if err != nil {
 		return err
 	}

@@ -70,10 +70,6 @@ type WorkerProjectionSource interface {
 // Worker assignment/drain read models are published from the mutation site
 // via WorkerReadModelPublisher, not projected here.
 
-type latestObservationSource interface {
-	GetLatestObservation(ctx context.Context, serviceID, envID uuid.UUID) (*domain.RuntimeObservation, error)
-}
-
 // DNSProjectionSource is the authoritative DNS endpoint read model source used by the projector.
 type DNSProjectionSource interface {
 	ListDNSEndpoints(ctx context.Context) ([]domain.DNSEndpoint, error)
@@ -92,25 +88,6 @@ type DNSBackendProjectionSource interface {
 type dnsPublishedEndpoint struct {
 	FQDN    string
 	Payload string
-}
-
-type dnsPublishedZone struct {
-	Name       string
-	BackendRef string
-	Visibility string
-}
-
-type dnsPublishedBackend struct {
-	Ref    string
-	Type   string
-	Health string
-}
-
-type dnsPublishedPolicy struct {
-	ID      string
-	Name    string
-	ZoneID  string
-	Enabled bool
 }
 
 const (
@@ -137,28 +114,24 @@ type ProjectionPublisher interface {
 // Projector publishes canonical Nostr read models, discovery and audit events.
 // Its local history supports warm-start after a cold or wiped sidecar store.
 type Projector struct {
-	source               ProjectionSource
-	mlSource             MLProjectionSource
-	workerSource         WorkerProjectionSource
-	dnsSource            DNSProjectionSource
-	dnsZoneSource        DNSZoneProjectionSource
-	dnsBackendSource     DNSBackendProjectionSource
-	publisher            ProjectionPublisher
-	history              ProjectionHistory
-	signer               gonostr.Signer
-	servicePubkey        string
-	enabled              bool
-	logger               *zap.Logger
-	systemConfig         *config.Config
-	observedState        ObservedDeploymentState
-	relaySource          AdvertisedRelaySource
-	mcpTransport         bool
-	dnsPublishMu         sync.Mutex
-	dnsPublished         map[string]dnsPublishedEndpoint
-	dnsPublishedZones    map[string]dnsPublishedZone
-	dnsPublishedBackends map[string]dnsPublishedBackend
-	dnsPublishedPolicies map[string]dnsPublishedPolicy
-	dnsCacheHydrated     bool
+	source           ProjectionSource
+	mlSource         MLProjectionSource
+	workerSource     WorkerProjectionSource
+	dnsSource        DNSProjectionSource
+	dnsZoneSource    DNSZoneProjectionSource
+	dnsBackendSource DNSBackendProjectionSource
+	publisher        ProjectionPublisher
+	history          ProjectionHistory
+	signer           gonostr.Signer
+	servicePubkey    string
+	enabled          bool
+	logger           *zap.Logger
+	systemConfig     *config.Config
+	observedState    ObservedDeploymentState
+	relaySource      AdvertisedRelaySource
+	mcpTransport     bool
+	dnsPublishMu     sync.Mutex
+	dnsPublished     map[string]dnsPublishedEndpoint
 
 	// stateHashKeys lends the confidential-dedupe system key; without it
 	// confidential records are not published.
@@ -1397,15 +1370,6 @@ func firstParsedUUID(values ...string) *uuid.UUID {
 		}
 	}
 	return nil
-}
-
-func firstUUID(values ...string) string {
-	for _, value := range values {
-		if _, ok := parseUUID(value); ok {
-			return value
-		}
-	}
-	return ""
 }
 
 func parseUUID(raw string) (uuid.UUID, bool) {

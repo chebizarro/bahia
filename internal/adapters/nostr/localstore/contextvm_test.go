@@ -55,7 +55,11 @@ func TestContextVMLedgerClaimsSurviveRestart(t *testing.T) {
 	}
 
 	store = openContextVMTestStore(t, path)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	for _, tc := range []struct {
 		name     string
 		req      ContextVMRequest
@@ -82,7 +86,11 @@ func TestContextVMLedgerClaimsSurviveRestart(t *testing.T) {
 
 func TestContextVMDeliveriesAreMarkedOnce(t *testing.T) {
 	store := openContextVMTestStore(t, filepath.Join(t.TempDir(), "events.bolt"))
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	now := time.Unix(1_900_000_000, 0)
 	if seen, err := store.ContextVMDelivered("response-1"); err != nil || seen {
 		t.Fatalf("unseen delivery = %v, %v", seen, err)
@@ -116,7 +124,11 @@ func TestContextVMLedgerEpochIsRecordedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	store = openContextVMTestStore(t, path)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	if epoch, err := store.ContextVMLedgerEpoch(first.Add(48 * time.Hour)); err != nil || !epoch.Equal(first) {
 		t.Fatalf("reopened epoch = %v, %v", epoch, err)
 	}
@@ -124,7 +136,11 @@ func TestContextVMLedgerEpochIsRecordedOnce(t *testing.T) {
 
 func TestContextVMLedgerPruneDropsOnlyExpiredEntries(t *testing.T) {
 	store := openContextVMTestStore(t, filepath.Join(t.TempDir(), "events.bolt"))
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	old := time.Unix(1_900_000_000, 0)
 	recent := old.Add(10 * 24 * time.Hour)
 	cutoff := old.Add(24 * time.Hour)
@@ -166,7 +182,11 @@ func TestContextVMCursorsArePerRelayAndService(t *testing.T) {
 		t.Fatal(err)
 	}
 	store = openContextVMTestStore(t, path)
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	for _, tc := range []struct {
 		relay, service string
 		want           nostr.Timestamp

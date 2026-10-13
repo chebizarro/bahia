@@ -80,10 +80,18 @@ func TestLocalBackupRunReceiptsRejectTamperedAndMismatchedState(t *testing.T) {
 		t.Run(variant, func(t *testing.T) {
 			events, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 			require.NoError(t, err)
-			defer events.Close()
+			t.Cleanup(func() {
+				if err := events.Close(); err != nil {
+					t.Errorf("close events: %v", err)
+				}
+			})
 			outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 			require.NoError(t, err)
-			defer outbox.Close()
+			t.Cleanup(func() {
+				if err := outbox.Close(); err != nil {
+					t.Errorf("close outbox: %v", err)
+				}
+			})
 			secret := nostr.Generate()
 			run := backupReceiptRun(backupReceiptRequest(t, nostr.Generate()), domain.RunStatusSucceeded)
 			event := backupReceiptEvent(t, secret, run)
@@ -146,10 +154,18 @@ func TestBackupIntakeWithoutAdmissionWriterRefusesRegardlessOfSQL(t *testing.T) 
 	run := backupReceiptRun(request, domain.RunStatusQueued)
 	events, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 	require.NoError(t, err)
-	defer events.Close()
+	t.Cleanup(func() {
+		if err := events.Close(); err != nil {
+			t.Errorf("close events: %v", err)
+		}
+	})
 	outbox, err := localstore.OpenOutbox(filepath.Join(t.TempDir(), "outbox.db"))
 	require.NoError(t, err)
-	defer outbox.Close()
+	t.Cleanup(func() {
+		if err := outbox.Close(); err != nil {
+			t.Errorf("close outbox: %v", err)
+		}
+	})
 	receipt := backupReceiptEvent(t, serviceKey, run)
 	_, err = events.SaveEvent(receipt)
 	require.NoError(t, err)

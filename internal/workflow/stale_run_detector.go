@@ -326,7 +326,7 @@ func (d *StaleRunDetector) latestLoomStatus(ctx context.Context, run domain.Depl
 		return nil, fmt.Errorf("find Loom kind-30100 status: %w", err)
 	}
 	if len(records) == loomStatusCandidateLimit {
-		return nil, fmt.Errorf("Loom kind-30100 status candidate scan exceeds %d records for run %s", loomStatusCandidateLimit-1, run.ID)
+		return nil, fmt.Errorf("loom kind-30100 status candidate scan exceeds %d records for run %s", loomStatusCandidateLimit-1, run.ID)
 	}
 	var latest *repository.NostrEventRecord
 	for i := range records {

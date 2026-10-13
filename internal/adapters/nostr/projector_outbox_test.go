@@ -287,15 +287,6 @@ func TestProjectorForgetsProjectionAbandonedByRunner(t *testing.T) {
 	requireLatestPublished(t, repo)
 }
 
-func outboxRowCount(t *testing.T, repo *repositorytest.InMemoryNostrEventRepository) int {
-	t.Helper()
-	// Count all outbox-published kinds: cp-state (30900), audit, and SBOM
-	// reference (30078) + availability list (30004).
-	rows, err := repo.ListByKinds(context.Background(), []int{KindCASControlState, KindCASAudit, 30078, 30004}, 10000)
-	require.NoError(t, err)
-	return len(rows)
-}
-
 // A restarted projector must not hydrate an abandoned (failed) row as
 // published content, or the coordinate would never be repaired.
 func TestProjectorHydrationSkipsFailedOutboxRows(t *testing.T) {

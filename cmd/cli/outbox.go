@@ -98,7 +98,8 @@ Default shows pending and failed entries (the most actionable).`,
 			if err != nil {
 				return fmt.Errorf("open outbox at %s: %w", resolveOutboxPath(), err)
 			}
-			defer outbox.Close()
+			// Committed outbox operations determine the result; close is best-effort.
+			defer func() { _ = outbox.Close() }()
 
 			states := parseStateFilter(stateStr)
 			entries, err := outbox.ListEntries(states, limit)
@@ -113,16 +114,20 @@ Default shows pending and failed entries (the most actionable).`,
 			}
 
 			if len(entries) == 0 {
-				fmt.Fprintln(cmd.OutOrStdout(), "No matching outbox entries.")
+				if _, err := fmt.Fprintln(cmd.OutOrStdout(), "No matching outbox entries."); err != nil {
+					return err
+				}
 				return nil
 			}
 
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "EVENT ID\tSTATE\tKIND\tTARGET\tROUNDS\tENQUEUED\tERROR")
+			if _, err := fmt.Fprintln(w, "EVENT ID\tSTATE\tKIND\tTARGET\tROUNDS\tENQUEUED\tERROR"); err != nil {
+				return err
+			}
 			for _, e := range entries {
 				enqueued := e.EnqueuedAt.UTC().Format(time.RFC3339)
 				errDisplay := formatEntryError(e)
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\t%s\n",
+				if _, err := fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\t%s\n",
 					e.Event.ID.Hex(),
 					e.State,
 					int(e.Event.Kind),
@@ -130,7 +135,9 @@ Default shows pending and failed entries (the most actionable).`,
 					e.Rounds,
 					enqueued,
 					errDisplay,
-				)
+				); err != nil {
+					return err
+				}
 			}
 			return w.Flush()
 		},
@@ -169,7 +176,8 @@ func outboxCountsCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open outbox at %s: %w", resolveOutboxPath(), err)
 			}
-			defer outbox.Close()
+			// Committed outbox operations determine the result; close is best-effort.
+			defer func() { _ = outbox.Close() }()
 
 			counts, err := outbox.Counts()
 			if err != nil {
@@ -182,7 +190,9 @@ func outboxCountsCommand() *cobra.Command {
 				return enc.Encode(counts)
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "Pending: %d\nFailed:  %d\n", counts.Pending, counts.Failed)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pending: %d\nFailed:  %d\n", counts.Pending, counts.Failed); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -212,14 +222,17 @@ Not available with --daemon (the daemon's outbox is read-only from the CLI).`,
 			if err != nil {
 				return fmt.Errorf("open outbox at %s: %w", resolveOutboxPath(), err)
 			}
-			defer outbox.Close()
+			// Committed outbox operations determine the result; close is best-effort.
+			defer func() { _ = outbox.Close() }()
 
 			if retryAll {
 				count, err := outbox.RetryAllFailed()
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "Retried %d failed entries.\n", count)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Retried %d failed entries.\n", count); err != nil {
+					return err
+				}
 				return nil
 			}
 
@@ -231,8 +244,10 @@ Not available with --daemon (the daemon's outbox is read-only from the CLI).`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Retried entry %s (kind %d, target %q) → pending.\n",
-				entry.Event.ID.Hex(), int(entry.Event.Kind), entry.Target)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Retried entry %s (kind %d, target %q) → pending.\n",
+				entry.Event.ID.Hex(), int(entry.Event.Kind), entry.Target); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -262,7 +277,8 @@ Not available with --daemon (the daemon's outbox is read-only from the CLI).`,
 			if err != nil {
 				return fmt.Errorf("open outbox at %s: %w", resolveOutboxPath(), err)
 			}
-			defer outbox.Close()
+			// Committed outbox operations determine the result; close is best-effort.
+			defer func() { _ = outbox.Close() }()
 
 			cutoff := time.Now().Add(-maxAge)
 
@@ -289,10 +305,14 @@ Not available with --daemon (the daemon's outbox is read-only from the CLI).`,
 					}
 				}
 				total := pubCount + failCount
-				fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would prune %d entries (%d published, %d failed) settled before %s.\n",
-					total, pubCount, failCount, cutoff.UTC().Format(time.RFC3339))
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Dry run: would prune %d entries (%d published, %d failed) settled before %s.\n",
+					total, pubCount, failCount, cutoff.UTC().Format(time.RFC3339)); err != nil {
+					return err
+				}
 				if total > 0 {
-					fmt.Fprintln(cmd.OutOrStdout(), "Pass --confirm to execute.")
+					if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Pass --confirm to execute."); err != nil {
+						return err
+					}
 				}
 				return nil
 			}
@@ -301,7 +321,9 @@ Not available with --daemon (the daemon's outbox is read-only from the CLI).`,
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Pruned %d settled entries older than %s.\n", removed, maxAge)
+			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pruned %d settled entries older than %s.\n", removed, maxAge); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -346,9 +368,7 @@ func formatRelayErrors(relays map[string]localstore.RelayDelivery) string {
 	var parts []string
 	for url, d := range relays {
 		short := url
-		if strings.HasPrefix(short, "wss://") {
-			short = short[6:]
-		}
+		short = strings.TrimPrefix(short, "wss://")
 		if d.Rejected != "" {
 			parts = append(parts, short+": rejected: "+d.Rejected)
 		} else if d.LastError != "" {

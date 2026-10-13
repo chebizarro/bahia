@@ -19,12 +19,15 @@ import (
 	"go.uber.org/zap"
 )
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 type virtualizationPlaneSigner struct{ nostr.Signer }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func (s virtualizationPlaneSigner) Sign(ctx context.Context, e *nostr.Event) error {
 	return s.SignEvent(ctx, e)
 }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 type virtualizationConfigurationDependencies struct {
 	events       repository.NostrEventRepository
 	secrets      repository.SecretRepository
@@ -38,6 +41,7 @@ type virtualizationConfigurationDependencies struct {
 	logger       *zap.Logger
 }
 
+//nolint:unused // suspended pending bahia-yrt7g live-host reconnection
 func configureVirtualization(ctx context.Context, cfg config.VirtualizationConfig, deps *VirtualizationDependencies, d virtualizationConfigurationDependencies) error {
 	if err := cfg.Validate(); err != nil {
 		return err

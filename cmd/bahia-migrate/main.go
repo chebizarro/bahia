@@ -469,7 +469,8 @@ func runF74aVerifyReceipt(ctx context.Context, pool *pgxpool.Pool, pin, path str
 	if err != nil {
 		return reportError(stderr, "opening F74a receipt failed")
 	}
-	defer file.Close()
+	// The receipt is read-only; closing cannot change verification.
+	defer func() { _ = file.Close() }()
 	data, err := io.ReadAll(io.LimitReader(file, repository.F74aReceiptMaxBytes+1))
 	if err != nil {
 		return reportError(stderr, "reading F74a receipt failed")

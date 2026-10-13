@@ -34,7 +34,7 @@ func TestOpenExistingOutboxStrictUsesExistingFileExclusively(t *testing.T) {
 	require.NoError(t, created.Close())
 	strict, err := OpenExistingOutboxStrict(path)
 	require.NoError(t, err)
-	defer strict.Close()
+	t.Cleanup(func() { require.NoError(t, strict.Close()) })
 	require.NoError(t, strict.PutControlRecord("migration", "test", []byte("ok")))
 	_, err = OpenExistingOutboxStrict(path)
 	require.ErrorContains(t, err, "already open")

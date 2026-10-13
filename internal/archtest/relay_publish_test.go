@@ -2,7 +2,6 @@ package archtest
 
 import (
 	"go/ast"
-	"go/token"
 	"go/types"
 	"sort"
 	"strings"
@@ -204,7 +203,6 @@ type frameGuardUse struct {
 	site   string
 	file   string
 	symbol string
-	pos    token.Position
 }
 
 func frameUseAllowed(use frameGuardUse) bool {
@@ -251,38 +249,6 @@ func collectRawRelayFrameWrites(pkgs []*packages.Package, found *violations) {
 			})
 		}
 	})
-}
-
-// findEnclosingCall returns the call expression whose function position is
-// node, by re-walking the declaration. (Uses are reported at the selector
-// ident; the argument check needs the call.)
-func findEnclosingCall(node ast.Node, decl ast.Decl) (*ast.CallExpr, bool) {
-	var found *ast.CallExpr
-	ast.Inspect(decl, func(candidate ast.Node) bool {
-		if found != nil {
-			return false
-		}
-		call, ok := candidate.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if callExprSelectsIdent(call, node) {
-			found = call
-			return false
-		}
-		return true
-	})
-	return found, found != nil
-}
-
-func callExprSelectsIdent(call *ast.CallExpr, node ast.Node) bool {
-	switch fun := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		return fun.Sel == node || fun.X == node
-	case *ast.Ident:
-		return fun == node
-	}
-	return false
 }
 
 func declarationSite(decl ast.Decl) string {

@@ -571,7 +571,7 @@ func (t *EncryptedRequestTransport) Run(ctx context.Context) error {
 				if !ok {
 					merged.Close()
 					if gaveUp := merged.GaveUp(); gaveUp != nil {
-						t.logger.Error("ContextVM encrypted request subscription gave up â waiting for topology change", zap.Error(gaveUp))
+						t.logger.Error("ContextVM encrypted request subscription gave up \u2014 waiting for topology change", zap.Error(gaveUp))
 						if err := t.subscriber.WaitForTopologyChange(ctx); err != nil {
 							return err
 						}

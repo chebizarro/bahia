@@ -558,21 +558,6 @@ func filterReplayGroups(groups []ReplayGroup, keep func(ReplayGroup) bool) []Rep
 	return filtered
 }
 
-func kindsFromGroups(groups []ReplayGroup) []int {
-	seen := make(map[int]struct{})
-	for _, group := range groups {
-		for _, kind := range group.Kinds {
-			seen[kind] = struct{}{}
-		}
-	}
-	kinds := make([]int, 0, len(seen))
-	for kind := range seen {
-		kinds = append(kinds, kind)
-	}
-	sort.Ints(kinds)
-	return kinds
-}
-
 func (c *KindCatalog) registerRequiredGroupNoopDecoders() {
 	for _, group := range c.Groups {
 		if !group.Required {

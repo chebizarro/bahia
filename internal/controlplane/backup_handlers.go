@@ -340,27 +340,6 @@ func backupRecipeCoordinate(recipe *domain.BackupRecipe) string {
 	return fmt.Sprintf("recipe:%s:%s", recipe.Name, recipe.Version)
 }
 
-func backupPolicyName(policy *domain.BackupPolicy) string {
-	if policy == nil {
-		return ""
-	}
-	return policy.Name
-}
-
-func backupVerificationMode(recipe *domain.BackupRecipe, policy *domain.BackupPolicy) string {
-	if policy != nil && policy.RequireVerification {
-		return string(policy.VerificationMode)
-	}
-	if recipe != nil {
-		return string(recipe.VerificationMode)
-	}
-	return ""
-}
-
-func (r *Reactor) publishBackupRequestFailure(ctx context.Context, requestEvent *nostr.Event, status, code, message string) {
-	r.publishBackupCommandFailure(ctx, requestEvent, KindBackupRunResult, status, code, message)
-}
-
 func (r *Reactor) publishPausedBackupRequest(ctx context.Context, requestEvent *nostr.Event, resultKind int, message string) {
 	if requestEvent == nil {
 		return

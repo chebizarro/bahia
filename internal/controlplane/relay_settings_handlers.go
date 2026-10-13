@@ -138,19 +138,6 @@ type RelayPolicyAdminTarget struct {
 	AdministratorPubkeys []string `json:"administrator_pubkeys"`
 }
 
-type relayConfigOperationPayload struct {
-	TargetRef        string `json:"target_ref"`
-	ServiceID        string `json:"service_id"`
-	Scope            string `json:"scope"`
-	PolicyCoordinate string `json:"policy_coordinate"`
-}
-
-type relayAdminCallPayload struct {
-	TargetRef string `json:"target_ref"`
-	Method    string `json:"method"`
-	Params    []any  `json:"params,omitempty"`
-}
-
 func NewRelaySettingsHandlers(cfg RelaySettingsHandlerConfig) *RelaySettingsHandlers {
 	logger := cfg.Logger
 	if logger == nil {
@@ -267,28 +254,6 @@ func (h *RelaySettingsHandlers) applyPolicyDirect(ctx context.Context, req Conte
 		"state":                             state,
 		"replacement_confirmation_recorded": confirmation != nil,
 	}, nil
-}
-
-func (h *RelaySettingsHandlers) currentState(pubkey string) RelayPolicyState {
-	state := RelayPolicyState{Schema: RelaySettingsSchema, UpdatedAt: time.Now().UTC().Format(time.RFC3339), UpdatedBy: pubkey}
-	if h.cfg == nil {
-		return state
-	}
-	nostrCfg := h.cfg.Nostr
-	state.BrowserRelays = cloneStrings(nostrCfg.BrowserRelayPolicyRelays())
-	state.ContextVMRelays = cloneStrings(nostrCfg.ContextVMRelayPolicyRelays())
-	state.ServiceRelays = cloneStrings(nostrCfg.ServiceRelayPolicyRelays())
-	state.NIP34Relays = cloneStrings(nostrCfg.NIP34RelayPolicyRelays())
-	state.TrustedRelayMonitorPubkeys = cloneStrings(nostrCfg.TrustedRelayMonitorPubkeys)
-	state.DMRelayLists = make([]RelayPolicyDMRelayList, 0, len(nostrCfg.DMRelayLists))
-	for _, list := range nostrCfg.DMRelayLists {
-		state.DMRelayLists = append(state.DMRelayLists, RelayPolicyDMRelayList{Enabled: list.Enabled, Feature: list.Feature, Identity: list.Identity, Relays: cloneStrings(list.Relays)})
-	}
-	state.RelayAdministration.Enabled = nostrCfg.RelayAdministration.Enabled
-	for _, target := range nostrCfg.RelayAdministration.Targets {
-		state.RelayAdministration.Targets = append(state.RelayAdministration.Targets, RelayPolicyAdminTarget{Ref: target.Ref, RelayURL: target.RelayURL, HTTPURL: target.HTTPURL, Authorization: target.Authorization, AdministratorPubkeys: cloneStrings(target.AdministratorPubkeys)})
-	}
-	return state
 }
 
 // relaySettingsStateTags are the operator policy record's tags: its fixed
@@ -480,17 +445,6 @@ func (h *RelaySettingsHandlers) authorizePolicyReplacement(ctx context.Context, 
 	return nil
 }
 
-func relayPolicyIsIntentionallyEmpty(state RelayPolicyState) bool {
-	return len(state.BrowserRelays) == 0 &&
-		len(state.ContextVMRelays) == 0 &&
-		len(state.ServiceRelays) == 0 &&
-		len(state.NIP34Relays) == 0 &&
-		len(state.TrustedRelayMonitorPubkeys) == 0 &&
-		len(state.DMRelayLists) == 0 &&
-		!state.RelayAdministration.Enabled &&
-		len(state.RelayAdministration.Targets) == 0
-}
-
 func normalizeAndValidateRelayPolicy(state *RelayPolicyState) error {
 	return normalizeAndValidateRelayPolicyForSettings(state, true)
 }
@@ -563,18 +517,6 @@ func normalizeAndValidateRelayPolicyForSettings(state *RelayPolicyState, require
 		}
 	}
 	return nil
-}
-
-func relayAdministrationTargetConfigured(cfg *config.Config, ref string) bool {
-	if cfg == nil || !cfg.Nostr.RelayAdministration.Enabled {
-		return false
-	}
-	for _, target := range cfg.Nostr.RelayAdministration.Targets {
-		if target.Ref == ref && (target.Authorization == config.RelayAdministrationBahiaOwned || target.Authorization == config.RelayAdministrationBahiaAuthorized) {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeRelayListForSettings(values []string) []string {

@@ -20,71 +20,6 @@ import (
 	"go.uber.org/zap"
 )
 
-type fakeEncryptedSecretRepo struct {
-	records map[uuid.UUID]*domain.ServiceSecret
-}
-
-func newFakeEncryptedSecretRepo() *fakeEncryptedSecretRepo {
-	return &fakeEncryptedSecretRepo{records: map[uuid.UUID]*domain.ServiceSecret{}}
-}
-
-func (r *fakeEncryptedSecretRepo) Create(_ context.Context, s *domain.ServiceSecret) error {
-	if s.ID == uuid.Nil {
-		s.ID = uuid.New()
-	}
-	if s.CreatedAt.IsZero() {
-		s.CreatedAt = time.Now().UTC()
-	}
-	if s.UpdatedAt.IsZero() {
-		s.UpdatedAt = s.CreatedAt
-	}
-	copy := *s
-	r.records[s.ID] = &copy
-	return nil
-}
-func (r *fakeEncryptedSecretRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.ServiceSecret, error) {
-	if s, ok := r.records[id]; ok {
-		copy := *s
-		return &copy, nil
-	}
-	return nil, nil
-}
-func (r *fakeEncryptedSecretRepo) ListByService(_ context.Context, serviceID uuid.UUID) ([]domain.ServiceSecret, error) {
-	out := []domain.ServiceSecret{}
-	for _, s := range r.records {
-		if s.ServiceID == serviceID {
-			out = append(out, *s)
-		}
-	}
-	return out, nil
-}
-func (r *fakeEncryptedSecretRepo) ListByServiceAndEnv(context.Context, uuid.UUID, uuid.UUID) ([]domain.ServiceSecret, error) {
-	return nil, nil
-}
-func (r *fakeEncryptedSecretRepo) ListEffective(context.Context, uuid.UUID, uuid.UUID) ([]domain.ServiceSecret, error) {
-	return nil, nil
-}
-func (r *fakeEncryptedSecretRepo) Update(_ context.Context, s *domain.ServiceSecret) error {
-	if _, ok := r.records[s.ID]; !ok {
-		return repository.ErrNotFound
-	}
-	s.Version++
-	s.UpdatedAt = time.Now().UTC()
-	copy := *s
-	r.records[s.ID] = &copy
-	return nil
-}
-func (r *fakeEncryptedSecretRepo) RecordSecretAccessAudit(context.Context, *domain.SecretAccessAudit) error {
-	return nil
-}
-func (r *fakeEncryptedSecretRepo) Delete(_ context.Context, id uuid.UUID) error {
-	delete(r.records, id)
-	return nil
-}
-func (r *fakeEncryptedSecretRepo) DeleteByName(context.Context, uuid.UUID, *uuid.UUID, string) error {
-	return nil
-}
-
 type fakeEncryptedServiceRepo struct{ services map[uuid.UUID]*domain.Service }
 
 func (r *fakeEncryptedServiceRepo) Create(context.Context, *domain.Service) error { return nil }
@@ -163,22 +98,6 @@ func (r *fakeEncryptedIntentRepo) UpdateApproval(context.Context, uuid.UUID, dom
 }
 func (r *fakeEncryptedIntentRepo) UpdateDesiredState(context.Context, uuid.UUID, *domain.DesiredServiceSpec, string) error {
 	return nil
-}
-
-type fakeEncryptedDeploymentUnitReader struct {
-	units []domain.DeploymentUnit
-	err   error
-}
-
-func (r fakeEncryptedDeploymentUnitReader) ListByEnvironment(context.Context, uuid.UUID) ([]domain.DeploymentUnit, error) {
-	return r.units, r.err
-}
-
-func (r fakeEncryptedDeploymentUnitReader) ResolveDefault(_ context.Context, env *domain.Environment) (*domain.DeploymentUnit, error) {
-	if r.err != nil {
-		return nil, r.err
-	}
-	return domain.NewImplicitDefaultDeploymentUnit(env)
 }
 
 type fakeEncryptedRegistryMutations struct {
@@ -312,15 +231,6 @@ func encryptedAdminRBAC(t *testing.T, orgID uuid.UUID) *auth.RBAC {
 	t.Helper()
 	_, rbac := encryptedAuthDeps(t, uuid.New(), orgID, domain.RoleAdmin)
 	return rbac
-}
-
-func encryptedRequesterEvent(t *testing.T) *nostr.Event {
-	t.Helper()
-	secret, err := nostr.SecretKeyFromHex(testRequesterKey)
-	if err != nil {
-		t.Fatalf("parse requester key: %v", err)
-	}
-	return &nostr.Event{PubKey: secret.Public()}
 }
 
 type fakeEncryptedRunRepo struct {

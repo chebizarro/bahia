@@ -52,7 +52,11 @@ func publishToContextVMTestRelay(t *testing.T, ctx context.Context, url string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer relay.Close()
+	t.Cleanup(func() {
+		if err := relay.Close(); err != nil {
+			t.Errorf("close relay: %v", err)
+		}
+	})
 	if err := relay.Publish(ctx, ev); err != nil {
 		t.Fatalf("publish %d to %s: %v", ev.Kind, url, err)
 	}
@@ -207,7 +211,11 @@ func contextVMStoredCursor(t *testing.T, path, relayURL string) nostr.Timestamp 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	cursor, err := store.ContextVMCursor(relayURL, contextVMServicePubkey(t).Hex())
 	if err != nil {
 		t.Fatal(err)
@@ -260,7 +268,9 @@ func TestContextVMStoredWrapPublishedDuringDowntimeRunsOnceAcrossRestarts(t *tes
 	ephemeral := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"lost","method":"`+contextVMTestMethod+`","params":{}}`)
 	if writer, err := nostr.RelayConnect(ctx, relayURL, nostr.RelayOptions{}); err == nil {
 		_ = writer.Publish(ctx, *ephemeral)
-		writer.Close()
+		if err := writer.Close(); err != nil {
+			t.Errorf("close relay writer: %v", err)
+		}
 	}
 
 	second := startContextVMTestDaemon(t, path, []string{relayURL}, &calls)
@@ -428,7 +438,11 @@ func TestContextVMResumeSinceUsesEachRelaysCursorBoundedByTheAgeFloor(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	now := time.Now()
 	// A ledger in use for a month, so the age floor (now - 7d) applies.
 	if _, err := store.ContextVMLedgerEpoch(now.Add(-30 * 24 * time.Hour)); err != nil {
@@ -476,7 +490,11 @@ func TestContextVMCursorCommitsOnlyAtItsOwnREQsEOSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	service := contextVMServicePubkey(t).Hex()
 	pool := newContextVMScriptedPool("wss://relay.example")
 	before := nostr.Now()
@@ -527,7 +545,11 @@ func TestContextVMReissuedEOSECommitsCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	pool := newContextVMScriptedPool("wss://relay.example")
 	processed, commits := startScriptedContextVMTransport(t, store, pool)
 	sub := pool.nextSub(t)
@@ -570,7 +592,11 @@ func TestContextVMPruneLockedEvictsOldGiftWraps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 
 	now := time.Now()
 	if _, err := store.ContextVMLedgerEpoch(now.Add(-30 * 24 * time.Hour)); err != nil {
@@ -661,7 +687,11 @@ func TestContextVMLedgerWithoutRelays(t *testing.T) {
 		_ = store.Close()
 
 		store = open()
-		defer store.Close()
+		t.Cleanup(func() {
+			if err := store.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
 		second := &mockEncryptedPublisher{}
 		newTransport(store, second).HandleEvent(t.Context(), contextVMPtr(giftWrapContextVMRumor(t, rumor, KindContextVMGiftWrap, nostr.Now())))
 		if calls.Load() != 1 || len(terminals(first)) != 1 {
@@ -677,7 +707,11 @@ func TestContextVMLedgerWithoutRelays(t *testing.T) {
 		calls.Store(0)
 		rumor := contextVMRumor(t, `{"jsonrpc":"2.0","id":"crashed","method":"`+contextVMTestMethod+`","params":{"_meta":{"progressToken":"crash-1"}}}`)
 		store := open()
-		defer store.Close()
+		t.Cleanup(func() {
+			if err := store.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
 		// A previous process claimed it and died before completing.
 		if _, err := store.ClaimContextVMRequest(localstore.ContextVMRequest{DeliveryID: "earlier-wrap", RequestID: rumor.ID.Hex(), CreatedAt: rumor.CreatedAt}, time.Now()); err != nil {
 			t.Fatal(err)
@@ -701,7 +735,11 @@ func TestContextVMLedgerWithoutRelays(t *testing.T) {
 		legacy.HandleEvent(t.Context(), earlier)
 
 		store := open()
-		defer store.Close()
+		t.Cleanup(func() {
+			if err := store.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
 		publisher := &mockEncryptedPublisher{}
 		retry := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"post","method":"`+contextVMTestMethod+`","params":{"_meta":{"progressToken":"pg-1"}}}`)
 		newTransport(store, publisher, WithContextVMResponseStore(responses, time.Hour)).HandleEvent(t.Context(), retry)
@@ -737,7 +775,11 @@ func TestContextVMLedgerRefusesASecondStoreLayer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	})
 	transport := NewEncryptedRequestTransport(storeFilteredSubscriber{}, newResponder(t, &mockEncryptedPublisher{}), nil, zap.NewNop(), WithContextVMLocalStore(store))
 	if err := transport.Run(t.Context()); err == nil || !strings.Contains(err.Error(), "one store layer") {
 		t.Fatalf("Run = %v, want refusal of a second dedup layer", err)
