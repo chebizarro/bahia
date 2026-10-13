@@ -184,3 +184,23 @@ Hive-CI pipeline policies are authored with operator-signed
 `build_dependencies`. It does not seed canonical policies. The former
 `environment_name`, `branch_pattern`, and `metadata` config keys are rejected;
 put canonical pipeline-policy content in operator-signed `hiveci-policy` intents.
+
+## Daemon config-fabric signer
+
+Daemon config publish and rollback require an independent operator signer even
+when the assistant is disabled. For a NIP-46 bunker, add:
+
+```yaml
+config_fabric:
+  public_key: <64-hex operator pubkey>
+  signer:
+    method: nip46
+    bunker_uri: bunker://<bunker-pubkey>?relay=<url-encoded-relay>
+    client_secret_key_file: /run/secrets/bahia-config-fabric-client
+```
+
+`method: nip55l` with `signer.nip55l.bus_address` and `app_id` is also
+supported. `local` and a raw operator private key are not. The service key
+under `nostr` remains separate. Without `config_fabric`, startup succeeds but
+`config_fabric_signer` health warns that daemon publish and rollback are
+unavailable.

@@ -98,6 +98,8 @@ type App struct {
 	secretStore               *signetAdapter.CredentialStore
 	systemKeys                *secretstore.Keyring
 	serviceSigner             *serviceSigner
+	configFabricSignerSession *serviceSigner
+	closeConfigFabricSigner   func()
 	closeServiceKeyer         func()
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
@@ -2686,10 +2688,27 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	var assistantOrchestrator *service.AssistantOrchestrator
 	var assistantIdentity service.AssistantIdentity
+	var runningConfigFabricSigner *serviceSigner
+	if o.replacing != nil {
+		runningConfigFabricSigner = o.replacing.configFabricSignerSession
+	}
+	configFabricSession, closeConfigFabricSigner, err := newConfigFabricKeyer(cfg.ConfigFabric, outboundAdmission, logger, runningConfigFabricSigner)
+	if err != nil {
+		return nil, fmt.Errorf("configuring config-fabric signer: %w", err)
+	}
+	configFabricSignerOwned := false
+	defer func() {
+		if !configFabricSignerOwned {
+			closeConfigFabricSigner()
+		}
+	}()
+	registerConfigFabricSignerHealth(healthProvider, configFabricSession)
 	var configFabricSigner service.ConfigFabricSigner
+	if configFabricSession != nil {
+		configFabricSigner = configFabricKeyer{configFabricSession.Keyer()}
+	}
 	if cfg.Assistant.Enabled {
-		identity, assistantSignetManager, assistantBootstrapRunner, operatorSigner := bootstrapOperatorAssistant(cfg, servicePubkey, controlPlaneRelays, logger)
-		configFabricSigner = operatorSigner
+		identity, assistantSignetManager, assistantBootstrapRunner, _ := bootstrapOperatorAssistant(cfg, servicePubkey, controlPlaneRelays, logger)
 		if assistantSignetManager != nil {
 			bgManager.RegisterWithOptions(assistantSignetManager, RunnerRequired(false))
 			registerSignetHealthCheck(healthProvider, assistantSignetManager)
@@ -3244,6 +3263,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		SoulFactory:               soulFactoryReactorFromRuntime(soulFactoryRuntime),
 		soulFactoryCloser:         soulFactoryCloserFromRuntime(soulFactoryRuntime),
 		serviceSigner:             signerSession,
+		configFabricSignerSession: configFabricSession,
+		closeConfigFabricSigner:   closeConfigFabricSigner,
 		closeServiceKeyer:         closeServiceKeyer,
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
@@ -3254,6 +3275,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	soulFactoryRuntimeReleased = true
 	localNostrReleased = true
 	serviceKeyerOwned = true
+	configFabricSignerOwned = true
 	secretStoreOwned = true
 	return application, nil
 }
@@ -4085,6 +4107,9 @@ func (a *App) RunContext(ctx context.Context) error {
 	}
 	// The service signer is released after every component that signs with
 	// it; the session closes unless a replacement application still holds it.
+	if a.closeConfigFabricSigner != nil {
+		a.closeConfigFabricSigner()
+	}
 	if a.closeServiceKeyer != nil {
 		a.closeServiceKeyer()
 	}

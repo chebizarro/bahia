@@ -15,6 +15,8 @@ import (
 	"fiatjaf.com/nostr/nip44"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrout"
+	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
+	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,6 +49,9 @@ func newFakeBunker(t *testing.T) (*fakeBunker, *nip46Keyer, context.CancelFunc) 
 
 func (f *fakeBunker) honest(method string, params []string) (string, error) {
 	switch method {
+	case "get_public_key":
+		require.Empty(f.t, params)
+		return testService.Public().Hex(), nil
 	case "sign_event":
 		var ev nostr.Event
 		require.NoError(f.t, json.Unmarshal([]byte(params[0]), &ev))
@@ -312,4 +317,44 @@ func TestRedactErrorRemovesPairingURI(t *testing.T) {
 	require.NotContains(t, err.Error(), "s3cr3t")
 	plain := errors.New("unchanged")
 	require.Same(t, plain, redactError(plain, uri))
+}
+
+// This exercises config-fabric publish and rollback through the generic
+// NIP-46 RPC contract, not through a Signet-specific client.
+func TestConfigFabricPublishRollbackViaGenericNIP46Bunker(t *testing.T) {
+	fake, keyer, _ := newFakeBunker(t)
+	require.NoError(t, CheckHealth(t.Context(), keyer))
+	repo := repositorytest.NewInMemoryNostrEventRepository()
+	publisher := &configFabricNIP46Publisher{}
+	fabric := service.NewConfigFabricService(repo, publisher, configFabricNIP46Signer{keyer})
+	request := service.ConfigPublishRequest{Kind: service.ConfigFabricPolicyKind, ServiceID: "relay", PolicyName: "limits", Scope: "prod", Version: 1, Schema: "cascadia.config.limits.v1", Policy: map[string]any{"max": 5.0}}
+	first, err := fabric.Publish(t.Context(), request)
+	require.NoError(t, err)
+	second, err := fabric.Rollback(t.Context(), first.EventID)
+	require.NoError(t, err)
+	require.Equal(t, 2, second.Version)
+	require.Len(t, publisher.events, 2)
+	for _, event := range publisher.events {
+		require.Equal(t, testService.Public(), event.PubKey)
+		require.True(t, event.CheckID())
+		require.True(t, event.VerifySignature())
+	}
+	require.Equal(t, []string{"get_public_key", "sign_event", "sign_event"}, []string{fake.requests[0].method, fake.requests[1].method, fake.requests[2].method})
+}
+
+type configFabricNIP46Signer struct{ nostr.Keyer }
+
+func (s configFabricNIP46Signer) GetPublicKey(ctx context.Context) (string, error) {
+	pubkey, err := s.Keyer.GetPublicKey(ctx)
+	return pubkey.Hex(), err
+}
+func (s configFabricNIP46Signer) Sign(ctx context.Context, event *nostr.Event) error {
+	return s.Keyer.SignEvent(ctx, event)
+}
+
+type configFabricNIP46Publisher struct{ events []nostr.Event }
+
+func (p *configFabricNIP46Publisher) PublishPresignedEvent(_ context.Context, event nostr.Event, _ string) error {
+	p.events = append(p.events, event)
+	return nil
 }

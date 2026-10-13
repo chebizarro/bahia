@@ -59,6 +59,7 @@ type Config struct {
 	LLM             LLMControlplaneConfig     `koanf:"llm"`
 	Packages        PackageControlplaneConfig `koanf:"packages"`
 	Assistant       AssistantConfig           `koanf:"assistant"`
+	ConfigFabric    ConfigFabricConfig        `koanf:"config_fabric" yaml:"config_fabric"`
 	DNS             DNSConfig                 `koanf:"dns"`
 	EdgeRouting     EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
 	InternalRouting InternalRoutingConfig     `koanf:"internal_routing" yaml:"internal_routing"`
@@ -772,6 +773,28 @@ type NostrConfig struct {
 	// every Bahia publisher crosses before relay I/O (internal/nostrout;
 	// docs/runbooks/nostr-outbound-admission.md).
 	Outbound NostrOutboundConfig `koanf:"outbound" yaml:"outbound"`
+}
+
+// ConfigFabricConfig pins the independent operator identity used by daemon
+// config publish and rollback. Only remote signer methods are accepted.
+type ConfigFabricConfig struct {
+	PublicKey string            `koanf:"public_key" yaml:"public_key" secret:"false"`
+	Signer    NostrSignerConfig `koanf:"signer" yaml:"signer"`
+}
+
+func (c *ConfigFabricConfig) validate() error {
+	if c.PublicKey == "" && c.Signer == (NostrSignerConfig{}) {
+		return nil
+	}
+	if strings.EqualFold(strings.TrimSpace(c.Signer.Method), NostrSignerLocal) || strings.TrimSpace(c.Signer.Method) == "" {
+		return fmt.Errorf("config validation failed: config_fabric.signer.method must be nip46 or nip55l")
+	}
+	n := NostrConfig{PublicKey: c.PublicKey, Signer: c.Signer}
+	if err := n.validateServiceSigner(); err != nil {
+		return fmt.Errorf("config_fabric: %w", err)
+	}
+	c.PublicKey, c.Signer = n.PublicKey, n.Signer
+	return nil
 }
 
 // Service signer methods accepted by nostr.signer.method.
@@ -2333,6 +2356,9 @@ func (c *Config) validate() error {
 		return err
 	}
 	if err := c.Nostr.validateServiceSigner(); err != nil {
+		return err
+	}
+	if err := c.ConfigFabric.validate(); err != nil {
 		return err
 	}
 	c.normalizeNostrRelays()

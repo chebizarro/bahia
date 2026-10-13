@@ -14,6 +14,17 @@ Each coordinate tracks:
 
 A withdrawn desired document does not erase the last effective configuration or revert an allowlist. Publish an explicit replacement to change what the service applies.
 
+## Daemon operator signer
+
+Daemon-side config publish and rollback use a dedicated remote operator signer,
+independent of `assistant.enabled` and the service identity. Configure
+`config_fabric.public_key` and `config_fabric.signer` with `method: nip46` for
+any NIP-46 bunker or `method: nip55l` for a local NIP-55L signer. The key is
+pinned at startup. No process-held operator private key or assistant signer is
+used. `/ready` exposes `config_fabric_signer`; when unconfigured it warns that
+publish and rollback are unavailable. Browser publication uses its own signed
+relay events and does not depend on this daemon signer.
+
 ## Web workflow
 
 1. Open **Config Fabric** and select **Publish Config**.
