@@ -320,10 +320,11 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 	}
 
 	// Step 1: Deduplicate by intent_id.
-	// Virtualization and canonical LLM lifecycle replay are decided by their
-	// immutable outbox admissions, not this separate processed cache. Backup
-	// run replay has the same rule.
-	if intent.Domain != kinds.VirtualizationDomain && !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) && p.isProcessed(intent.IntentID) {
+	// Canonical LLM lifecycle and tool replay are decided by their immutable
+	// outbox admissions, not this separate processed cache; backup run replay
+	// has the same rule. Virtualization stays in the cache so a virtualization
+	// intent cannot inherit another domain's processed intent_id.
+	if !isLLMLifecycleIntent(intent) && !(intent.Domain == "backup" && intent.Op == "run") && !(intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) && p.isProcessed(intent.IntentID) {
 		record := p.ProcessedIntent(intent.IntentID)
 		if intent.Domain == kinds.VirtualizationDomain && record == nil {
 			return fmt.Errorf("bahia-4f10q.1: processed virtualization marker is corrupt")
