@@ -287,6 +287,33 @@ func TestRouteCanaryProjectorNeverRegressesReplaceableStateButKeepsAuditHistory(
 	require.Equal(t, "opened", managedTagValue(late.Tags, "transition"))
 }
 
+func TestRouteCanaryProjectorRejectsLowerSequenceDespiteLaterClock(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	rec := &routeProjectorRecorder{}
+	_, bus := newTestRouteCanaryProjector(t, rec)
+	newer := routeProjectorPayload(domain.RouteCanaryTransitionNone, true, domain.RouteCanaryClassificationUpstreamError, 3, domain.InstanceHealthStatusHealthy, now)
+	newer.State.ObservationSequence = 6
+	older := routeProjectorPayload(domain.RouteCanaryTransitionNone, false, domain.RouteCanaryClassificationRouteOK, 0, domain.InstanceHealthStatusHealthy, now.Add(time.Minute))
+	older.State.ObservationSequence = 5
+	require.NoError(t, bus.deliver(context.Background(), events.Event{Type: events.EventRouteCanaryObserved, Data: newer}))
+	require.NoError(t, bus.deliver(context.Background(), events.Event{Type: events.EventRouteCanaryObserved, Data: older}))
+	require.Len(t, rec.events, 2, "later wall clock cannot regress a higher-sequence route state")
+}
+
+func TestRouteCanaryProjectorDedupesSameTransitionDespiteDifferentProbeTime(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	rec := &routeProjectorRecorder{}
+	_, bus := newTestRouteCanaryProjector(t, rec)
+	first := routeProjectorPayload(domain.RouteCanaryTransitionOpened, true, domain.RouteCanaryClassificationUpstreamError, 2, domain.InstanceHealthStatusHealthy, now)
+	first.State.ObservationSequence = 5
+	second := routeProjectorPayload(domain.RouteCanaryTransitionOpened, true, domain.RouteCanaryClassificationUpstreamError, 2, domain.InstanceHealthStatusHealthy, now.Add(time.Second))
+	second.State.ObservationSequence = first.State.ObservationSequence
+	second.EventID = first.EventID
+	require.NoError(t, bus.deliver(context.Background(), events.Event{Type: events.EventRouteCanaryOutageOpened, Data: first}))
+	require.NoError(t, bus.deliver(context.Background(), events.Event{Type: events.EventRouteCanaryOutageOpened, Data: second}))
+	require.Len(t, rec.events, 3, "one deterministic transition publishes one state pair and audit fact")
+}
+
 func TestRouteCanaryProjectorRejectsUnattributablePayloads(t *testing.T) {
 	rec := &routeProjectorRecorder{}
 	p, _ := newTestRouteCanaryProjector(t, rec)

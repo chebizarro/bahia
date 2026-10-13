@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,11 +51,12 @@ func (b *recordingRouteBus) ofType(typ events.EventType) []events.Event {
 // a recording bus: exactly the path a production transition takes to Nostr and
 // to bahia_fleet_health_nostr_entities.
 type routeProjectionHarness struct {
-	t        *testing.T
-	bus      *recordingRouteBus
-	relay    *routeProjectorRecorder
-	provider *telemetry.Provider
-	observed int
+	t         *testing.T
+	bus       *recordingRouteBus
+	relay     *routeProjectorRecorder
+	provider  *telemetry.Provider
+	projector *RouteCanaryProjector
+	observed  int
 }
 
 func newRouteProjectionHarness(t *testing.T) *routeProjectionHarness {
@@ -66,10 +68,137 @@ func newRouteProjectionHarness(t *testing.T) *routeProjectionHarness {
 		relay:    &routeProjectorRecorder{secret: &secret},
 		provider: telemetry.Setup(telemetry.Config{}, zap.NewNop()),
 	}
-	_, err := NewRouteCanaryProjector(h.bus, h.relay, zap.NewNop())
+	projector, err := NewRouteCanaryProjector(h.bus, h.relay, zap.NewNop())
 	require.NoError(t, err)
+	h.projector = projector
 	h.provider.ObserveSubscriptionStart()
 	return h
+}
+
+func TestRouteCanaryRestartRepublishesOpenOutageBeforeFailedProbe(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	h := newRouteProjectionHarness(t)
+	repo := newMemoryRouteCanaryRepo()
+	key := domain.RouteCanaryKeyForPlan(testRoutePlan())
+	require.NoError(t, repo.UpsertState(ctx, openRouteState(key, now.Add(-time.Hour))))
+	prober := &stubRouteProber{err: errors.New("probe unavailable")}
+	supervisor := newTestSupervisor(t, prober, repo, staticHealthSource{status: domain.InstanceHealthStatusHealthy, ok: true}, h.bus)
+	supervisor.SetCanonicalProjector(h.projector)
+	supervisor.now = fixedClock(now)
+
+	require.NoError(t, supervisor.publishCurrentState(ctx))
+	require.Len(t, h.observe(), 2, "current status and addressable state are republished without a transition")
+	h.provider.ObserveEOSE()
+	require.Contains(t, h.metrics(), `bahia_fleet_health_nostr_entities{domain="route",status="unhealthy"} 1`)
+	require.Contains(t, h.metrics(), `bahia_fleet_health_projector_caught_up 1`)
+	supervisor.EvaluateOnce(ctx)
+	require.Len(t, h.relay.events, 2, "failed first probe cannot erase or duplicate the open outage")
+	require.NoError(t, supervisor.publishCurrentState(ctx))
+	require.Len(t, h.relay.events, 2, "identical startup projection is fingerprint-deduplicated")
+}
+
+type concurrentTransitionRepo struct {
+	mu      sync.Mutex
+	state   domain.RouteCanaryState
+	events  map[string]domain.RouteCanaryEvent
+	read    chan struct{}
+	release chan struct{}
+}
+
+func (r *concurrentTransitionRepo) GetState(context.Context, domain.RouteCanaryKey) (*domain.RouteCanaryState, error) {
+	r.mu.Lock()
+	state := r.state
+	r.mu.Unlock()
+	r.read <- struct{}{}
+	<-r.release
+	return &state, nil
+}
+
+func (r *concurrentTransitionRepo) UpsertStateWithEvent(_ context.Context, state *domain.RouteCanaryState, event *domain.RouteCanaryEvent) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.events[event.ID.String()]; !exists {
+		r.events[event.ID.String()] = *event
+		r.state = *state
+	}
+	return nil
+}
+
+func (r *concurrentTransitionRepo) UpsertState(_ context.Context, state *domain.RouteCanaryState) error {
+	r.mu.Lock()
+	r.state = *state
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *concurrentTransitionRepo) ListState(context.Context) ([]domain.RouteCanaryState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return []domain.RouteCanaryState{r.state}, nil
+}
+
+func (r *concurrentTransitionRepo) DeleteState(context.Context, domain.RouteCanaryKey) error {
+	return nil
+}
+
+type concurrentRouteBus struct {
+	mu     sync.Mutex
+	events []events.Event
+}
+
+func (b *concurrentRouteBus) Publish(_ context.Context, event events.Event) {
+	b.mu.Lock()
+	b.events = append(b.events, event)
+	b.mu.Unlock()
+}
+func (*concurrentRouteBus) Subscribe(events.EventType, events.Handler) {}
+
+func TestGateAndSupervisorConcurrentTransitionUsesOneLineageID(t *testing.T) {
+	ctx := context.Background()
+	key := domain.RouteCanaryKeyForPlan(testRoutePlan())
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	prior := domain.RouteCanaryState{
+		RouteCanaryKey: key, Classification: domain.RouteCanaryClassificationUpstreamError,
+		ConsecutiveFailures: 1, ObservationSequence: 4, LastObservedAt: now.Add(-time.Minute),
+	}
+	repo := &concurrentTransitionRepo{state: prior, events: map[string]domain.RouteCanaryEvent{}, read: make(chan struct{}, 2), release: make(chan struct{})}
+	bus := &concurrentRouteBus{}
+	prober := &stubRouteProber{byPerspective: map[domain.RouteCanaryPerspective]domain.RouteCanaryObservation{
+		domain.RouteCanaryPerspectivePublicEdge: staleUpstreamObservation(),
+	}}
+	supervisor := newTestSupervisor(t, prober, repo, nil, bus)
+	supervisor.now = fixedClock(now)
+	gate := newPublishingTestGate(t, &stubRouteProber{}, &stubRouteApplier{}, repo, nil, bus, now)
+	verdict := RouteCanaryVerdict{Key: key, Classification: domain.RouteCanaryClassificationUpstreamError,
+		Perspective: domain.RouteCanaryPerspectivePublicEdge, Reason: "upstream failed", IsFailing: true}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		if err := supervisor.EvaluatePlan(ctx, testRoutePlan()); err != nil {
+			t.Errorf("supervisor: %v", err)
+		}
+	}()
+	go func() { defer wg.Done(); gate.record(ctx, testRoutePlan(), verdict) }()
+	<-repo.read
+	<-repo.read
+	close(repo.release)
+	wg.Wait()
+
+	bus.mu.Lock()
+	require.Len(t, bus.events, 2, "independent announcers both observed the same prior state")
+	first := bus.events[0].Data.(RouteCanaryChanged)
+	second := bus.events[1].Data.(RouteCanaryChanged)
+	bus.mu.Unlock()
+	require.Equal(t, first.EventID, second.EventID)
+	require.Equal(t, int64(5), first.Event.ObservationSequence)
+	require.Len(t, repo.events, 1, "persisted lineage is keyed by the deterministic transition ID")
+	next, transition := domain.EvaluateRouteCanary(repo.state, domain.RouteCanaryClassificationRouteOK, false,
+		domain.RouteCanaryPerspectivePublicEdge, "", nil, domain.RouteCanaryThresholds{FailureThreshold: 1, SuccessThreshold: 1}, now.Add(time.Minute))
+	require.Equal(t, domain.RouteCanaryTransitionRecovered, transition)
+	require.NotEqual(t, first.Event.ID, domain.RouteCanaryTransitionID(repo.state, next))
 }
 
 // observe feeds relay-accepted events not yet seen to fleet-health telemetry,

@@ -99,8 +99,17 @@ func (r *LocalRouteCanaryRepository) UpsertState(ctx context.Context, state *dom
 
 func (r *LocalRouteCanaryRepository) remember(state domain.RouteCanaryState) {
 	r.mu.Lock()
-	r.written[state.Coordinate()] = state
+	if current, ok := r.written[state.Coordinate()]; !ok || routeCanaryStateAtLeastAsNew(state, current) {
+		r.written[state.Coordinate()] = state
+	}
 	r.mu.Unlock()
+}
+
+func routeCanaryStateAtLeastAsNew(candidate, current domain.RouteCanaryState) bool {
+	if candidate.ObservationSequence != current.ObservationSequence {
+		return candidate.ObservationSequence > current.ObservationSequence
+	}
+	return !candidate.UpdatedAt.Before(current.UpdatedAt)
 }
 
 // GetState returns the route's latest state, or nil when it has none.
@@ -118,7 +127,7 @@ func (r *LocalRouteCanaryRepository) GetState(ctx context.Context, key domain.Ro
 	r.mu.Lock()
 	written, ok := r.written[key.Coordinate()]
 	r.mu.Unlock()
-	if ok && (latest == nil || !latest.UpdatedAt.After(written.UpdatedAt)) {
+	if ok && (latest == nil || routeCanaryStateAtLeastAsNew(written, *latest)) {
 		latest = &written
 	}
 	if latest == nil && r.resumeFromIndex && r.index != nil {
@@ -130,6 +139,39 @@ func (r *LocalRouteCanaryRepository) GetState(ctx context.Context, key domain.Ro
 		return indexed, nil
 	}
 	return latest, nil
+}
+
+// ObservationSequenceFloor retains a withdrawn route's lineage position while
+// GetState correctly reports that the route has no active outage state.
+func (r *LocalRouteCanaryRepository) ObservationSequenceFloor(ctx context.Context, key domain.RouteCanaryKey) (int64, error) {
+	record, err := r.state.coordinate(ctx, key.Coordinate())
+	if err != nil {
+		return 0, err
+	}
+	var floor int64
+	if record != nil && supervisionTag(*record, kinds.CASControlStateTagDeleted) == "true" {
+		var tombstone struct {
+			ObservationSequence int64 `json:"observation_sequence"`
+		}
+		if err := json.Unmarshal([]byte(record.Content), &tombstone); err != nil {
+			return 0, err
+		}
+		floor = tombstone.ObservationSequence
+	}
+	if r.resumeFromIndex {
+		if index, ok := r.index.(interface {
+			ObservationSequenceFloor(context.Context, domain.RouteCanaryKey) (int64, error)
+		}); ok {
+			indexed, err := index.ObservationSequenceFloor(ctx, key)
+			if err != nil {
+				return 0, err
+			}
+			if indexed > floor {
+				floor = indexed
+			}
+		}
+	}
+	return floor, nil
 }
 
 // ListState returns the latest state of every route that has one.
@@ -146,7 +188,7 @@ func (r *LocalRouteCanaryRepository) ListState(ctx context.Context) ([]domain.Ro
 	}
 	r.mu.Lock()
 	for coordinate, written := range r.written {
-		if canonical, ok := byCoordinate[coordinate]; !ok || !canonical.UpdatedAt.After(written.UpdatedAt) {
+		if canonical, ok := byCoordinate[coordinate]; !ok || routeCanaryStateAtLeastAsNew(written, canonical) {
 			byCoordinate[coordinate] = written
 		}
 	}

@@ -32,6 +32,8 @@ A gate with no derived targets reports that it verified nothing. It does not sil
 
 Periodic probes enumerate desired routes, not provider configuration. Outages open after the configured failure threshold and clear after the success threshold. A route removed from desired state stops probing; a desired route missing from the provider still fails.
 
+On daemon startup, the locally retained route state is published before probing. An already-open outage therefore remains visible to fleet-health subscribers even if the first probe fails. The per-route `30900` record is addressable, so a subscriber's relay backfill through EOSE reconstructs current outage counts without waiting for another transition.
+
 The route record pairs canary status with managed instance health and marks `service_healthy_route_broken` when the service is healthy but its route is not.
 
 If the database-backed secret store is unavailable, provider convergence that needs an API token is suspended, while route probing and relay-backed observables continue.
@@ -70,6 +72,8 @@ route_canaries:
 Canonical route state is a service-authored `30900` record at the route coordinate. `30315` status and `4903` audit facts carry bounded transitions and sanitized evidence. Secret values and response bodies are not published.
 
 Use notification channels for outage open, change, and clear events. Treat stale probe evidence as unknown.
+
+Each probe advances a per-route observation sequence in canonical state. Withdrawal retains the sequence floor while clearing the active outage, so re-adding the route starts a new lineage position. A route transition has a deterministic identity derived from its route coordinate, prior and next outage/classification, and that sequence. Gate and periodic-supervisor observations of the same transition share one lineage identity; notification delivery is claimed once per channel and identity, including across daemon replicas. A later transition with a new sequence is delivered separately.
 
 ## Related
 

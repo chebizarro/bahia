@@ -15,6 +15,14 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
+func TestLocalRouteCanaryStateSequenceBeatsWallClock(t *testing.T) {
+	now := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	newer := domain.RouteCanaryState{ObservationSequence: 6, UpdatedAt: now}
+	older := domain.RouteCanaryState{ObservationSequence: 5, UpdatedAt: now.Add(time.Hour)}
+	require.False(t, routeCanaryStateAtLeastAsNew(older, newer))
+	require.True(t, routeCanaryStateAtLeastAsNew(newer, older))
+}
+
 // routeServiceState is the desired state of a service whose route is managed.
 func routeServiceState(plan *domain.DesiredPublicRoutePlan) domain.EnvironmentServiceState {
 	return domain.EnvironmentServiceState{ServiceID: plan.ServiceID, EnvironmentID: plan.EnvironmentID, DesiredRuntimeState: &domain.DesiredServiceSpec{
@@ -149,6 +157,9 @@ func TestLocalRouteCanaryRestartResumesOutageState(t *testing.T) {
 	// Restarted again while the outage is open: it stays the same outage.
 	clock.Advance(time.Minute)
 	third := f.routeDaemon(clock, failingRouteProber(), testRouteCanaryPolicy(), nil)
+	require.NoError(t, third.supervisor.publishCurrentState(ctx))
+	require.Equal(t, 1, third.publisher.published(kinds.CASControlState, routeCanaryStateSchema),
+		"restart republishes locally retained open state before the next probe")
 	third.supervisor.EvaluateOnce(ctx)
 	require.Zero(t, third.announced(events.EventRouteCanaryOutageOpened), "an open outage must not be opened again after a restart")
 	resumed, err := third.repo.GetState(ctx, key)
@@ -475,6 +486,9 @@ func TestLocalRouteCanaryDeleteStatePublishesTombstoneThatSurvivesRestart(t *tes
 	require.Equal(t, "true", supervisionTag(records[0], kinds.CASControlStateTagDeleted))
 	require.Equal(t, key.Coordinate(), supervisionTag(records[0], kinds.CASControlStateTagD))
 	require.Equal(t, live[0].CreatedAt+1, records[0].CreatedAt, "the tombstone is minted after the record it withdraws")
+	floor, err := first.repo.ObservationSequenceFloor(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), floor, "withdrawal retains the last lineage sequence")
 	require.NoError(t, first.repo.DeleteState(ctx, key), "withdrawing twice publishes nothing new")
 	require.Len(t, f.stored(kinds.CASControlState, routeCanaryStateSchema), 1)
 
@@ -486,6 +500,9 @@ func TestLocalRouteCanaryDeleteStatePublishesTombstoneThatSurvivesRestart(t *tes
 	listed, err := second.repo.ListState(ctx)
 	require.NoError(t, err)
 	require.Empty(t, listed)
+	floor, err = second.repo.ObservationSequenceFloor(ctx, key)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), floor, "restart retains the withdrawn route's lineage sequence")
 
 	// The route is still desired, so it is probed again from a clean streak,
 	// and the new record replaces the tombstone.
@@ -497,6 +514,7 @@ func TestLocalRouteCanaryDeleteStatePublishesTombstoneThatSurvivesRestart(t *tes
 	state, ok := decodeRouteCanaryStateRecord(records[0])
 	require.True(t, ok)
 	require.Equal(t, 1, state.ConsecutiveFailures)
+	require.Equal(t, int64(3), state.ObservationSequence)
 	require.False(t, state.Open)
 }
 

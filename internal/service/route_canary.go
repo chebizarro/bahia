@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/domain"
@@ -26,6 +25,23 @@ type RouteCanaryRepository interface {
 	GetState(ctx context.Context, key domain.RouteCanaryKey) (*domain.RouteCanaryState, error)
 	ListState(ctx context.Context) ([]domain.RouteCanaryState, error)
 	DeleteState(ctx context.Context, key domain.RouteCanaryKey) error
+}
+
+func loadRouteCanaryPrior(ctx context.Context, repo RouteCanaryRepository, key domain.RouteCanaryKey) (domain.RouteCanaryState, error) {
+	prior := domain.RouteCanaryState{RouteCanaryKey: key}
+	previous, err := repo.GetState(ctx, key)
+	if err != nil {
+		return prior, err
+	}
+	if previous != nil {
+		return *previous, nil
+	}
+	if floor, ok := repo.(interface {
+		ObservationSequenceFloor(context.Context, domain.RouteCanaryKey) (int64, error)
+	}); ok {
+		prior.ObservationSequence, err = floor.ObservationSequenceFloor(ctx, key)
+	}
+	return prior, err
 }
 
 // RouteCanaryPlanSource enumerates the managed routes that should be probed.
@@ -57,6 +73,10 @@ type RouteCanaryChanged struct {
 	Reason                 string                      `json:"reason,omitempty"`
 	OccurredAt             time.Time                   `json:"occurred_at"`
 }
+
+// NotificationKey is the persisted lineage identity used by notification
+// dispatchers on every replica to claim a transition only once per channel.
+func (c RouteCanaryChanged) NotificationKey() string { return c.EventID }
 
 // RouteCanaryEvaluator observes every perspective of one managed route and folds
 // the result into durable outage state.
@@ -247,6 +267,9 @@ func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
 	if err := waitForSupervisionReadiness(ctx, s.readiness); err != nil {
 		return err
 	}
+	if err := s.publishCurrentState(ctx); err != nil {
+		return err
+	}
 	for {
 		s.EvaluateDue(ctx)
 		timer := time.NewTimer(s.NextWakeDelay(s.now()))
@@ -257,6 +280,26 @@ func (s *RouteCanarySupervisor) Run(ctx context.Context) error {
 		case <-timer.C:
 		}
 	}
+}
+
+// publishCurrentState re-announces the local repository's addressable state
+// before probing. A failed first probe cannot hide an outage already open when
+// the daemon restarted, and fleet-health subscribers can backfill this record.
+func (s *RouteCanarySupervisor) publishCurrentState(ctx context.Context) error {
+	if s.canonical == nil {
+		return nil
+	}
+	states, err := s.repo.ListState(ctx)
+	if err != nil {
+		return fmt.Errorf("list current route canary state: %w", err)
+	}
+	now := s.now()
+	for _, state := range states {
+		if err := s.canonical.Project(ctx, routeCanaryObservedEvent(state, s.instanceStatus(ctx, state.RouteCanaryKey), now)); err != nil {
+			return fmt.Errorf("publish current route canary state %s: %w", state.Coordinate(), err)
+		}
+	}
+	return nil
 }
 
 // EvaluateOnce probes every managed route exactly once, whether or not it is
@@ -421,13 +464,9 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 		return nil
 	}
 
-	previous, err := s.repo.GetState(ctx, key)
+	prior, err := loadRouteCanaryPrior(ctx, s.repo, key)
 	if err != nil {
 		return err
-	}
-	prior := domain.RouteCanaryState{RouteCanaryKey: key}
-	if previous != nil {
-		prior = *previous
 	}
 
 	next, transition := domain.EvaluateRouteCanary(
@@ -462,7 +501,7 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 
 	instanceStatus := s.instanceStatus(ctx, key)
 	event := domain.RouteCanaryEvent{
-		ID:                     uuid.New(),
+		ID:                     domain.RouteCanaryTransitionID(prior, next),
 		RouteCanaryKey:         key,
 		Transition:             transition,
 		PreviousClassification: prior.Classification,
@@ -472,6 +511,7 @@ func (s *RouteCanarySupervisor) EvaluatePlan(ctx context.Context, plan *domain.D
 		Evidence:               summarizeRouteObservations(verdict.Observations),
 		ObservedInstanceStatus: instanceStatus,
 		ObservedAt:             now,
+		ObservationSequence:    next.ObservationSequence,
 	}
 	// Canonical records first: the relay path (or its outbox) holds the
 	// transition before the SQL index sees it, and the bus delivery below is

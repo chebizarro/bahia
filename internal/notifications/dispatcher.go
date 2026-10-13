@@ -72,6 +72,9 @@ func (d *Dispatcher) SetupSubscriptions(pub events.Publisher) {
 		events.EventRuntimeRecoveryFailed,
 		events.EventRuntimeRecoveryBudgetExhausted,
 		events.EventRuntimeMaintenanceChanged,
+		events.EventRouteCanaryOutageOpened,
+		events.EventRouteCanaryRecovered,
+		events.EventRouteCanaryClassificationChanged,
 	}
 
 	errorSubscriber, supportsErrors := pub.(events.ErrorSubscriber)
@@ -232,8 +235,18 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 		Status:    domain.NotificationStatusPending,
 		Attempts:  1,
 	}
+	if isRouteTransitionEvent(eventType) {
+		data, ok := payload["data"].(interface{ NotificationKey() string })
+		if !ok || data.NotificationKey() == "" {
+			return fmt.Errorf("route transition notification requires a lineage ID")
+		}
+		logEntry.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte(eventType+"|"+ch.ID.String()+"|"+data.NotificationKey()))
+	}
 
 	if err := d.repo.CreateLog(ctx, logEntry); err != nil {
+		if errors.Is(err, repository.ErrNotificationLogAlreadyExists) {
+			return nil
+		}
 		return fmt.Errorf("creating notification log: %w", err)
 	}
 
@@ -260,6 +273,15 @@ func (d *Dispatcher) sendToChannel(ctx context.Context, ch *domain.NotificationC
 		return fmt.Errorf("finalizing delivered notification log: %w", err)
 	}
 	return nil
+}
+
+func isRouteTransitionEvent(eventType string) bool {
+	switch eventType {
+	case string(events.EventRouteCanaryOutageOpened), string(events.EventRouteCanaryRecovered), string(events.EventRouteCanaryClassificationChanged):
+		return true
+	default:
+		return false
+	}
 }
 
 // RetryFailed retries failed/pending notifications up to maxAttempts.

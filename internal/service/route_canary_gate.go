@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/openagentsinc/bahia/internal/adapters/routing"
@@ -213,9 +212,10 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 	defer cancel()
 
 	key := domain.RouteCanaryKeyForPlan(plan)
-	prior := domain.RouteCanaryState{RouteCanaryKey: key}
-	if existing, err := g.repo.GetState(recordCtx, key); err == nil && existing != nil {
-		prior = *existing
+	prior, err := loadRouteCanaryPrior(recordCtx, g.repo, key)
+	if err != nil {
+		g.logger.Error("load route canary gate prior state", zap.String("route", key.Coordinate()), zap.Error(err))
+		return
 	}
 
 	now := g.now()
@@ -242,7 +242,7 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 	}
 
 	event := domain.RouteCanaryEvent{
-		ID:                     uuid.New(),
+		ID:                     domain.RouteCanaryTransitionID(prior, next),
 		RouteCanaryKey:         key,
 		Transition:             transition,
 		PreviousClassification: prior.Classification,
@@ -252,6 +252,7 @@ func (g *RouteCanaryGate) record(ctx context.Context, plan *domain.DesiredPublic
 		Evidence:               summarizeRouteObservations(verdict.Observations),
 		ObservedInstanceStatus: instanceStatus,
 		ObservedAt:             now,
+		ObservationSequence:    next.ObservationSequence,
 	}
 	if g.canonical != nil {
 		// The canonical record is the durable state; the repository indexes it.

@@ -22,6 +22,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -102,8 +104,90 @@ func (m *mockNotificationRepo) CreateLog(_ context.Context, log *domain.Notifica
 	if m.createLogErr != nil {
 		return m.createLogErr
 	}
+	for _, existing := range m.logs {
+		if existing.ID == log.ID {
+			return repository.ErrNotificationLogAlreadyExists
+		}
+	}
 	m.logs = append(m.logs, *log)
 	return nil
+}
+
+type synchronousNotificationBus struct {
+	handlers map[events.EventType][]events.Handler
+}
+
+func (b *synchronousNotificationBus) Subscribe(typ events.EventType, handler events.Handler) {
+	b.handlers[typ] = append(b.handlers[typ], handler)
+}
+
+func (b *synchronousNotificationBus) Publish(ctx context.Context, event events.Event) {
+	for _, handler := range b.handlers[event.Type] {
+		handler(ctx, event)
+	}
+}
+
+func TestRouteTransitionDispatchIsIdempotentAcrossDispatchers(t *testing.T) {
+	channel := domain.NotificationChannel{ID: uuid.New(), Name: "route-webhook", ChannelType: domain.ChannelTypeWebhook, Enabled: true}
+	repo := &mockNotificationRepo{channels: []domain.NotificationChannel{channel}}
+	sender := &mockSender{}
+	first := NewDispatcher(repo, zap.NewNop())
+	second := NewDispatcher(repo, zap.NewNop())
+	first.RegisterSender(domain.ChannelTypeWebhook, sender)
+	second.RegisterSender(domain.ChannelTypeWebhook, sender)
+	payload := map[string]any{"data": service.RouteCanaryChanged{EventID: "transition-5"}}
+	const eventType = string(events.EventRouteCanaryOutageOpened)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for _, dispatcher := range []*Dispatcher{first, second} {
+		wg.Add(1)
+		go func(d *Dispatcher) {
+			defer wg.Done()
+			<-start
+			if err := d.Dispatch(context.Background(), eventType, payload); err != nil {
+				t.Errorf("dispatch route transition: %v", err)
+			}
+		}(dispatcher)
+	}
+	close(start)
+	wg.Wait()
+	repo.mu.Lock()
+	if len(repo.logs) != 1 {
+		t.Errorf("persisted delivery claims = %d, want 1", len(repo.logs))
+	}
+	repo.mu.Unlock()
+	sender.mu.Lock()
+	if len(sender.sent) != 1 {
+		t.Errorf("webhook sends = %d, want 1", len(sender.sent))
+	}
+	sender.mu.Unlock()
+	if err := first.Dispatch(context.Background(), eventType, map[string]any{"data": service.RouteCanaryChanged{}}); err == nil {
+		t.Fatal("a route transition without a lineage ID must not be dispatched")
+	}
+	sender.mu.Lock()
+	if len(sender.sent) != 1 {
+		t.Errorf("missing lineage ID sent %d notifications, want 1", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	if err := first.Dispatch(context.Background(), eventType, map[string]any{"data": service.RouteCanaryChanged{EventID: "transition-6"}}); err != nil {
+		t.Fatal(err)
+	}
+	sender.mu.Lock()
+	if len(sender.sent) != 2 {
+		t.Errorf("distinct observation sequence sends = %d, want 2", len(sender.sent))
+	}
+	sender.mu.Unlock()
+
+	bus := &synchronousNotificationBus{handlers: map[events.EventType][]events.Handler{}}
+	first.SetupSubscriptions(bus)
+	bus.Publish(context.Background(), events.Event{Type: events.EventRouteCanaryRecovered,
+		EntityID: "route:test", Data: service.RouteCanaryChanged{EventID: "transition-7"}})
+	sender.mu.Lock()
+	if len(sender.sent) != 3 {
+		t.Errorf("subscribed route recovery sends = %d, want 3", len(sender.sent))
+	}
+	sender.mu.Unlock()
 }
 
 func (m *mockNotificationRepo) UpdateLog(_ context.Context, log *domain.NotificationLog) error {

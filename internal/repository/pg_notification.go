@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -210,18 +211,24 @@ func (r *PgNotificationRepository) DeleteChannelForOrg(ctx context.Context, id, 
 
 // --- Log ---
 
+var ErrNotificationLogAlreadyExists = errors.New("notification log already exists")
+
 func (r *PgNotificationRepository) CreateLog(ctx context.Context, log *domain.NotificationLog) error {
 	if log.ID == uuid.Nil {
 		log.ID = uuid.New()
 	}
 	payloadJSON, _ := json.Marshal(log.Payload)
 
-	_, err := r.pool.Exec(ctx, `
+	result, err := r.pool.Exec(ctx, `
 		INSERT INTO notification_log (id, channel_id, event_type, payload, status, attempts, last_error, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
+		ON CONFLICT (id) DO NOTHING
 	`, log.ID, log.ChannelID, log.EventType, payloadJSON, string(log.Status), log.Attempts, log.LastError)
 	if err != nil {
 		return fmt.Errorf("creating notification log: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotificationLogAlreadyExists
 	}
 	return nil
 }
