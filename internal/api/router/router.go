@@ -354,19 +354,6 @@ func stringMapField(value reflect.Value, name string) map[string]string {
 	return result
 }
 
-func intField(value reflect.Value, name string) int {
-	field := exportedField(value, name)
-	if !field.IsValid() {
-		return 0
-	}
-	switch field.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return int(field.Int())
-	default:
-		return 0
-	}
-}
-
 func boolField(value reflect.Value, name string) bool {
 	field := exportedField(value, name)
 	if !field.IsValid() || field.Kind() != reflect.Bool {
@@ -488,30 +475,6 @@ func environmentOrgResolver(environments repository.EnvironmentRepository, param
 	}
 }
 
-func buildOrgResolver(builds repository.BuildRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
-	return func(r *http.Request) (uuid.UUID, error) {
-		id, err := parseRouteUUID(r, param)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		build, err := builds.GetByID(r.Context(), id)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if build == nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		svc, err := services.GetByID(r.Context(), build.ServiceID)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if svc == nil || svc.OrgID == uuid.Nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		return svc.OrgID, nil
-	}
-}
-
 func artifactOrgResolver(artifacts repository.ArtifactRepository, services repository.ServiceRepository, param string) middleware.ResourceOrgResolver {
 	return func(r *http.Request) (uuid.UUID, error) {
 		id, err := parseRouteUUID(r, param)
@@ -533,23 +496,6 @@ func artifactOrgResolver(artifacts repository.ArtifactRepository, services repos
 			return uuid.Nil, middleware.ErrOrgContextNotFound
 		}
 		return svc.OrgID, nil
-	}
-}
-
-func notificationChannelOrgResolver(notifications repository.NotificationRepository, param string) middleware.ResourceOrgResolver {
-	return func(r *http.Request) (uuid.UUID, error) {
-		id, err := parseRouteUUID(r, param)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		channel, err := notifications.GetChannelByID(r.Context(), id)
-		if err != nil {
-			return uuid.Nil, err
-		}
-		if channel == nil || channel.OrgID == uuid.Nil {
-			return uuid.Nil, middleware.ErrOrgContextNotFound
-		}
-		return channel.OrgID, nil
 	}
 }
 
