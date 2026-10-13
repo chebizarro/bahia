@@ -4,6 +4,7 @@ import { onStoreRefresh } from '$lib/nostr/boot.js';
 import { CP_STATE_TOPICS, SECURITY_FINDING_RECORD, SECURITY_SCHEDULE_RECORD, SECURITY_FINDING_DETAIL_RECORD } from '$lib/nostr/kinds.gen.js';
 import { onContentKeyChange } from '$lib/stores/auth-roles.svelte.js';
 import { readConfidentialTopic, reassembleFindingDetails } from './collections/confidential-records.js';
+import { visibleSecuritySubjects } from './collections/security-attribution.js';
 
 export const securityState = $state({
   findings: [], findingsLoading: false, findingsError: null,
@@ -41,11 +42,13 @@ function findingMatches(finding, scope = {}) {
 
 export function listSecurityFindings(params = {}) {
   findingsScope = { ...params };
+  const visible = visibleSecuritySubjects('security-target', params.org_id);
   const findings = readConfidentialTopic(CP_STATE_TOPICS.SECURITY_FINDING, SECURITY_FINDING_RECORD);
   const details = readConfidentialTopic(CP_STATE_TOPICS.SECURITY_FINDING_DETAIL, SECURITY_FINDING_DETAIL_RECORD);
-  const detailByHash = reassembleFindingDetails(details.rows, details.tombstones);
+  const inOrg = (record) => !params.org_id || record.envelope_org_id === params.org_id;
+  const detailByHash = reassembleFindingDetails(details.rows.filter(inOrg), details.tombstones);
   securityState.findings = findings.rows
-    .filter((record) => findingMatches(record, params))
+    .filter((record) => inOrg(record) && visible.has(record.target_key_hash) && findingMatches(record, params))
     .map((record) => ({ ...record, details: detailByHash.get(record.finding_key_hash) || '' }))
     .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
     .slice(Number(params.offset) || 0, (Number(params.offset) || 0) + (Number(params.limit) || 500));
@@ -57,8 +60,11 @@ export function listSecurityFindings(params = {}) {
 
 export function listSecuritySchedules(params = {}) {
   scheduleParams = { ...params };
+  const visible = visibleSecuritySubjects('security-target', params.org_id);
   const result = readConfidentialTopic(CP_STATE_TOPICS.SECURITY_SCHEDULE, SECURITY_SCHEDULE_RECORD);
   securityState.schedules = result.rows.filter((record) =>
+    (!params.org_id || record.envelope_org_id === params.org_id) &&
+    visible.has(record.target_key_hash) &&
     (!params.policy_id || record.policy_id === params.policy_id) &&
     (!params.target_key_hash || record.target_key_hash === params.target_key_hash) &&
     (!params.enabled_only || record.enabled))

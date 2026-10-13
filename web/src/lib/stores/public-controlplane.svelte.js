@@ -382,47 +382,56 @@ function backupRequired(value, label) {
   return text;
 }
 
+function backupOrgId(payload) {
+  const orgId = String(payload?.org_id || '').trim();
+  if (!isIntentOrgId(orgId)) throw new Error('Backup organization UUID is required');
+  return orgId;
+}
+
 export function registerBackupRepository(payload) {
+  const orgId = backupOrgId(payload);
   const name = backupRequired(payload?.name, 'repository name');
   const backend = backupRequired(payload?.backend, 'repository backend');
   const repositoryUri = backupRequired(payload?.repository_uri || payload?.uri, 'repository URI');
-  const existing = backupRepositories.find(row => row.name === name);
+  const existing = backupRepositories.find(row => row.org_id === orgId && row.name === name);
   const content = {
     ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
-    name,
+    name, org_id: orgId,
     backend,
     repository_uri: repositoryUri,
     metadata: backupMetadata('web.backup.repositories.register', payload?.metadata)
   };
   return publishIntent({ domain: 'backup', op: 'repository-register', coordinate: `backup-repository:${content.id}`,
-    orgId: intentOrgId(content, canonicalIntentRecord(`backup-repository:${content.id}`)?.content, 'backup'), content });
+    orgId, content });
 }
 
 export function applyBackupPolicy(payload) {
+  const orgId = backupOrgId(payload);
   const name = backupRequired(payload?.name, 'policy name');
   const verificationMode = String(payload?.verification_mode || (payload?.require_verification ? 'kopia_snapshot_verify' : 'none')).trim() || 'none';
-  const existing = backupPolicies.find(row => row.name === name);
+  const existing = backupPolicies.find(row => row.org_id === orgId && row.name === name);
   const content = {
     ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
-    name,
+    name, org_id: orgId,
     require_verification: Boolean(payload?.require_verification),
     verification_mode: verificationMode,
     metadata: backupMetadata('web.backup.policies.apply', payload?.metadata)
   };
   return publishIntent({ domain: 'backup', op: 'policy-apply', coordinate: `backup-policy:${content.id}`,
-    orgId: intentOrgId(content, canonicalIntentRecord(`backup-policy:${content.id}`)?.content, 'backup'), content });
+    orgId, content });
 }
 
 export function applyBackupRecipe(payload) {
+  const orgId = backupOrgId(payload);
   const name = backupRequired(payload?.name || payload?.recipe_name, 'recipe name');
   const version = backupRequired(payload?.version || payload?.recipe_version, 'recipe version');
   const repositoryId = backupRequired(payload?.repository_id, 'repository id');
   const backend = backupRequired(payload?.backend, 'recipe backend');
   const targetRef = backupRequired(payload?.target_ref || payload?.target, 'target ref');
-  const existing = backupRecipes.find(row => row.name === name && row.version === version);
+  const existing = backupRecipes.find(row => row.org_id === orgId && row.name === name && row.version === version);
   const content = {
     ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
-    name,
+    name, org_id: orgId,
     version,
     backend,
     repository_id: repositoryId,
@@ -431,18 +440,19 @@ export function applyBackupRecipe(payload) {
     metadata: backupMetadata('web.backup.recipes.apply', payload?.metadata)
   };
   return publishIntent({ domain: 'backup', op: 'recipe-apply', coordinate: `backup-recipe:${content.id}`,
-    orgId: intentOrgId(content, canonicalIntentRecord(`backup-recipe:${content.id}`)?.content, 'backup'), content });
+    orgId, content });
 }
 
 export function applyBackupDefinition(payload) {
+  const orgId = backupOrgId(payload);
   const name = backupRequired(payload?.name || payload?.definition, 'definition name');
   const repositoryId = backupRequired(payload?.repository_id, 'repository id');
   const policyId = backupRequired(payload?.policy_id, 'policy id');
   const recipeId = backupRequired(payload?.recipe_id, 'recipe id');
-  const existing = backupDefinitions.find(row => row.name === name);
+  const existing = backupDefinitions.find(row => row.org_id === orgId && row.name === name);
   const content = {
     ...withEntityId({ ...payload, id: payload?.id || existing?.id }),
-    name,
+    name, org_id: orgId,
     repository_id: repositoryId,
     policy_id: policyId,
     recipe_id: recipeId,
@@ -451,7 +461,7 @@ export function applyBackupDefinition(payload) {
     metadata: backupMetadata('web.backup.definitions.apply', payload?.metadata)
   };
   return publishIntent({ domain: 'backup', op: 'definition-apply', coordinate: `backup-definition:${content.id}`,
-    orgId: intentOrgId(content, canonicalIntentRecord(`backup-definition:${content.id}`)?.content, 'backup'), content });
+    orgId, content });
 }
 
 export function requestBackupRun(recipeOrDefinition) {

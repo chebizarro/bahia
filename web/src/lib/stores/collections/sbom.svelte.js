@@ -2,12 +2,15 @@ import { SBOM_REFERENCE, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE_TOPIC, SBOM_AVAI
 import { onStoreRefresh } from '../../nostr/boot.js';
 import { queryTopic } from './store-query.js';
 import { getDTag, getTagValue, replaceArray } from './utils.js';
+import { visibleSecuritySubjects } from './security-attribution.js';
+import { onContentKeyChange } from '../auth-roles.svelte.js';
 
 const MAX_SBOM_REFS = 200;
 export const sbomRefs = $state([]);
 export const sbomAvailability = $state([]);
 export const sbomRefsByArtifact = new Map();
 let unsubscribe = null;
+let unsubscribeKeys = null;
 
 export function resetSBOM() {
   sbomRefs.length = 0;
@@ -32,28 +35,31 @@ function projectReference(event) {
   };
 }
 
-function projectAvailability(event) {
+function projectAvailability(event, visible) {
   let content = {};
   let parseError = null;
   try { content = JSON.parse(event.content || '{}'); }
   catch (error) { parseError = error?.message || 'Invalid SBOM availability JSON'; }
+  const entries = Array.isArray(content.entries) ? content.entries.filter((entry) => visible.has(entry.payloadSha256)) : [];
   return {
     id: event.id, kind: event.kind, artifactId: extractArtifactId(event),
     subject: getTagValue(event, 'subject') || '', subjectType: getTagValue(event, 'subject_type') || '',
-    entries: Array.isArray(content.entries) ? content.entries : [],
+    entries,
     schema: getTagValue(event, 'schema') || '', dTag: getDTag(event),
-    created_at: event.created_at || 0, content, parseError, nostr_event: event
+    created_at: event.created_at || 0, content: { ...content, entries }, parseError, nostr_event: event
   };
 }
 
 export function refreshSBOM() {
   const byNewest = (a, b) => b.created_at - a.created_at || a.id.localeCompare(b.id);
+  const visible = visibleSecuritySubjects('sbom');
   replaceArray(sbomRefs, queryTopic(SBOM_REFERENCE_TOPIC, [SBOM_REFERENCE])
-    .filter((event) => getTagValue(event, 'deleted') !== 'true')
+    .filter((event) => getTagValue(event, 'deleted') !== 'true' && visible.has(getTagValue(event, 'x')))
     .map(projectReference).sort(byNewest).slice(0, MAX_SBOM_REFS));
   replaceArray(sbomAvailability, queryTopic(SBOM_AVAILABILITY_TOPIC, [SBOM_AVAILABILITY_LIST])
     .filter((event) => getTagValue(event, 'deleted') !== 'true')
-    .map(projectAvailability).sort(byNewest));
+    .map((event) => projectAvailability(event, visible))
+    .filter((row) => row.entries.length > 0).sort(byNewest));
   sbomRefsByArtifact.clear();
   for (const row of [...sbomRefs, ...sbomAvailability]) {
     if (!row.artifactId) continue;
@@ -67,5 +73,5 @@ export function hasSBOMForArtifact(artifactId) { return sbomRefsByArtifact.has(a
 export function sbomArtifactIds() {
   return new Set([...sbomRefs, ...sbomAvailability].map((row) => row.artifactId).filter(Boolean));
 }
-export function initSBOMStoreBinding() { if (unsubscribe) return; refreshSBOM(); unsubscribe = onStoreRefresh(refreshSBOM); }
-export function teardownSBOMStoreBinding() { unsubscribe?.(); unsubscribe = null; }
+export function initSBOMStoreBinding() { if (unsubscribe) return; refreshSBOM(); unsubscribe = onStoreRefresh(refreshSBOM); unsubscribeKeys = onContentKeyChange(refreshSBOM); }
+export function teardownSBOMStoreBinding() { unsubscribe?.(); unsubscribe = null; unsubscribeKeys?.(); unsubscribeKeys = null; }

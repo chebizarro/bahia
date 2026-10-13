@@ -26,6 +26,7 @@ describe('store-first relay subscriptions', () => {
       CP_STATE_TOPICS.ML_MODEL, CP_STATE_TOPICS.PAYMENT_RECORD, CP_STATE_TOPICS.SECURITY_FINDING]) {
       expect(state['#t']).toContain(topic);
     }
+    expect(publicReq().filters.some((filter) => filter['#t']?.includes(CP_STATE_TOPICS.SECURITY_ATTRIBUTION))).toBe(true);
     for (const kind of [30315, 5]) {
       expect(publicReq().filters.some((filter) => filter.kinds.includes(kind)), `missing public kind ${kind}`).toBe(true);
     }

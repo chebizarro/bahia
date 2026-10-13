@@ -64,6 +64,11 @@ func TestF74aReadAuthClassification(t *testing.T) {
 	}
 }
 
+func TestSecurityAttributionCiphertextCanBootstrapWithoutReadAuth(t *testing.T) {
+	filter := nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": {kinds.CPStateTopicSecurityAttribution}}}
+	require.False(t, filterNeedsAuth(filter))
+}
+
 func TestFilterNeedsAuth(t *testing.T) {
 	tests := []struct {
 		name      string

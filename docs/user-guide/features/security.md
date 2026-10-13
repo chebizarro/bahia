@@ -30,6 +30,14 @@ findings check and MCP SBOM reads with an explicit `org_id` consult this
 canonical edge, not a database row. Missing or legacy ownerless attribution
 does not grant visibility. MCP access itself remains operator-only; this edge
 does not by itself grant a tenant a new read route.
+The web's org-visible finding, schedule, and SBOM reference lists fold the
+latest signed attribution coordinate before displaying a content-addressed
+subject. A tombstone, malformed replacement, or unavailable OCK leaves the
+subject hidden. Operators who belong to several organizations see the union
+of the subjects attributed to those organizations; an explicit org filter
+narrows security findings and schedules to one organization. PostgreSQL keeps
+an optional derived attribution index, including revocations, replayed from
+signed local events after warm-start. The SQL index never grants visibility.
 
 ## Notifications and policy
 

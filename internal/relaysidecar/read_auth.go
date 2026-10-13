@@ -256,6 +256,9 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicSecurityFinding:       true,
 	kinds.CPStateTopicSecuritySchedule:      true,
 	kinds.CPStateTopicSecurityFindingDetail: true,
+	// Attribution payloads are org-OCK ciphertext; the signed coordinate carries
+	// only org, subject type and a content digest.
+	kinds.CPStateTopicSecurityAttribution: true,
 	// Supply-chain records are public to external verifiers; release payloads
 	// are OCK ciphertext. Runtime observations remain protected fleet state.
 	kinds.CPStateTopicLLMRelease:        true,

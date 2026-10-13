@@ -16,7 +16,21 @@ Repository, policy, recipe, and definition intents include the owning
 organization UUID in both `org` tag and `content.org_id`. The organization is
 fixed at creation. A legacy record without a canonical owner is not made
 usable by editing its SQL index; an operator must republish owner-attested
-canonical state.
+canonical state. There is currently no supported ownerless-coordinate
+republish command: the normal `apply_backup_repository`,
+`apply_backup_policy`, `apply_backup_recipe`, and `apply_backup_definition`
+MCP paths reject an existing ownerless head. Do not retry them with a guessed
+`org_id` or use a SQL row as the claim. Keep the affected coordinate blocked
+until the operator-approved org-to-coordinate attestation and signing path is
+specified and implemented.
+Configuration create, update, and delete intents read the owning record and
+their referenced records from verified service-signed local events. They
+publish canonical state before attempting a best-effort PostgreSQL index
+update; a database outage does not block configuration intents. Repository,
+policy, recipe, and definition IDs are minted by the author and are not
+resolved from SQL names. A signed tombstone makes a reference unusable. The
+optional SQL index carries `org_id` and is replayed from canonical heads after
+relay warm-start; its rows do not prove ownership.
 
 The MCP registry exposes apply, list, and inspect tools for each resource under both a base name such as `apply_backup_policy` and a `bahia_` alias such as `bahia_apply_backup_policy`. See [MCP Tools](../mcp-tools.md) for the complete names.
 

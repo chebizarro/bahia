@@ -46,7 +46,11 @@ func TestDBLessBackupAndLLMIntentsRejectMissingRepositories(t *testing.T) {
 				IntentProcessorConfig{EnabledDomains: map[string]bool{tc.domain: true}}, zap.NewNop())
 			processor.RegisterHandler(tc.domain, tc.handler)
 			err = processor.ProcessRelayIntent(t.Context(), event)
-			require.True(t, errors.Is(err, tc.want), "error = %v", err)
+			if tc.domain == "backup" {
+				require.ErrorContains(t, err, "canonical backup publisher is unavailable")
+			} else {
+				require.True(t, errors.Is(err, tc.want), "error = %v", err)
+			}
 			require.Len(t, statuses.events, 1)
 			require.Equal(t, "rejected", tagValueNostr(statuses.events[0].Tags, "status"))
 		})

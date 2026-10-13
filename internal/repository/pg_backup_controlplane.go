@@ -11,9 +11,10 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
-// PgBackupControlPlaneRepository stores authoritative backup control-plane state.
+// PgBackupControlPlaneRepository stores the derived backup control-plane index.
 type PgBackupControlPlaneRepository struct {
 	pool pgQueryer
 }
@@ -30,11 +31,54 @@ const backupRecipeColumns = `id, name, version, backend, repository_id, policy_i
 const backupPolicyColumns = `id, name, require_verification, verification_mode, metadata, created_at, updated_at`
 const backupRepositoryColumns = `id, name, backend, repository_uri, credential_profile, metadata, created_at, updated_at`
 const backupDefinitionColumns = `id, name, repository_id, repository_name, policy_id, policy_name, recipe_id, recipe_name, recipe_version, schedule_expression, schedule_enabled, schedule_jitter_window, tenant_id, tenant_name, environment_id, environment_name, owner_pubkey, requires_approval, approval_policy, restore_target_rules, executor_labels, capability_requirements, labels, group_name, metadata, created_at, updated_at, created_by`
+const backupRecipeSelectColumns = backupRecipeColumns + `, org_id`
+const backupPolicySelectColumns = backupPolicyColumns + `, org_id`
+const backupRepositorySelectColumns = backupRepositoryColumns + `, org_id`
+const backupDefinitionSelectColumns = backupDefinitionColumns + `, org_id`
 const backupScheduleStateColumns = `definition_id, next_scheduled_run, last_scheduled_dispatch, last_scheduled_run_due_at, missed_run_count, pause_reason, paused_by, paused_at, disabled_by, disable_reason, disabled_at, maintenance_window, maintenance_window_timezone, created_at, updated_at`
 const backupRunColumns = `id, recipe_id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, target_ref, snapshot_created, snapshot_id, verification_mode, verification_status, restore_eligibility, restore_eligibility_reason, verification_policy_failure, failure_category, publish_summary, error, metadata, started_at, finished_at, created_at, updated_at`
 const backupRestoreColumns = `id, backup_run_id, recipe_id, repository_id, policy_id, snapshot_id, restore_target_ref, requested_by, request_event_id, request_kind, request_d_tag, approval_status, approval_required, approval_requirement, approval_event_id, approved_by, approved_at, approval_message, approval_reason_code, approval_reason, status, backend, verification_status, evidence, publish_summary, error, verification_policy_failure, failure_category, metadata, started_at, finished_at, created_at, updated_at`
 const backupRetentionRunColumns = `id, repository_id, policy_id, requested_by, request_event_id, request_kind, request_d_tag, status, backend, dry_run, evidence, publish_summary, error, failure_category, metadata, started_at, finished_at, created_at, updated_at`
 const backupVerificationColumns = `id, backup_run_id, mode, status, verified, evidence, evidence_details, error, publish_summary, verified_at, created_at, updated_at`
+
+func backupOrgArg(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
+}
+
+// ResetBackupConfigIndex hides every existing configuration row before a
+// canonical replay. Rows remain for historical foreign keys, but SQL-only
+// state cannot remain visible when no signed head exists.
+func (r *PgBackupControlPlaneRepository) ResetBackupConfigIndex(ctx context.Context) error {
+	for _, table := range []string{"backup_definitions", "backup_recipes", "backup_policies", "backup_repositories"} {
+		if _, err := r.pool.Exec(ctx, `UPDATE `+table+` SET canonical_deleted = true`); err != nil {
+			return fmt.Errorf("hide stale %s rows: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// MarkBackupConfigDeleted mirrors a verified canonical tombstone. Rows remain
+// for foreign-key history, but active reads exclude them.
+func (r *PgBackupControlPlaneRepository) MarkBackupConfigDeleted(ctx context.Context, family int, id uuid.UUID) error {
+	var table string
+	switch family {
+	case kinds.BackupRecipeRegistry:
+		table = "backup_recipes"
+	case kinds.BackupPolicyRegistry:
+		table = "backup_policies"
+	case kinds.BackupRepositoryRegistry:
+		table = "backup_repositories"
+	case kinds.BackupDefinitionRegistry:
+		table = "backup_definitions"
+	default:
+		return fmt.Errorf("unknown backup config family %d", family)
+	}
+	_, err := r.pool.Exec(ctx, `UPDATE `+table+` SET canonical_deleted = true WHERE id = $1`, id)
+	return err
+}
 
 func (r *PgBackupControlPlaneRepository) UpsertBackupRecipe(ctx context.Context, recipe *domain.BackupRecipe) error {
 	if err := domain.ValidateBackupRecipe(recipe); err != nil {
@@ -57,9 +101,11 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRecipe(ctx context.Context,
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO backup_recipes (`+backupRecipeColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'::jsonb),$12,$13)
+		INSERT INTO backup_recipes (`+backupRecipeColumns+`, org_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, '{}'::jsonb),$12,$13,$14)
 		ON CONFLICT (id) DO UPDATE SET
+			org_id = EXCLUDED.org_id,
+			canonical_deleted = false,
 			name = EXCLUDED.name,
 			version = EXCLUDED.version,
 			backend = EXCLUDED.backend,
@@ -71,7 +117,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRecipe(ctx context.Context,
 			verification_mode = EXCLUDED.verification_mode,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
-	`, recipe.ID, recipe.Name, recipe.Version, recipe.Backend, recipe.RepositoryID, uuidPtrArg(recipe.PolicyID), recipe.TargetRef, includeJSON, excludeJSON, recipe.VerificationMode, metadataJSON, recipe.CreatedAt, recipe.UpdatedAt)
+	`, recipe.ID, recipe.Name, recipe.Version, recipe.Backend, recipe.RepositoryID, uuidPtrArg(recipe.PolicyID), recipe.TargetRef, includeJSON, excludeJSON, recipe.VerificationMode, metadataJSON, recipe.CreatedAt, recipe.UpdatedAt, backupOrgArg(recipe.OrgID))
 	if err != nil {
 		return fmt.Errorf("upserting backup recipe: %w", err)
 	}
@@ -79,16 +125,16 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRecipe(ctx context.Context,
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupRecipe(ctx context.Context, id uuid.UUID) (*domain.BackupRecipe, error) {
-	return r.scanBackupRecipe(r.pool.QueryRow(ctx, `SELECT `+backupRecipeColumns+` FROM backup_recipes WHERE id = $1`, id))
+	return r.scanBackupRecipe(r.pool.QueryRow(ctx, `SELECT `+backupRecipeSelectColumns+` FROM backup_recipes WHERE id = $1 AND NOT canonical_deleted`, id))
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupRecipeByNameVersion(ctx context.Context, name, version string) (*domain.BackupRecipe, error) {
-	return r.scanBackupRecipe(r.pool.QueryRow(ctx, `SELECT `+backupRecipeColumns+` FROM backup_recipes WHERE name = $1 AND version = $2`, strings.TrimSpace(name), strings.TrimSpace(version)))
+	return r.scanBackupRecipe(r.pool.QueryRow(ctx, `SELECT `+backupRecipeSelectColumns+` FROM backup_recipes WHERE name = $1 AND version = $2 AND NOT canonical_deleted`, strings.TrimSpace(name), strings.TrimSpace(version)))
 }
 
 func (r *PgBackupControlPlaneRepository) ListBackupRecipes(ctx context.Context, limit, offset int) ([]domain.BackupRecipe, error) {
 	limit, offset = backupLimitOffset(limit, offset)
-	rows, err := r.pool.Query(ctx, `SELECT `+backupRecipeColumns+` FROM backup_recipes ORDER BY name ASC, version ASC LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := r.pool.Query(ctx, `SELECT `+backupRecipeSelectColumns+` FROM backup_recipes WHERE NOT canonical_deleted ORDER BY name ASC, version ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing backup recipes: %w", err)
 	}
@@ -109,15 +155,17 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupPolicy(ctx context.Context,
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO backup_policies (`+backupPolicyColumns+`)
-		VALUES ($1,$2,$3,$4,COALESCE($5, '{}'::jsonb),$6,$7)
+		INSERT INTO backup_policies (`+backupPolicyColumns+`, org_id)
+		VALUES ($1,$2,$3,$4,COALESCE($5, '{}'::jsonb),$6,$7,$8)
 		ON CONFLICT (id) DO UPDATE SET
+			org_id = EXCLUDED.org_id,
+			canonical_deleted = false,
 			name = EXCLUDED.name,
 			require_verification = EXCLUDED.require_verification,
 			verification_mode = EXCLUDED.verification_mode,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
-	`, policy.ID, policy.Name, policy.RequireVerification, policy.VerificationMode, metadataJSON, policy.CreatedAt, policy.UpdatedAt)
+	`, policy.ID, policy.Name, policy.RequireVerification, policy.VerificationMode, metadataJSON, policy.CreatedAt, policy.UpdatedAt, backupOrgArg(policy.OrgID))
 	if err != nil {
 		return fmt.Errorf("upserting backup policy: %w", err)
 	}
@@ -125,16 +173,16 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupPolicy(ctx context.Context,
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupPolicy(ctx context.Context, id uuid.UUID) (*domain.BackupPolicy, error) {
-	return r.scanBackupPolicy(r.pool.QueryRow(ctx, `SELECT `+backupPolicyColumns+` FROM backup_policies WHERE id = $1`, id))
+	return r.scanBackupPolicy(r.pool.QueryRow(ctx, `SELECT `+backupPolicySelectColumns+` FROM backup_policies WHERE id = $1 AND NOT canonical_deleted`, id))
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupPolicyByName(ctx context.Context, name string) (*domain.BackupPolicy, error) {
-	return r.scanBackupPolicy(r.pool.QueryRow(ctx, `SELECT `+backupPolicyColumns+` FROM backup_policies WHERE name = $1`, strings.TrimSpace(name)))
+	return r.scanBackupPolicy(r.pool.QueryRow(ctx, `SELECT `+backupPolicySelectColumns+` FROM backup_policies WHERE name = $1 AND NOT canonical_deleted`, strings.TrimSpace(name)))
 }
 
 func (r *PgBackupControlPlaneRepository) ListBackupPolicies(ctx context.Context, limit, offset int) ([]domain.BackupPolicy, error) {
 	limit, offset = backupLimitOffset(limit, offset)
-	rows, err := r.pool.Query(ctx, `SELECT `+backupPolicyColumns+` FROM backup_policies ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := r.pool.Query(ctx, `SELECT `+backupPolicySelectColumns+` FROM backup_policies WHERE NOT canonical_deleted ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing backup policies: %w", err)
 	}
@@ -155,16 +203,18 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRepository(ctx context.Cont
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO backup_repositories (`+backupRepositoryColumns+`)
-		VALUES ($1,$2,$3,$4,$5,COALESCE($6, '{}'::jsonb),$7,$8)
+		INSERT INTO backup_repositories (`+backupRepositoryColumns+`, org_id)
+		VALUES ($1,$2,$3,$4,$5,COALESCE($6, '{}'::jsonb),$7,$8,$9)
 		ON CONFLICT (id) DO UPDATE SET
+			org_id = EXCLUDED.org_id,
+			canonical_deleted = false,
 			name = EXCLUDED.name,
 			backend = EXCLUDED.backend,
 			repository_uri = EXCLUDED.repository_uri,
 			credential_profile = EXCLUDED.credential_profile,
 			metadata = EXCLUDED.metadata,
 			updated_at = EXCLUDED.updated_at
-	`, repo.ID, repo.Name, repo.Backend, repo.RepositoryURI, repo.CredentialProfile, metadataJSON, repo.CreatedAt, repo.UpdatedAt)
+	`, repo.ID, repo.Name, repo.Backend, repo.RepositoryURI, repo.CredentialProfile, metadataJSON, repo.CreatedAt, repo.UpdatedAt, backupOrgArg(repo.OrgID))
 	if err != nil {
 		return fmt.Errorf("upserting backup repository: %w", err)
 	}
@@ -172,16 +222,16 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupRepository(ctx context.Cont
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupRepository(ctx context.Context, id uuid.UUID) (*domain.BackupRepository, error) {
-	return r.scanBackupRepository(r.pool.QueryRow(ctx, `SELECT `+backupRepositoryColumns+` FROM backup_repositories WHERE id = $1`, id))
+	return r.scanBackupRepository(r.pool.QueryRow(ctx, `SELECT `+backupRepositorySelectColumns+` FROM backup_repositories WHERE id = $1 AND NOT canonical_deleted`, id))
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupRepositoryByName(ctx context.Context, name string) (*domain.BackupRepository, error) {
-	return r.scanBackupRepository(r.pool.QueryRow(ctx, `SELECT `+backupRepositoryColumns+` FROM backup_repositories WHERE name = $1`, strings.TrimSpace(name)))
+	return r.scanBackupRepository(r.pool.QueryRow(ctx, `SELECT `+backupRepositorySelectColumns+` FROM backup_repositories WHERE name = $1 AND NOT canonical_deleted`, strings.TrimSpace(name)))
 }
 
 func (r *PgBackupControlPlaneRepository) ListBackupRepositories(ctx context.Context, limit, offset int) ([]domain.BackupRepository, error) {
 	limit, offset = backupLimitOffset(limit, offset)
-	rows, err := r.pool.Query(ctx, `SELECT `+backupRepositoryColumns+` FROM backup_repositories ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := r.pool.Query(ctx, `SELECT `+backupRepositorySelectColumns+` FROM backup_repositories WHERE NOT canonical_deleted ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing backup repositories: %w", err)
 	}
@@ -202,9 +252,11 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupDefinition(ctx context.Cont
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO backup_definitions (`+backupDefinitionColumns+`)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),COALESCE($21, '[]'::jsonb),COALESCE($22, '[]'::jsonb),COALESCE($23, '{}'::jsonb),$24,COALESCE($25, '{}'::jsonb),$26,$27,$28)
+		INSERT INTO backup_definitions (`+backupDefinitionColumns+`, org_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,COALESCE($20, '{}'::jsonb),COALESCE($21, '[]'::jsonb),COALESCE($22, '[]'::jsonb),COALESCE($23, '{}'::jsonb),$24,COALESCE($25, '{}'::jsonb),$26,$27,$28,$29)
 		ON CONFLICT (id) DO UPDATE SET
+			org_id = EXCLUDED.org_id,
+			canonical_deleted = false,
 			name = EXCLUDED.name,
 			repository_id = EXCLUDED.repository_id,
 			repository_name = EXCLUDED.repository_name,
@@ -233,7 +285,7 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupDefinition(ctx context.Cont
 	`, definition.ID, definition.Name, definition.RepositoryID, definition.RepositoryName, definition.PolicyID, definition.PolicyName, definition.RecipeID, definition.RecipeName,
 		definition.RecipeVersion, definition.ScheduleExpression, definition.ScheduleEnabled, definition.ScheduleJitterWindow, uuidPtrArg(definition.TenantID), definition.TenantName,
 		uuidPtrArg(definition.EnvironmentID), definition.EnvironmentName, definition.OwnerPubkey, definition.RequiresApproval, definition.ApprovalPolicy, restoreTargetRulesJSON,
-		executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, definition.Group, metadataJSON, definition.CreatedAt, definition.UpdatedAt, definition.CreatedBy)
+		executorLabelsJSON, capabilityRequirementsJSON, labelsJSON, definition.Group, metadataJSON, definition.CreatedAt, definition.UpdatedAt, definition.CreatedBy, backupOrgArg(definition.OrgID))
 	if err != nil {
 		return fmt.Errorf("upserting backup definition: %w", err)
 	}
@@ -241,16 +293,16 @@ func (r *PgBackupControlPlaneRepository) UpsertBackupDefinition(ctx context.Cont
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupDefinition(ctx context.Context, id uuid.UUID) (*domain.BackupDefinition, error) {
-	return r.scanBackupDefinition(r.pool.QueryRow(ctx, `SELECT `+backupDefinitionColumns+` FROM backup_definitions WHERE id = $1`, id))
+	return r.scanBackupDefinition(r.pool.QueryRow(ctx, `SELECT `+backupDefinitionSelectColumns+` FROM backup_definitions WHERE id = $1 AND NOT canonical_deleted`, id))
 }
 
 func (r *PgBackupControlPlaneRepository) GetBackupDefinitionByName(ctx context.Context, name string) (*domain.BackupDefinition, error) {
-	return r.scanBackupDefinition(r.pool.QueryRow(ctx, `SELECT `+backupDefinitionColumns+` FROM backup_definitions WHERE name = $1`, strings.TrimSpace(name)))
+	return r.scanBackupDefinition(r.pool.QueryRow(ctx, `SELECT `+backupDefinitionSelectColumns+` FROM backup_definitions WHERE name = $1 AND NOT canonical_deleted`, strings.TrimSpace(name)))
 }
 
 func (r *PgBackupControlPlaneRepository) ListBackupDefinitions(ctx context.Context, limit, offset int) ([]domain.BackupDefinition, error) {
 	limit, offset = backupLimitOffset(limit, offset)
-	rows, err := r.pool.Query(ctx, `SELECT `+backupDefinitionColumns+` FROM backup_definitions ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
+	rows, err := r.pool.Query(ctx, `SELECT `+backupDefinitionSelectColumns+` FROM backup_definitions WHERE NOT canonical_deleted ORDER BY name ASC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("listing backup definitions: %w", err)
 	}
@@ -897,7 +949,7 @@ func scanBackupRecipe(row scanner) (*domain.BackupRecipe, error) {
 	recipe := &domain.BackupRecipe{}
 	var policyID pgtype.UUID
 	var includeJSON, excludeJSON, metadataJSON []byte
-	if err := row.Scan(&recipe.ID, &recipe.Name, &recipe.Version, &recipe.Backend, &recipe.RepositoryID, &policyID, &recipe.TargetRef, &includeJSON, &excludeJSON, &recipe.VerificationMode, &metadataJSON, &recipe.CreatedAt, &recipe.UpdatedAt); err != nil {
+	if err := row.Scan(&recipe.ID, &recipe.Name, &recipe.Version, &recipe.Backend, &recipe.RepositoryID, &policyID, &recipe.TargetRef, &includeJSON, &excludeJSON, &recipe.VerificationMode, &metadataJSON, &recipe.CreatedAt, &recipe.UpdatedAt, &recipe.OrgID); err != nil {
 		return nil, err
 	}
 	recipe.PolicyID = uuidPtrFromPG(policyID)
@@ -928,7 +980,7 @@ func scanBackupRecipeRows(rows pgx.Rows) ([]domain.BackupRecipe, error) {
 func scanBackupPolicy(row scanner) (*domain.BackupPolicy, error) {
 	policy := &domain.BackupPolicy{}
 	var metadataJSON []byte
-	if err := row.Scan(&policy.ID, &policy.Name, &policy.RequireVerification, &policy.VerificationMode, &metadataJSON, &policy.CreatedAt, &policy.UpdatedAt); err != nil {
+	if err := row.Scan(&policy.ID, &policy.Name, &policy.RequireVerification, &policy.VerificationMode, &metadataJSON, &policy.CreatedAt, &policy.UpdatedAt, &policy.OrgID); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(metadataJSON, &policy.Metadata, "backup policy metadata"); err != nil {
@@ -952,7 +1004,7 @@ func scanBackupPolicyRows(rows pgx.Rows) ([]domain.BackupPolicy, error) {
 func scanBackupRepository(row scanner) (*domain.BackupRepository, error) {
 	repo := &domain.BackupRepository{}
 	var metadataJSON []byte
-	if err := row.Scan(&repo.ID, &repo.Name, &repo.Backend, &repo.RepositoryURI, &repo.CredentialProfile, &metadataJSON, &repo.CreatedAt, &repo.UpdatedAt); err != nil {
+	if err := row.Scan(&repo.ID, &repo.Name, &repo.Backend, &repo.RepositoryURI, &repo.CredentialProfile, &metadataJSON, &repo.CreatedAt, &repo.UpdatedAt, &repo.OrgID); err != nil {
 		return nil, err
 	}
 	if err := unmarshalJSON(metadataJSON, &repo.Metadata, "backup repository metadata"); err != nil {
@@ -981,7 +1033,7 @@ func scanBackupDefinition(row scanner) (*domain.BackupDefinition, error) {
 		&definition.RecipeID, &definition.RecipeName, &definition.RecipeVersion, &definition.ScheduleExpression, &definition.ScheduleEnabled,
 		&definition.ScheduleJitterWindow, &tenantID, &definition.TenantName, &environmentID, &definition.EnvironmentName, &definition.OwnerPubkey,
 		&definition.RequiresApproval, &definition.ApprovalPolicy, &restoreTargetRulesJSON, &executorLabelsJSON, &capabilityRequirementsJSON,
-		&labelsJSON, &definition.Group, &metadataJSON, &definition.CreatedAt, &definition.UpdatedAt, &definition.CreatedBy); err != nil {
+		&labelsJSON, &definition.Group, &metadataJSON, &definition.CreatedAt, &definition.UpdatedAt, &definition.CreatedBy, &definition.OrgID); err != nil {
 		return nil, err
 	}
 	definition.TenantID = uuidPtrFromPG(tenantID)

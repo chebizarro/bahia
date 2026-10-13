@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -40,9 +42,21 @@ import (
 //
 // confidential cp-state for security findings and schedules.
 type SecurityCanonicalPublisher struct {
-	projector *Projector
-	encryptor ConfidentialStateEncryptor
-	logger    *zap.Logger
+	projector        *Projector
+	encryptor        ConfidentialStateEncryptor
+	attributionIndex interface {
+		ResetAttributionIndex(context.Context) error
+		UpsertAttribution(context.Context, domain.SecurityAttribution, string, int64) error
+	}
+	logger *zap.Logger
+}
+
+// SetAttributionIndex installs an optional derived-only SQL mirror.
+func (p *SecurityCanonicalPublisher) SetAttributionIndex(index interface {
+	ResetAttributionIndex(context.Context) error
+	UpsertAttribution(context.Context, domain.SecurityAttribution, string, int64) error
+}) {
+	p.attributionIndex = index
 }
 
 // NewSecurityCanonicalPublisher creates a publisher backed by the given
@@ -371,7 +385,151 @@ func (p *SecurityCanonicalPublisher) PublishAttribution(ctx context.Context, a *
 	if err != nil {
 		return fmt.Errorf("encrypt security attribution: %w", err)
 	}
-	return p.projector.publishCanonicalFirst(ctx, KindSecurityAttributionRecord, d, !a.Visible, tags, string(content), encrypted, "security_attribution.projection", nil)
+	if err := p.projector.publishCanonicalFirst(ctx, KindSecurityAttributionRecord, d, !a.Visible, tags, string(content), encrypted, "security_attribution.projection", nil); err != nil {
+		return err
+	}
+	if p.attributionIndex != nil {
+		if err := p.indexAttribution(ctx, d); err != nil {
+			p.logger.Warn("security attribution SQL mirror delayed", zap.String("coordinate", d), zap.Error(err))
+		}
+	}
+	return nil
+}
+
+func (p *SecurityCanonicalPublisher) indexAttribution(ctx context.Context, d string) error {
+	records, err := p.projector.history.FindByTag(ctx, "d", d, []int{KindCASControlState}, 2)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("signed attribution %s not retained yet", d)
+	}
+	winners, err := latestAttributionRecords(records)
+	if err != nil {
+		return err
+	}
+	edge, id, err := p.decodeAttribution(ctx, winners[d])
+	if err != nil {
+		return err
+	}
+	return p.attributionIndex.UpsertAttribution(ctx, edge, id, winners[d].CreatedAt.Unix())
+}
+
+// IndexDeliveredAttribution mirrors a relay-accepted signed event. SQL's
+// event ordering guard prevents a delayed older delivery from reviving a grant.
+func (p *SecurityCanonicalPublisher) IndexDeliveredAttribution(ctx context.Context, ev gonostr.Event) error {
+	if p == nil || p.attributionIndex == nil || ev.Kind != KindCASControlState ||
+		tagValue(ev.Tags, "t") != kinds.CPStateTopicSecurityAttribution {
+		return nil
+	}
+	record := nostrEventRecordFromEvent(ev, "security_attribution.projection", nil)
+	edge, id, err := p.decodeAttribution(ctx, *record)
+	if err != nil {
+		return err
+	}
+	return p.attributionIndex.UpsertAttribution(ctx, edge, id, int64(ev.CreatedAt))
+}
+
+// RebuildAttributionIndex replays signed local events, including revocation
+// tombstones. It never reads SQL to decide whether an edge exists.
+func (p *SecurityCanonicalPublisher) RebuildAttributionIndex(ctx context.Context) error {
+	if p == nil || p.attributionIndex == nil {
+		return nil
+	}
+	if p.projector == nil || p.projector.history == nil || p.encryptor == nil {
+		return fmt.Errorf("security attribution canonical replay unavailable")
+	}
+	records, err := p.projector.history.FindByTag(ctx, "t", kinds.CPStateTopicSecurityAttribution, []int{KindCASControlState}, canonicalViewLimit)
+	if err != nil {
+		return err
+	}
+	if len(records) >= canonicalViewLimit {
+		return fmt.Errorf("security attribution replay reached history limit")
+	}
+	winners, err := latestAttributionRecords(records)
+	if err != nil {
+		return err
+	}
+	if err := p.attributionIndex.ResetAttributionIndex(ctx); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(winners))
+	for d := range winners {
+		keys = append(keys, d)
+	}
+	sort.Strings(keys)
+	for _, d := range keys {
+		edge, id, err := p.decodeAttribution(ctx, winners[d])
+		if err != nil {
+			return err
+		}
+		if err := p.attributionIndex.UpsertAttribution(ctx, edge, id, winners[d].CreatedAt.Unix()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func latestAttributionRecords(records []repository.NostrEventRecord) (map[string]repository.NostrEventRecord, error) {
+	winners := make(map[string]repository.NostrEventRecord)
+	for _, record := range records {
+		ev, err := SignedEventFromRecord(record)
+		if err != nil {
+			return nil, err
+		}
+		d := tagValue(ev.Tags, "d")
+		if d == "" {
+			return nil, fmt.Errorf("security attribution lacks canonical coordinate")
+		}
+		if previous, ok := winners[d]; ok {
+			old, err := SignedEventFromRecord(previous)
+			if err != nil {
+				return nil, err
+			}
+			if ev.CreatedAt < old.CreatedAt || (ev.CreatedAt == old.CreatedAt && ev.ID.Hex() >= old.ID.Hex()) {
+				continue
+			}
+		}
+		winners[d] = record
+	}
+	return winners, nil
+}
+
+func (p *SecurityCanonicalPublisher) decodeAttribution(ctx context.Context, record repository.NostrEventRecord) (domain.SecurityAttribution, string, error) {
+	var edge domain.SecurityAttribution
+	ev, err := SignedEventFromRecord(record)
+	if err != nil {
+		return edge, "", err
+	}
+	edge.OrgID, err = uuid.Parse(tagValue(ev.Tags, "org"))
+	if err != nil {
+		return edge, "", fmt.Errorf("attribution org tag: %w", err)
+	}
+	edge.SubjectType = tagValue(ev.Tags, "subject_type")
+	edge.SubjectDigest = tagValue(ev.Tags, "subject_digest")
+	if err := domain.ValidateSecurityAttribution(&edge); err != nil {
+		return edge, "", err
+	}
+	d := SecurityAttributionDTag(edge)
+	if ev.PubKey.Hex() != p.projector.servicePubkey || tagValue(ev.Tags, "d") != d ||
+		tagValue(ev.Tags, "t") != kinds.CPStateTopicSecurityAttribution ||
+		tagValue(ev.Tags, "domain") != "security" || tagValue(ev.Tags, "schema") != kinds.CASControlStateSchema ||
+		tagValue(ev.Tags, "legacy_kind") != strconv.Itoa(KindSecurityAttributionRecord) ||
+		(tagValue(ev.Tags, "deleted") != "true" && tagValue(ev.Tags, "deleted") != "false") {
+		return edge, "", fmt.Errorf("security attribution has invalid canonical envelope")
+	}
+	if isTombstoneTags(ev.Tags) {
+		return edge, ev.ID.Hex(), nil
+	}
+	content, err := p.encryptor.DecryptConfidential(ctx, ev.Content, KindSecurityAttributionRecord, d, kinds.CPStateTopicSecurityAttribution)
+	if err != nil {
+		return edge, "", err
+	}
+	var saved domain.SecurityAttribution
+	if err := json.Unmarshal(content, &saved); err != nil || saved.OrgID != edge.OrgID || saved.SubjectType != edge.SubjectType || saved.SubjectDigest != edge.SubjectDigest || !saved.Visible {
+		return edge, "", fmt.Errorf("security attribution content conflicts with signed coordinate")
+	}
+	return saved, ev.ID.Hex(), nil
 }
 
 // HasAttribution reads the signed, org-encrypted relationship from retained
@@ -388,30 +546,18 @@ func (p *SecurityCanonicalPublisher) HasAttribution(ctx context.Context, a domai
 	if err != nil {
 		return false, err
 	}
-	for _, record := range records {
-		ev, err := SignedEventFromRecord(record)
-		if err != nil || ev.PubKey.Hex() != p.projector.servicePubkey ||
-			tagValue(ev.Tags, "d") != d || tagValue(ev.Tags, "t") != kinds.CPStateTopicSecurityAttribution ||
-			tagValue(ev.Tags, "domain") != "security" || tagValue(ev.Tags, "schema") != kinds.CASControlStateSchema ||
-			tagValue(ev.Tags, "legacy_kind") != strconv.Itoa(KindSecurityAttributionRecord) ||
-			tagValue(ev.Tags, "org") != a.OrgID.String() || tagValue(ev.Tags, "subject_digest") != a.SubjectDigest ||
-			tagValue(ev.Tags, "subject_type") != a.SubjectType {
-			return false, fmt.Errorf("security attribution has invalid canonical signature or envelope")
-		}
-		if isTombstoneTags(ev.Tags) {
-			return false, nil
-		}
-		content, err := p.encryptor.DecryptConfidential(ctx, ev.Content, KindSecurityAttributionRecord, d, kinds.CPStateTopicSecurityAttribution)
-		if err != nil {
-			return false, err
-		}
-		var saved domain.SecurityAttribution
-		if json.Unmarshal(content, &saved) != nil || saved.OrgID != a.OrgID || saved.SubjectType != a.SubjectType || saved.SubjectDigest != a.SubjectDigest {
-			return false, fmt.Errorf("security attribution content conflicts with signed coordinate")
-		}
-		return saved.Visible, nil
+	if len(records) == 0 {
+		return false, nil
 	}
-	return false, nil
+	winners, err := latestAttributionRecords(records)
+	if err != nil {
+		return false, err
+	}
+	edge, _, err := p.decodeAttribution(ctx, winners[d])
+	if err != nil {
+		return false, err
+	}
+	return edge.Visible, nil
 }
 func (p *SecurityCanonicalPublisher) PublishRun(ctx context.Context, run *domain.SecurityScanRun) error {
 	if run == nil || p == nil || p.projector == nil || !p.projector.Enabled() {

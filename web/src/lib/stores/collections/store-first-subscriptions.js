@@ -84,6 +84,7 @@ let handles = [];
 function publicFilters(servicePubkey, recent) {
   return [
     { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': STATE_TOPICS, limit: 1000 },
+    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [CP_STATE_TOPICS.SECURITY_ATTRIBUTION], limit: 1000 },
     { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [
       CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY
     ], limit: 500 },

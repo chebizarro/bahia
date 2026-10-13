@@ -1546,6 +1546,21 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if backupOwnerErr != nil {
 		logger.Warn("backup canonical ownership reader unavailable", zap.Error(backupOwnerErr))
 	}
+	var backupConfigReader controlplane.BackupConfigReader
+	var backupConfigIndex controlplane.BackupConfigIndex
+	if backupOwnerReader != nil {
+		backupConfigReader, _ = backupOwnerReader.(controlplane.BackupConfigReader)
+	}
+	if dbAvailable {
+		backupConfigIndex = backupRegistryRepo
+		if rebuilder, ok := backupOwnerReader.(controlplane.BackupConfigRebuilder); ok {
+			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := rebuilder.RebuildConfigIndex(ctx, backupConfigIndex); err != nil {
+					logger.Warn("backup SQL config index replay failed", zap.Error(err))
+				}
+			})
+		}
+	}
 	if cfg.BackupRun.AsyncIntakeEnabled {
 		if !enabledDomains["backup"] || !cfg.Nostr.PublishEnabled || backupHistory == nil || backupRunReceipts == nil ||
 			secretValues == nil || secretText == nil || secretResolver == nil || runtimeApplyLock == nil ||
@@ -1574,6 +1589,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				RunPending:               backupCanonical,
 				RunCredentialRecords:     secretText,
 				OwnerReader:              backupOwnerReader,
+				ConfigReader:             backupConfigReader,
+				ConfigIndex:              backupConfigIndex,
 				RunAsyncIntakeEnabled:    cfg.BackupRun.AsyncIntakeEnabled,
 				Status:                   intentStatus,
 				Logger:                   logger,
@@ -2405,6 +2422,19 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var securityCPPub *nostrAdapter.SecurityCanonicalPublisher
 	if nostrProjector != nil && confidentialEncryptor != nil {
 		securityCPPub = nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		if dbAvailable {
+			securityCPPub.SetAttributionIndex(repository.NewPgSecurityAttributionIndex(pool))
+			controlPlanePub.OnDelivered(func(ev nostr.Event) {
+				if err := securityCPPub.IndexDeliveredAttribution(context.Background(), ev); err != nil {
+					logger.Warn("security attribution SQL delivery mirror failed", zap.Error(err))
+				}
+			})
+			nostrProjector.AddPostWarmStartHook(func(ctx context.Context) {
+				if err := securityCPPub.RebuildAttributionIndex(ctx); err != nil {
+					logger.Warn("security attribution SQL index replay failed", zap.Error(err))
+				}
+			})
+		}
 		canonicalSecurity = service.NewCanonicalSecurityRepository(securityRepo, securityCPPub, logger)
 		policySvc.SetSecurityRepository(canonicalSecurity)
 		policySvc.SetCanonicalPolicyView(nostrAdapter.NewSecurityPolicyView(projectionHistory))
