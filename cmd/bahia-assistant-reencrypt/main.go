@@ -111,7 +111,8 @@ func main() {
 }
 
 func fail(stderr io.Writer, format string, args ...any) int {
-	fmt.Fprintf(stderr, "bahia-assistant-reencrypt: "+format+"\n", args...)
+	// Failure diagnostics are best-effort; the exit status already signals failure.
+	_, _ = fmt.Fprintf(stderr, "bahia-assistant-reencrypt: "+format+"\n", args...)
 	return exitFailure
 }
 
@@ -120,7 +121,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 	nostr.DebugLogger.SetOutput(io.Discard)
 	flags := flag.NewFlagSet("bahia-assistant-reencrypt", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	flags.Usage = func() { fmt.Fprint(stderr, usage) }
+	flags.Usage = func() {
+		// Flag usage has no error return; parsing still fails on invalid input.
+		_, _ = fmt.Fprint(stderr, usage)
+	}
 	configPath := flags.String("config", "", "daemon configuration file")
 	oldKeyFile := flags.String("old-key-file", "", "file holding the retired nostr.private_key")
 	execute := flags.Bool("execute", false, "sign and publish the re-established history")
@@ -131,7 +135,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return exitFailure
 	}
 	if *configPath == "" || *oldKeyFile == "" || *maxAttempts < 1 || *maxAttempts > 20 || *readTimeout <= 0 || *pageLimit < 1 || *pageLimit > 5000 {
-		fmt.Fprint(stderr, usage)
+		// Failure diagnostics are best-effort; the exit status already signals failure.
+		_, _ = fmt.Fprint(stderr, usage)
 		return exitFailure
 	}
 	cfg, err := d.loadConfig(*configPath)
@@ -178,7 +183,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return fail(stderr, "resolve the assistant transcript system key from Signet: %v", err)
 	}
 	defer release()
-	fmt.Fprintf(stderr, "retired identity %s; current identity %s; relays %s (quorum %d)\n", oldAuthor.Hex(), newAuthor.Hex(), strings.Join(relays, " "), quorum)
+	// Progress diagnostics are best-effort; they do not authorize publication.
+	_, _ = fmt.Fprintf(stderr, "retired identity %s; current identity %s; relays %s (quorum %d)\n", oldAuthor.Hex(), newAuthor.Hex(), strings.Join(relays, " "), quorum)
 
 	// The pool signs as the service, so it carries the daemon's relay rules:
 	// only nostr.controlled_relays, never a public relay, checked again on
@@ -193,12 +199,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 	read := historyReader{pool: pool, relays: pool.URLs(), pageLimit: *pageLimit, timeout: *readTimeout}
 	old, err := read.history(ctx, oldAuthor)
 	if err != nil {
-		fmt.Fprintf(stderr, "read the retired identity's history: %v\n", err)
+		// Failure diagnostics are best-effort; the exit status already signals failure.
+		_, _ = fmt.Fprintf(stderr, "read the retired identity's history: %v\n", err)
 		return exitIncomplete
 	}
 	current, err := read.history(ctx, newAuthor)
 	if err != nil {
-		fmt.Fprintf(stderr, "read the current identity's history: %v\n", err)
+		// Failure diagnostics are best-effort; the exit status already signals failure.
+		_, _ = fmt.Fprintf(stderr, "read the current identity's history: %v\n", err)
 		return exitIncomplete
 	}
 	plan, err := service.PlanAssistantReencryption(ctx, service.AssistantReencryptInput{
@@ -209,27 +217,40 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer, d deps) i
 		return fail(stderr, "%v", err)
 	}
 	topUps := current.underQuorum(newAuthor, quorum)
-	fmt.Fprintf(stdout, "retired history: %d events; already re-established: %d items\n", len(old), plan.Present)
-	fmt.Fprintf(stdout, "to publish: %d checkpoints, %d transcripts, %d session projections\n", plan.Checkpoints, plan.Transcripts, plan.Sessions)
-	fmt.Fprintf(stdout, "re-established events below quorum %d: %d\n", quorum, len(topUps))
+	if _, err := fmt.Fprintf(stdout, "retired history: %d events; already re-established: %d items\n", len(old), plan.Present); err != nil {
+		return exitFailure
+	}
+	if _, err := fmt.Fprintf(stdout, "to publish: %d checkpoints, %d transcripts, %d session projections\n", plan.Checkpoints, plan.Transcripts, plan.Sessions); err != nil {
+		return exitFailure
+	}
+	if _, err := fmt.Fprintf(stdout, "re-established events below quorum %d: %d\n", quorum, len(topUps)); err != nil {
+		return exitFailure
+	}
 	for _, failure := range plan.Failures {
-		fmt.Fprintf(stdout, "cannot re-establish %s\n", failure)
+		if _, err := fmt.Fprintf(stdout, "cannot re-establish %s\n", failure); err != nil {
+			return exitFailure
+		}
 	}
 	status := exitOK
 	if len(plan.Failures) > 0 {
 		status = exitIncomplete
 	}
 	if !*execute {
-		fmt.Fprintln(stdout, "dry run: nothing signed or published; re-run with --execute")
+		if _, err := fmt.Fprintln(stdout, "dry run: nothing signed or published; re-run with --execute"); err != nil {
+			return exitFailure
+		}
 		return status
 	}
 	// Events the current identity already holds below quorum go first: the
 	// plan's checkpoints may name them as predecessors.
 	work := append(topUps, fresh(plan.Events)...)
 	published, err := publishInOrder(ctx, pool, admission, work, quorum, *maxAttempts, d.wait)
-	fmt.Fprintf(stdout, "published %d of %d events to quorum\n", published, len(work))
+	if _, err := fmt.Fprintf(stdout, "published %d of %d events to quorum\n", published, len(work)); err != nil {
+		return exitFailure
+	}
 	if err != nil {
-		fmt.Fprintf(stderr, "publish stopped: %v; re-run to resume\n", err)
+		// Failure diagnostics are best-effort; the exit status already signals failure.
+		_, _ = fmt.Fprintf(stderr, "publish stopped: %v; re-run to resume\n", err)
 		return exitIncomplete
 	}
 	return status
