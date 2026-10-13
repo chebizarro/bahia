@@ -39,7 +39,7 @@ type assistantExecutionDeps struct {
 	// enumerates every assistant session from it once Readiness reports the
 	// first relay catch-up complete, after the startup topic migration
 	// has re-tagged every old-topic session it holds.
-	LocalStore service.SupervisionEventStore
+	LocalStore service.AssistantLocalEventStore
 	Readiness  service.SupervisionReadiness
 }
 
@@ -171,7 +171,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 	if err != nil {
 		return nil, err
 	}
-	store := service.NewAssistantExecutionStore(service.AssistantExecutionStoreConfig{Publisher: deps.Publisher, Subscriber: deps.Subscriber, Signer: deps.Signer, KeyProvider: deps.KeyProvider, ServicePubkey: deps.ServicePubkey})
+	store := service.NewAssistantExecutionStore(service.AssistantExecutionStoreConfig{Publisher: deps.Publisher, Subscriber: deps.Subscriber, Signer: deps.Signer, KeyProvider: deps.KeyProvider, ServicePubkey: deps.ServicePubkey, LocalStore: deps.LocalStore})
 	lifecycle := newAssistantExecutorLifecycle()
 	engine := service.NewAssistantExecutionEngine(service.AssistantExecutionEngineConfig{
 		Store:                      store,
@@ -183,6 +183,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		ScopeResolver:              proposalContext,
 		Evidence:                   &service.AssistantContextVMRequestEvidenceResolver{Subscriber: deps.Subscriber, RequestAuthor: deps.ServicePubkey, Methods: mcp.AssistantAsyncToolRequestMethods(), IntentEvidence: deps.MCPServer.ResolveAssistantIntentReceipt},
 		Publisher:                  deps.Publisher,
+		LocalStore:                 deps.LocalStore,
 		Signer:                     deps.Signer,
 		Subscriber:                 deps.Subscriber,
 		Identity:                   deps.Identity,
@@ -199,6 +200,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		Signer:          deps.Signer,
 		Identity:        deps.Identity,
 		InitialSessions: deps.InitialSessions,
+		LocalStore:      deps.LocalStore,
 		Logger:          slog.Default(),
 	})
 	recovery := service.NewAssistantSessionRecoveryRunner(orchestrator, service.AssistantSessionRecoveryConfig{PageLimit: 500, ServicePubkey: deps.ServicePubkey, Logger: slog.Default(), Engine: engine, Store: store, Subscriber: deps.Subscriber, LocalStore: deps.LocalStore, Readiness: deps.Readiness})
