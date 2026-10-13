@@ -455,7 +455,19 @@ func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess
 		if intent.Domain == "tool" && errors.Is(err, errToolApprovalAuthority) {
 			return err
 		}
-		if intent.Domain == kinds.VirtualizationDomain || (intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) {
+		if intent.Domain == "hostname" {
+			var superseded *intentSupersededError
+			if errors.As(err, &superseded) {
+				if p.status == nil {
+					return fmt.Errorf("%w: status publisher unavailable", err)
+				}
+				if statusErr := p.status.PublishSupersededChecked(ctx, intent, err.Error()); statusErr != nil {
+					return fmt.Errorf("%w: superseded status publication failed: %w", err, statusErr)
+				}
+				return err
+			}
+		}
+		if intent.Domain == kinds.VirtualizationDomain || intent.Domain == "hostname" || (intent.Domain == "tool" && (intent.Op == "approval-response" || intent.Op == "request")) {
 			if p.status == nil {
 				return fmt.Errorf("%w: rejection status publisher is unavailable", err)
 			}
@@ -649,7 +661,7 @@ func intentContentHash(content map[string]any) string {
 
 func requiresStrictIntentReplay(intent *Intent) bool {
 	switch intent.Domain {
-	case kinds.VirtualizationDomain:
+	case kinds.VirtualizationDomain, "hostname":
 		return true
 	case "hiveci-policy":
 		return true
@@ -816,7 +828,7 @@ var RegisteredIntentDomains = []string{
 	"dns", "worker", "deployment", "runtime", "org", "secret", "notification",
 	"artifact", "adoption",
 	"build", "tool",
-	"security", "sbom", "relay", "virtualization", "hiveci-policy",
+	"security", "sbom", "relay", "virtualization", "hiveci-policy", "hostname",
 }
 
 // BuildEnabledDomains enables every registered domain except explicit opt-outs.

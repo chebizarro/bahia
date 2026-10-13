@@ -165,3 +165,19 @@ Routes whose backing repository is unavailable return `503`. Payment reads and r
 - [CLI Reference](cli-reference.md)
 - [MCP Tools](mcp-tools.md)
 - [Settings](features/settings.md)
+
+## Public hostname mutation
+
+After reviewing the complete public-route plan, sign a `hostname` intent at
+`hostname:reservation:<normalized-hostname>` with `op=set` and that plan.
+Use `op=preserve` to verify the current owner without changing it. Use
+`op=remove` to withdraw DNS first, then Tunnel ingress (and owned internal
+HTTPS when configured), and publish the reservation tombstone. Include the
+canonical reservation's `updated_at` as `expected_updated_at` for every
+mutation after the first set, including reclaim after release. Watch the
+`30315` intent status, then subscribe to `#t=hostname-reservation` for the
+service-signed outcome and `#t=hostname-recovery` for removal progress.
+A route-attach or deploy plan without the matching claim is refused.
+Deploy and preview also accept `route_mutation=preserve|set|remove`. Omission
+preserves the currently deployed route unless `public_route` is supplied;
+`remove` requires the signed hostname tombstone before desired-state removal.

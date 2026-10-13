@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { buildIntentEvent } from '../../src/lib/nostr/intent-signer.js';
 import { artifactRegisterIntent, observedArtifactImportIntent, adoptionImportIntent,
   dnsDriftRemediateIntent, deploymentPreviewIntent, deploymentRouteAttachIntent,
-  policyEvaluateIntent } from '../../src/lib/nostr/last-ops-intents.js';
+  policyEvaluateIntent, hostnameRouteMutationIntent } from '../../src/lib/nostr/last-ops-intents.js';
 
 const orgId = '018f6a60-0000-7000-8000-000000000001';
 const fixture = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/d76-intent-content.json'), 'utf8'));
@@ -24,6 +24,22 @@ describe('last web intent operations', () => {
       expect(event.tags).toContainEqual(['d', shape.coordinate]);
     });
   }
+
+  it('binds explicit hostname set, preserve, and remove to one normalized coordinate', () => {
+    const base = { hostname: 'API.Example.COM.', service_id: 'service', environment_id: 'environment', deployment_unit_id: 'unit' };
+    for (const op of ['preserve', 'set', 'remove']) {
+      const payload = { ...base, route_mutation: op, expected_updated_at: '2026-10-13T00:00:00Z' };
+      if (op === 'set') payload.plan = { hostname: 'api.example.com' };
+      const request = hostnameRouteMutationIntent(payload, orgId, '0199f00d-0000-7000-8000-000000000001');
+      expect(request.op).toBe(op);
+      expect(request.coordinate).toBe('hostname:reservation:api.example.com');
+      expect(request.content.hostname).toBe('api.example.com');
+      expect(request.content.route_mutation).toBeUndefined();
+      expect(JSON.parse(buildIntentEvent({ ...request, pubkey: 'a'.repeat(64), createdAt: 100 }).content).expected_updated_at).toBe('2026-10-13T00:00:00Z');
+    }
+    expect(() => hostnameRouteMutationIntent({ ...base, route_mutation: 'remove', plan: {} }, orgId)).toThrow();
+    expect(() => hostnameRouteMutationIntent({ ...base, route_mutation: 'set' }, orgId)).toThrow();
+  });
 
   it('evaluates policy at the D77 coordinate with only bounded request fields', () => {
     const artifact = '018f6a60-0000-7000-8000-000000000005';

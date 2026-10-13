@@ -162,6 +162,7 @@ type ServiceDeployRequest struct {
 	Strategy                 string                     `json:"strategy,omitempty"`
 	Parameters               map[string]any             `json:"parameters,omitempty"`
 	ExpectedDesiredStateHash string                     `json:"expected_desired_state_hash"`
+	RouteMutation            domain.RouteMutation       `json:"route_mutation,omitempty"`
 	PublicRoute              *domain.PublicRouteRequest `json:"public_route,omitempty"`
 	IdempotencyKey           string                     `json:"idempotency_key,omitempty"`
 }
@@ -196,6 +197,7 @@ type ServiceDeployPreviewRequest struct {
 	DeploymentUnitID     *uuid.UUID                   `json:"deployment_unit_id,omitempty"`
 	ArtifactID           uuid.UUID                    `json:"artifact_id"`
 	ManagedRuntimeConfig *domain.ManagedRuntimeConfig `json:"managed_runtime_config"`
+	RouteMutation        domain.RouteMutation         `json:"route_mutation,omitempty"`
 	PublicRoute          *domain.PublicRouteRequest   `json:"public_route,omitempty"`
 	Compact              bool                         `json:"compact,omitempty"`
 	IdempotencyKey       string                       `json:"idempotency_key,omitempty"`

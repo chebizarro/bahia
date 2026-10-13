@@ -193,6 +193,24 @@ const CPStateFamilySoulFactoryAdapterLedger CPStateFamily = 32028
 // only. 32028 is the SoulFactory adapter ledger.
 const CPStateFamilyOperatorAllowlist CPStateFamily = 32029
 
+// CPStateFamilyHostnameReservation is plaintext service-signed ownership at
+// d=hostname:reservation:<normalized-hostname>, t=hostname-reservation.
+// CPStateFamilyHostnameRecovery is plaintext durable withdrawal progress at
+// d=hostname:recovery:<normalized-hostname>, t=hostname-recovery. Both are
+// 30900-only discriminators, never wire kinds.
+const (
+	CPStateFamilyHostnameReservation CPStateFamily = 32049
+	CPStateFamilyHostnameRecovery    CPStateFamily = 32050
+)
+
+const (
+	HostnameReservationDPrefix = "hostname:reservation:"
+	HostnameRecoveryDPrefix    = "hostname:recovery:"
+)
+
+func HostnameReservationDTag(hostname string) string { return HostnameReservationDPrefix + hostname }
+func HostnameRecoveryDTag(hostname string) string    { return HostnameRecoveryDPrefix + hostname }
+
 // Operator allowlist scopes. Each names the daemon config list the record
 // mirrors and the operator-authored kinds it authorizes.
 const (

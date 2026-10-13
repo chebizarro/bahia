@@ -218,7 +218,7 @@ func TestDefaultIntentDomainsProcessEveryRegisteredHandler(t *testing.T) {
 			require.NoError(t, err)
 			intent.Actor = actor
 			err = app.IntentProcessor.ProcessInProcess(context.Background(), intent)
-			if domainName == "hiveci-policy" || domainName == "virtualization" {
+			if domainName == "hiveci-policy" || domainName == "virtualization" || domainName == "hostname" {
 				// This domain requires a durable outcome status; the fixture has no write relays.
 				require.ErrorContains(t, err, "no write relays configured")
 			} else {
@@ -263,7 +263,7 @@ func TestIntentDomainsDisabledStopsExactlyListedDomains(t *testing.T) {
 		if domainName == "service" || domainName == "policy" {
 			require.ErrorContains(t, err, "disabled", domainName)
 			require.Empty(t, handler.received(), domainName)
-		} else if domainName == "hiveci-policy" || domainName == "virtualization" {
+		} else if domainName == "hiveci-policy" || domainName == "virtualization" || domainName == "hostname" {
 			require.ErrorContains(t, err, "no write relays configured")
 			require.Len(t, handler.received(), 1, domainName)
 		} else {

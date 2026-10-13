@@ -227,6 +227,10 @@ export const SBOM_PACKAGE_REGISTRY = 32018;
 export const RUNTIME_OBSERVATION_STATE = 32019;
 export const MANAGED_INSTANCE_HEALTH_RECORD = 32040;
 export const ROUTE_CANARY_RECORD = 32041;
+export const HOSTNAME_RESERVATION_RECORD = 32049;
+export const HOSTNAME_RECOVERY_RECORD = 32050;
+export const HOSTNAME_RESERVATION_D_PREFIX = 'hostname:reservation:';
+export const HOSTNAME_RECOVERY_D_PREFIX = 'hostname:recovery:';
 export const SOUL_RUNTIME_POLICY_RECORD = 32042;
 export const BLOSSOM_ADMIN_RECORD = 32043;
 export const BLOSSOM_BLOB_RECORD = 32044;
@@ -524,6 +528,8 @@ export const CP_STATE_TOPICS = Object.freeze({
   RUNTIME_OBSERVATION: 'runtime-observation',
   MANAGED_INSTANCE_HEALTH: 'runtime-instance-health',
   ROUTE_CANARY: 'route-canary',
+  HOSTNAME_RESERVATION: 'hostname-reservation',
+  HOSTNAME_RECOVERY: 'hostname-recovery',
   SOUL_RUNTIME_POLICY: 'soul-factory-runtime-policy',
   BLOSSOM_ADMIN: 'blossom-admin',
   BLOSSOM_BLOB: 'blossom-blob',

@@ -128,6 +128,8 @@ const (
 	CPStateTopicBackupRuntimeObservation = "backup-runtime"
 	CPStateTopicManagedInstanceHealth    = "runtime-instance-health"
 	CPStateTopicRouteCanary              = "route-canary"
+	CPStateTopicHostnameReservation      = "hostname-reservation"
+	CPStateTopicHostnameRecovery         = "hostname-recovery"
 	CPStateTopicSoulRuntimePolicy        = "soul-factory-runtime-policy"
 	CPStateTopicSoulFactorySagaRun       = "soul-factory-saga-run"
 	CPStateTopicSoulFactoryAdapterLedger = "soul-factory-adapter-ledger"

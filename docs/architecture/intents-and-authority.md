@@ -313,7 +313,7 @@ handler)`), and the domain name must be added to
 handler cannot be left out of default-on processing. Registered domains:
 `service`, `environment`, `policy`, `hiveci-policy`, `package`, `backup`, `llm`, `ml`, `dns`,
 `worker`, `deployment`, `runtime`, `org`, `secret`, `notification`, `artifact`,
-`adoption`, `build`, `tool`, `security`, `sbom`, `relay`. Every registered
+`adoption`, `build`, `tool`, `security`, `sbom`, `relay`, `hostname`. Every registered
 domain is processed by default; `nostr.intent_domains_disabled` opts specific
 domains out.
 
@@ -491,3 +491,12 @@ membership lists and NIP-78 kind `30078` policy documents directly
 publishes schema-v3 config-status `30900` records at
 `config-status:<service>:<policy>:<scope>`. Only `nostr.authorized_pubkeys`
 and the sidecar's explicit config-trusted pubkeys may author these two kinds.
+
+### Public hostname ownership
+
+The `hostname` intent handler is organization-scoped (`deployments:write`). It
+reads service-signed service, environment, and hostname records from the local
+relay-synced event store, never PostgreSQL. It waits for the initial canonical
+catch-up before accepting a mutation. Its `set`, `preserve`, and `remove`
+operations and recovery receipts are specified in the [event spec](../event-spec.md#public-hostname-reservations).
+The signer is the sole service-identity writer; no database lease is involved.

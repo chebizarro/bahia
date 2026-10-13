@@ -29,6 +29,14 @@ type CompensatingBackend interface {
 	ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (Compensation, error)
 }
 
+// WithdrawingBackend removes only resources held by the signed route plan.
+// The callback is invoked after each durable provider phase; a failed callback
+// stops the next effect so canonical recovery can resume safely.
+type WithdrawingBackend interface {
+	Backend
+	Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error
+}
+
 type Resolver interface {
 	Resolve(ref string) (Backend, bool)
 }

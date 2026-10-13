@@ -230,6 +230,82 @@ func (b *CloudflareBackend) ApplyWithCompensation(ctx context.Context, plan *dom
 	return compensate, nil
 }
 
+// Withdraw removes a claimed hostname in DNS-first order. It never deletes
+// foreign DNS records or an ingress rule whose origin no longer matches the
+// canonical plan. Every phase re-reads provider state, making retry after an
+// interrupted recovery receipt safe.
+func (b *CloudflareBackend) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error {
+	b.applyMu.Lock()
+	defer b.applyMu.Unlock()
+	if err := b.validatePlan(plan); err != nil {
+		return err
+	}
+	records, err := b.listDNS(ctx, plan)
+	if err != nil {
+		return err
+	}
+	ownership := cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)
+	for _, record := range records {
+		if record.Comment != ownership || !strings.EqualFold(record.Name, plan.Hostname) || record.Type != plan.DNS.Type || record.Content != plan.DNS.Value {
+			return fmt.Errorf("hostname %s has a foreign or changed DNS record; refusing withdrawal", plan.Hostname)
+		}
+	}
+	config, err := b.getTunnelConfig(ctx)
+	if err != nil {
+		return err
+	}
+	ingress, err := tunnelIngress(config)
+	if err != nil {
+		return err
+	}
+	for _, rule := range ingress {
+		host, _ := rule["hostname"].(string)
+		if strings.EqualFold(strings.TrimSpace(host), plan.Hostname) {
+			origin, _ := rule["service"].(string)
+			if strings.TrimSpace(origin) != plan.Tunnel.OriginURL {
+				return fmt.Errorf("hostname %s tunnel origin changed; refusing withdrawal", plan.Hostname)
+			}
+		}
+	}
+	zoneID := b.cfg.ZoneIDs[plan.Zone]
+	for _, record := range records {
+		if err := b.do(ctx, http.MethodDelete, fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, record.ID), nil, nil); err != nil {
+			return fmt.Errorf("withdraw DNS: %w", err)
+		}
+	}
+	if phase != nil {
+		if err := phase(ctx, "dns_withdrawn"); err != nil {
+			return err
+		}
+	}
+	var kept []map[string]any
+	removed := false
+	for _, rule := range ingress {
+		host, _ := rule["hostname"].(string)
+		if strings.EqualFold(strings.TrimSpace(host), plan.Hostname) {
+			removed = true
+			continue
+		}
+		kept = append(kept, rule)
+	}
+	if removed {
+		next, err := cloneTunnelConfig(config)
+		if err != nil {
+			return err
+		}
+		next["ingress"] = kept
+		if err := b.putTunnelConfig(ctx, next); err != nil {
+			return fmt.Errorf("withdraw tunnel ingress after DNS: %w", err)
+		}
+	}
+	if phase != nil {
+		if err := phase(ctx, "tunnel_withdrawn"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (b *CloudflareBackend) validatePlan(plan *domain.DesiredPublicRoutePlan) error {
 	if err := domain.ValidateDesiredPublicRoute(plan); err != nil {
 		return err

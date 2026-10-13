@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 // The functions below expose the projector's own envelope and tag builders to
@@ -287,6 +288,20 @@ func (r *RelayFirstStatePublisher) publishCoordinate(ctx context.Context, legacy
 	}
 	wireKind, baseTags := controlStateEnvelope(legacyKind, dTag, deleted)
 	return r.projector.publishSignedRelayFirst(ctx, wireKind, append(baseTags, tags...), content, entityType, &id, r.publisher)
+}
+
+// PublishHostnameRecord uses the shared 30900 envelope and relay-first
+// timestamp/dedupe path. It returns the accepted signed event so the ownership
+// handler can require local retention before allowing a provider effect.
+func (r *RelayFirstStatePublisher) PublishHostnameRecord(ctx context.Context, family kinds.CPStateFamily, coordinate string, deleted bool, content string) (*gonostr.Event, error) {
+	if r == nil || r.projector == nil || r.publisher == nil {
+		return nil, fmt.Errorf("hostname canonical publisher is not configured")
+	}
+	if family != kinds.CPStateFamilyHostnameReservation && family != kinds.CPStateFamilyHostnameRecovery {
+		return nil, fmt.Errorf("unsupported hostname record family")
+	}
+	wireKind, tags := controlStateEnvelope(int(family), coordinate, deleted)
+	return r.projector.publishSignedRelayFirstRecord(ctx, wireKind, tags, content, "hostname.projection", nil, r.publisher)
 }
 
 // Build, artifact, deployment intent and deployment run registry records -----

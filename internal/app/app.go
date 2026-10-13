@@ -1355,8 +1355,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// and a projection of an unchanged state is not re-signed. Once the
 	// quorum accepted, the control-plane outbox retries the remaining relays.
 	var relayFirstRegistry *service.RelayFirstRegistry
+	var hostnameStatePublisher *nostrAdapter.RelayFirstStatePublisher
 	if cfg.Nostr.PublishEnabled || cfg.Mode == "" || cfg.Mode == "full" {
 		statePublisher := nostrAdapter.NewRelayFirstStatePublisher(nostrProjector, controlPlanePub)
+		hostnameStatePublisher = statePublisher
 		relayFirstRegistry = service.NewRelayFirstRegistry(registry, statePublisher, logger)
 		// wire the cp-state publisher for build/artifact/intent/run
 		// families so RegistryService publishes canonical state directly from
@@ -1610,6 +1612,16 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		intentProcessor.RegisterHandler("dns", controlplane.NewDNSIntentHandler(dnsOperator, dnsCanonicalPub, mutations))
 	}
 	// --- end DNS intent registration ---
+
+	if enabledDomains["hostname"] && publicRoutePlanner != nil && hostnameStatePublisher != nil {
+		hostnameHandler, err := controlplane.NewHostnameIntentHandler(localEventStore, servicePubkey, hostnameStatePublisher, publicRoutePlanner, trustSet, bootstrapper.Ready)
+		if err != nil {
+			return nil, fmt.Errorf("configure canonical hostname intent: %w", err)
+		}
+		publicRoutePlanner.SetClaimChecker(hostnameHandler.RequireClaim)
+		publicRoutePlanner.SetReleaseChecker(hostnameHandler.RequireReleased)
+		intentProcessor.RegisterHandler("hostname", hostnameHandler)
+	}
 
 	// register service domain intent handler.
 	// Uses the relay-first registry when available (canonical 30900 published

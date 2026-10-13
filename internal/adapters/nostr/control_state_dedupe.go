@@ -713,6 +713,11 @@ func (p *Projector) publishSignedWithTombstoneDedupe(ctx context.Context, kind i
 // again. That event reached the quorum or is held by the outbox, which keeps
 // delivering it.
 func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID, publisher PreCommitPublisher) error {
+	_, err := p.publishSignedRelayFirstRecord(ctx, wireKind, tags, content, entityType, entityID, publisher)
+	return err
+}
+
+func (p *Projector) publishSignedRelayFirstRecord(ctx context.Context, wireKind int, tags gonostr.Tags, content, entityType string, entityID *uuid.UUID, publisher PreCommitPublisher) (*gonostr.Event, error) {
 	key := projectionKeyOf(wireKind, tags)
 	fingerprint := projectionFingerprint(wireKind, tags, content)
 	tombstone := isTombstoneTags(tags)
@@ -725,19 +730,19 @@ func (p *Projector) publishSignedRelayFirst(ctx context.Context, wireKind int, t
 
 	if !tombstone && p.projectionUnchanged(key, fingerprint) {
 		p.logger.Debug("relay-first record unchanged on its coordinate; not re-signed", zap.Int("kind", wireKind), zap.String("d", key.d))
-		return nil
+		return nil, nil
 	}
 	createdAt := p.nextProjectionCreatedAt(key)
 	ev := gonostr.Event{Kind: gonostr.Kind(wireKind), CreatedAt: createdAt, Tags: tags, Content: content}
 	if err := p.signEvent(ctx, &ev); err != nil {
-		return fmt.Errorf("sign relay-first record: %w", err)
+		return nil, fmt.Errorf("sign relay-first record: %w", err)
 	}
 	if err := publisher.PublishBeforeCommit(ctx, ev, entityType, entityID); err != nil {
-		return fmt.Errorf("publish relay-first record: %w", err)
+		return nil, fmt.Errorf("publish relay-first record: %w", err)
 	}
 	p.rememberProjection(key, fingerprint, createdAt)
 	p.logger.Debug("relay-first record published", zap.Int("kind", wireKind), zap.String("event_id", eventIDHex(&ev)))
-	return nil
+	return &ev, nil
 }
 
 // ForgetAbandonedProjection is the outbox publisher's abandon hook (see

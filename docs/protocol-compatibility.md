@@ -11,6 +11,7 @@ topic constants are in `internal/kinds`.
 | Desired-state mutation | `30900`, `t=bahia-intent` | client-signed; sensitive domains use a `1059`/`21059` gift wrap |
 | Hive-CI pipeline-policy mutation | `30900`, `domain=hiveci-policy`, `t=hiveci-policy` | fleet-operator-signed complete desired state at `hiveci:policy:<uuidv7>`; service-signed encrypted state/tombstone follows |
 | Intent disposition | `30315`, `t=intent-status` | requester-scoped accepted/rejected status; not durable state |
+| Public hostname ownership | `30900`, `domain=hostname` intent; service-signed `legacy_kind=32049` reservation and `32050` recovery | explicit set/preserve/remove with revision conflict; DNS-first withdrawal, no SQL lease |
 | Canonical state | `30900`, `schema=bahia.cp-state.v1` | addressable latest-wins record with a family `#t` topic |
 | Operational status | `30315` | addressable NIP-38 state/progress |
 | Audit | `4903` | immutable regular event without `d`; assistant checkpoints route by indexed `#t=assistant-checkpoint:<session_id>` |
