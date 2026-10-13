@@ -1522,14 +1522,15 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if enabledDomains["backup"] && backupRegistry != nil {
 		intentProcessor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(
 			controlplane.BackupIntentHandlerConfig{
-				Registry:     backupRegistry,
-				Definitions:  backupRegistry,
-				Publisher:    backupCanonical,
-				RunReceipts:  backupRunReceipts,
-				RunAdmission: backupCanonical,
-				RunPending:   backupCanonical,
-				Status:       intentStatus,
-				Logger:       logger,
+				Registry:                 backupRegistry,
+				SQLRepositoryUnavailable: !dbAvailable,
+				Definitions:              backupRegistry,
+				Publisher:                backupCanonical,
+				RunReceipts:              backupRunReceipts,
+				RunAdmission:             backupCanonical,
+				RunPending:               backupCanonical,
+				Status:                   intentStatus,
+				Logger:                   logger,
 			},
 		))
 		logger.Info("backup intent handler registered")

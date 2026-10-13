@@ -55,6 +55,10 @@ var ErrBackupRunPending = errors.New("backup run state is pending relay acceptan
 // when another signed request attempts to claim its immutable run identity.
 var ErrBackupRunAdmissionConflict = errors.New("backup run admission conflict")
 
+// ErrBackupRepositoryUnavailable refuses SQL-backed backup mutations when
+// the daemon is serving canonical state without a database.
+var ErrBackupRepositoryUnavailable = errors.New("backup repository unavailable")
+
 // BackupIntentCRUD is the read/write contract the backup intent handler uses
 // for level-triggered reconciliation. service.BackupRegistryService satisfies
 // the config entity methods; the definition registry extends it.
@@ -126,28 +130,30 @@ type BackupIntentExecutors struct {
 //
 // See docs/architecture/intents-and-authority.md.
 type BackupIntentHandler struct {
-	registry     BackupIntentCRUD
-	definitions  BackupIntentDefinitionCRUD
-	publisher    BackupIntentPublisher
-	runReceipts  BackupRunReceiptReader
-	runAdmission BackupRunAdmissionWriter
-	runPending   BackupRunPendingWriter
-	executors    BackupIntentExecutors
-	status       *IntentStatusPublisher
-	logger       *zap.Logger
+	registry                 BackupIntentCRUD
+	sqlRepositoryUnavailable bool
+	definitions              BackupIntentDefinitionCRUD
+	publisher                BackupIntentPublisher
+	runReceipts              BackupRunReceiptReader
+	runAdmission             BackupRunAdmissionWriter
+	runPending               BackupRunPendingWriter
+	executors                BackupIntentExecutors
+	status                   *IntentStatusPublisher
+	logger                   *zap.Logger
 }
 
 // BackupIntentHandlerConfig configures the backup intent handler.
 type BackupIntentHandlerConfig struct {
-	Registry     BackupIntentCRUD
-	Definitions  BackupIntentDefinitionCRUD
-	Publisher    BackupIntentPublisher
-	RunReceipts  BackupRunReceiptReader
-	RunAdmission BackupRunAdmissionWriter
-	RunPending   BackupRunPendingWriter
-	Executors    BackupIntentExecutors
-	Status       *IntentStatusPublisher
-	Logger       *zap.Logger
+	Registry                 BackupIntentCRUD
+	SQLRepositoryUnavailable bool
+	Definitions              BackupIntentDefinitionCRUD
+	Publisher                BackupIntentPublisher
+	RunReceipts              BackupRunReceiptReader
+	RunAdmission             BackupRunAdmissionWriter
+	RunPending               BackupRunPendingWriter
+	Executors                BackupIntentExecutors
+	Status                   *IntentStatusPublisher
+	Logger                   *zap.Logger
 }
 
 // NewBackupIntentHandler constructs the handler.
@@ -157,21 +163,28 @@ func NewBackupIntentHandler(cfg BackupIntentHandlerConfig) *BackupIntentHandler 
 		logger = zap.NewNop()
 	}
 	return &BackupIntentHandler{
-		registry:     cfg.Registry,
-		definitions:  cfg.Definitions,
-		publisher:    cfg.Publisher,
-		runReceipts:  cfg.RunReceipts,
-		runAdmission: cfg.RunAdmission,
-		runPending:   cfg.RunPending,
-		executors:    cfg.Executors,
-		status:       cfg.Status,
-		logger:       logger.Named("backup-intent"),
+		registry:                 cfg.Registry,
+		sqlRepositoryUnavailable: cfg.SQLRepositoryUnavailable,
+		definitions:              cfg.Definitions,
+		publisher:                cfg.Publisher,
+		runReceipts:              cfg.RunReceipts,
+		runAdmission:             cfg.RunAdmission,
+		runPending:               cfg.RunPending,
+		executors:                cfg.Executors,
+		status:                   cfg.Status,
+		logger:                   logger.Named("backup-intent"),
 	}
 }
 
 // HandleIntent processes a single backup intent. The processor has already
 // deduplicated, validated, and authorized the intent.
 func (h *BackupIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
+	if intent == nil {
+		return fmt.Errorf("backup intent is missing")
+	}
+	if intent.Op != "run" && (h.registry == nil || h.sqlRepositoryUnavailable) {
+		return fmt.Errorf("%w: %s requires a SQL-backed registry", ErrBackupRepositoryUnavailable, intent.Op)
+	}
 	switch intent.Op {
 	case "recipe-apply":
 		return h.handleRecipeApply(ctx, intent)
