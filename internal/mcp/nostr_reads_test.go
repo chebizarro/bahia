@@ -300,11 +300,12 @@ func TestMCPBackupStoreReadsMatchRepositoryFixture(t *testing.T) {
 	projector := nostrpool.NewProjector(config.NostrConfig{PrivateKey: sk.Hex(), PublishEnabled: true}, serviceServer.registry, sink, nil, zap.NewNop(), mcpProjectorSigner(t, sk))
 	publisher := nostrpool.NewBackupCanonicalPublisher(projector, zap.NewNop())
 	created := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
-	repo := domain.BackupRepository{ID: uuid.New(), Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://archive", CreatedAt: created, UpdatedAt: created}
-	policy := domain.BackupPolicy{ID: uuid.New(), Name: "verified", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, CreatedAt: created, UpdatedAt: created}
-	recipe := domain.BackupRecipe{ID: uuid.New(), Name: "postgres", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: repo.ID, PolicyID: &policy.ID, TargetRef: "/srv/postgres", CreatedAt: created, UpdatedAt: created}
-	definition := domain.BackupDefinition{ID: uuid.New(), Name: "postgres-prod", RepositoryID: repo.ID, RepositoryName: repo.Name, PolicyID: policy.ID, PolicyName: policy.Name, RecipeID: recipe.ID, RecipeName: recipe.Name, RecipeVersion: recipe.Version, CreatedAt: created, UpdatedAt: created}
-	run := domain.BackupRun{ID: uuid.New(), RecipeID: recipe.ID, RepositoryID: repo.ID, Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, TargetRef: recipe.TargetRef, CreatedAt: created, UpdatedAt: created}
+	orgID := uuid.New()
+	repo := domain.BackupRepository{ID: uuid.New(), OrgID: orgID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://archive", CreatedAt: created, UpdatedAt: created}
+	policy := domain.BackupPolicy{ID: uuid.New(), OrgID: orgID, Name: "verified", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, CreatedAt: created, UpdatedAt: created}
+	recipe := domain.BackupRecipe{ID: uuid.New(), OrgID: orgID, Name: "postgres", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: repo.ID, PolicyID: &policy.ID, TargetRef: "/srv/postgres", CreatedAt: created, UpdatedAt: created}
+	definition := domain.BackupDefinition{ID: uuid.New(), OrgID: orgID, Name: "postgres-prod", RepositoryID: repo.ID, RepositoryName: repo.Name, PolicyID: policy.ID, PolicyName: policy.Name, RecipeID: recipe.ID, RecipeName: recipe.Name, RecipeVersion: recipe.Version, CreatedAt: created, UpdatedAt: created}
+	run := domain.BackupRun{ID: uuid.New(), OrgID: orgID, DefinitionID: definition.ID, RecipeID: recipe.ID, RepositoryID: repo.ID, Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, TargetRef: recipe.TargetRef, CreatedAt: created, UpdatedAt: created}
 	restore := domain.BackupRestoreRun{ID: uuid.New(), BackupRunID: run.ID, RecipeID: recipe.ID, RepositoryID: repo.ID, Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, CreatedAt: created, UpdatedAt: created}
 	retention := domain.BackupRetentionRun{ID: uuid.New(), RepositoryID: repo.ID, Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, CreatedAt: created, UpdatedAt: created}
 	verification := domain.BackupVerificationRecord{ID: uuid.New(), BackupRunID: run.ID, Mode: domain.BackupVerificationKopiaSnapshotVerify, Status: domain.BackupVerificationSucceeded, Verified: true, CreatedAt: created, UpdatedAt: created}

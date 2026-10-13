@@ -41,7 +41,7 @@ func TestDBLessBackupAndLLMIntentsRejectMissingRepositories(t *testing.T) {
 			require.NoError(t, err)
 			intent.Actor = actor.Public().Hex()
 			statuses := &statusCollector{}
-			processor := NewIntentProcessor(NewTrustSet([]string{intent.Actor}, zap.NewNop()), openTestStore(t),
+			processor := NewIntentProcessor(NewTrustSet([]string{intent.Actor}, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): intent.Actor})), openTestStore(t),
 				NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 				IntentProcessorConfig{EnabledDomains: map[string]bool{tc.domain: true}}, zap.NewNop())
 			processor.RegisterHandler(tc.domain, tc.handler)

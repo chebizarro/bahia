@@ -125,6 +125,31 @@ type SecurityTarget struct {
 	UpdatedAt     time.Time          `json:"updated_at"`
 }
 
+// SecurityAttribution grants one organization visibility of a content-addressed
+// security target or SBOM subject. The subject itself remains shareable.
+type SecurityAttribution struct {
+	OrgID         uuid.UUID `json:"org_id"`
+	SubjectType   string    `json:"subject_type"`
+	SubjectDigest string    `json:"subject_digest"`
+	Visible       bool      `json:"visible"`
+}
+
+func ValidateSecurityAttribution(a *SecurityAttribution) error {
+	if a == nil || a.OrgID == uuid.Nil {
+		return fmt.Errorf("security attribution requires an org_id")
+	}
+	if a.SubjectType != "security-target" && a.SubjectType != "sbom" {
+		return fmt.Errorf("security attribution subject_type must be security-target or sbom")
+	}
+	if len(a.SubjectDigest) != 64 || strings.ToLower(a.SubjectDigest) != a.SubjectDigest {
+		return fmt.Errorf("security attribution requires a lowercase SHA-256 subject_digest")
+	}
+	if _, err := hex.DecodeString(a.SubjectDigest); err != nil {
+		return fmt.Errorf("security attribution subject_digest: %w", err)
+	}
+	return nil
+}
+
 // SecurityPackage identifies a package-coordinate target or finding coordinate.
 type SecurityPackage struct {
 	Ecosystem string `json:"ecosystem"`

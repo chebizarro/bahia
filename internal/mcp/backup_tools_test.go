@@ -164,6 +164,7 @@ func (m *memoryBackupReadModels) GetBackupVerificationByRunID(_ context.Context,
 
 func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
 	ctx := authorizedMCPContext()
+	orgID := uuid.New()
 	repoID := uuid.New()
 	policyID := uuid.New()
 	recipeID := uuid.New()
@@ -172,11 +173,11 @@ func TestBackupReadModelToolsListAndInspectDurableBackupState(t *testing.T) {
 	restoreID := uuid.New()
 	retentionRunID := uuid.New()
 	readModels := &memoryBackupReadModels{
-		repositories: []domain.BackupRepository{{ID: repoID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://archive"}},
-		policies:     []domain.BackupPolicy{{ID: policyID, Name: "verified", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify}},
-		recipes:      []domain.BackupRecipe{{ID: recipeID, Name: "postgres", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: repoID, PolicyID: &policyID, TargetRef: "/srv/postgres"}},
-		definitions:  []domain.BackupDefinition{{ID: definitionID, Name: "postgres-prod", RepositoryID: repoID, RepositoryName: "archive", PolicyID: policyID, PolicyName: "verified", RecipeID: recipeID, RecipeName: "postgres", RecipeVersion: "v1"}},
-		runs:         []domain.BackupRun{{ID: runID, RecipeID: recipeID, RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "operator", RequestEventID: "event", RequestKind: controlplane.KindBackupRunRequest, RequestDTag: "run:1", Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, TargetRef: "/srv/postgres", SnapshotCreated: true, SnapshotID: "snap-1", VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, VerificationStatus: domain.BackupVerificationSucceeded, RestoreEligibility: domain.RestoreEligibilityEligible}},
+		repositories: []domain.BackupRepository{{ID: repoID, OrgID: orgID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "kopia://archive"}},
+		policies:     []domain.BackupPolicy{{ID: policyID, OrgID: orgID, Name: "verified", RequireVerification: true, VerificationMode: domain.BackupVerificationKopiaSnapshotVerify}},
+		recipes:      []domain.BackupRecipe{{ID: recipeID, OrgID: orgID, Name: "postgres", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: repoID, PolicyID: &policyID, TargetRef: "/srv/postgres"}},
+		definitions:  []domain.BackupDefinition{{ID: definitionID, OrgID: orgID, Name: "postgres-prod", RepositoryID: repoID, RepositoryName: "archive", PolicyID: policyID, PolicyName: "verified", RecipeID: recipeID, RecipeName: "postgres", RecipeVersion: "v1"}},
+		runs:         []domain.BackupRun{{ID: runID, OrgID: orgID, DefinitionID: definitionID, RecipeID: recipeID, RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "operator", RequestEventID: "event", RequestKind: controlplane.KindBackupRunRequest, RequestDTag: "run:1", Status: domain.RunStatusSucceeded, Backend: domain.BackupBackendKopia, TargetRef: "/srv/postgres", SnapshotCreated: true, SnapshotID: "snap-1", VerificationMode: domain.BackupVerificationKopiaSnapshotVerify, VerificationStatus: domain.BackupVerificationSucceeded, RestoreEligibility: domain.RestoreEligibilityEligible}},
 		restores:     []domain.BackupRestoreRun{{ID: restoreID, BackupRunID: runID, RecipeID: recipeID, RepositoryID: repoID, PolicyID: &policyID, SnapshotID: "snap-1", RestoreTargetRef: "/restore/postgres", RequestedBy: "operator", RequestEventID: "restore-event", RequestKind: controlplane.KindBackupRestoreRequest, RequestDTag: "restore:1", ApprovalStatus: domain.BackupApprovalNotRequired, ApprovalRequirement: domain.BackupApprovalRequirementNone, Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia, VerificationStatus: domain.BackupVerificationSucceeded}},
 		retentions:   []domain.BackupRetentionRun{{ID: retentionRunID, RepositoryID: repoID, PolicyID: &policyID, RequestedBy: "operator", RequestEventID: "retention-event", RequestKind: controlplane.KindBackupRetentionEnforce, RequestDTag: "retention:1", Status: domain.RunStatusQueued, Backend: domain.BackupBackendKopia, DryRun: true}},
 		verification: &domain.BackupVerificationRecord{ID: uuid.New(), BackupRunID: runID, Mode: domain.BackupVerificationKopiaSnapshotVerify, Status: domain.BackupVerificationSucceeded, Verified: true},

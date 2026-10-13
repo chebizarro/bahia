@@ -56,6 +56,7 @@ var goCPStateTopics = map[string]string{
 	"SECURITY_FINDING_DETAIL":    CPStateTopicSecurityFindingDetail,
 	"SECURITY_TARGET":            CPStateTopicSecurityTarget,
 	"SECURITY_RUN":               CPStateTopicSecurityRun,
+	"SECURITY_ATTRIBUTION":       CPStateTopicSecurityAttribution,
 	"LLM_RELEASE":                CPStateTopicLLMRelease,
 	"ARTIFACT_SIGNATURE":         CPStateTopicArtifactSignature,
 	"ARTIFACT_SBOM":              CPStateTopicArtifactSBOM,

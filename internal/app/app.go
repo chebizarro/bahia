@@ -1527,6 +1527,10 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if backupReceiptErr != nil {
 		logger.Warn("backup run canonical receipt reader unavailable", zap.Error(backupReceiptErr))
 	}
+	backupOwnerReader, backupOwnerErr := controlplane.NewLocalBackupOwnershipReader(localEventStore, servicePubkey)
+	if backupOwnerErr != nil {
+		logger.Warn("backup canonical ownership reader unavailable", zap.Error(backupOwnerErr))
+	}
 	if cfg.BackupRun.AsyncIntakeEnabled {
 		if !enabledDomains["backup"] || !cfg.Nostr.PublishEnabled || backupHistory == nil || backupRunReceipts == nil ||
 			secretValues == nil || secretText == nil || secretResolver == nil || runtimeApplyLock == nil ||
@@ -1554,6 +1558,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 				RunAdmission:             backupCanonical,
 				RunPending:               backupCanonical,
 				RunCredentialRecords:     secretText,
+				OwnerReader:              backupOwnerReader,
 				RunAsyncIntakeEnabled:    cfg.BackupRun.AsyncIntakeEnabled,
 				Status:                   intentStatus,
 				Logger:                   logger,
@@ -2382,8 +2387,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// local event store, so it needs the projector and the confidential
 	// encryptor but no database; securityRepo is an optional SQL index.
 	var canonicalSecurity *service.CanonicalSecurityRepository
+	var securityCPPub *nostrAdapter.SecurityCanonicalPublisher
 	if nostrProjector != nil && confidentialEncryptor != nil {
-		securityCPPub := nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
+		securityCPPub = nostrAdapter.NewSecurityCanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		canonicalSecurity = service.NewCanonicalSecurityRepository(securityRepo, securityCPPub, logger)
 		policySvc.SetSecurityRepository(canonicalSecurity)
 		policySvc.SetCanonicalPolicyView(nostrAdapter.NewSecurityPolicyView(projectionHistory))
@@ -2398,16 +2404,17 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var securityScanner *service.SecurityScanner
 	if canonicalSecurity != nil && sbomStorageResolver != nil && nostrPub != nil && relayPool != nil {
 		securityScanner = service.NewSecurityScanner(service.SecurityScannerConfig{
-			Repo:       canonicalSecurity,
-			SBOMs:      sbomManifestRepo,
-			Policies:   policySvc,
-			Events:     publisher,
-			Storage:    sbomStorageResolver,
-			OSV:        securityAdapter.NewOSVClient(),
-			Publisher:  sbomPublishAdapter{publisher: nostrPub},
-			Subscriber: securityRelaySubscriber{pool: relayPool},
-			Pubkey:     servicePubkey,
-			Logger:     logger,
+			Repo:         canonicalSecurity,
+			SBOMs:        sbomManifestRepo,
+			Policies:     policySvc,
+			Events:       publisher,
+			Storage:      sbomStorageResolver,
+			OSV:          securityAdapter.NewOSVClient(),
+			Publisher:    sbomPublishAdapter{publisher: nostrPub},
+			Subscriber:   securityRelaySubscriber{pool: relayPool},
+			Pubkey:       servicePubkey,
+			Logger:       logger,
+			Attributions: securityCPPub,
 		})
 		// Publications recorded as queued become published when the outbox
 		// delivers their event, and failed_terminal if it abandons it.
@@ -2682,13 +2689,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 	}
 	mcpDeps := mcp.ServerDeps{
-		IntentProcessor:    intentProcessor,
-		StateStore:         localEventStore,
-		ServicePubkey:      servicePubkey,
-		ConfidentialReader: confidentialEncryptor,
-		LogService:         runLogService,
-		LLMRegistry:        llmRegistry,
-		Outbox:             localOutbox,
+		IntentProcessor:      intentProcessor,
+		StateStore:           localEventStore,
+		ServicePubkey:        servicePubkey,
+		ConfidentialReader:   confidentialEncryptor,
+		LogService:           runLogService,
+		LLMRegistry:          llmRegistry,
+		Outbox:               localOutbox,
+		SecurityAttributions: securityCPPub,
 	}
 	configureAuthorizationMCPDeps(&mcpDeps, cfg, tenantRBAC)
 	mcpServer, err := mcp.NewServerWithOptionsChecked(registry, logger, mcpDeps)
@@ -2942,7 +2950,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}))
 	}
 	if enabledDomains["security"] && securityScanner != nil {
-		intentProcessor.RegisterHandler("security", controlplane.NewSecurityScanIntentHandler(securityScanner))
+		intentProcessor.RegisterHandler("security", controlplane.NewSecurityScanIntentHandler(securityScanner, securityCPPub))
 	}
 	if enabledDomains["sbom"] && sbomAsyncRunner != nil {
 		intentProcessor.RegisterHandler("sbom", controlplane.NewSBOMIntentHandler(sbomAsyncRunner))

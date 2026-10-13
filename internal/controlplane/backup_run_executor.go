@@ -217,7 +217,9 @@ func (r *BackupRunExecutor) reconcile(ctx context.Context, record localstore.Bac
 			return fmt.Errorf("backup effect receipt conflicts with signed input")
 		}
 	} else {
-		if run.Backend != domain.BackupBackendKopia || run.VerificationMode != domain.BackupVerificationNone || run.ExecutionSnapshot == nil || run.ExecutionSnapshot.Policy != nil || run.ExecutionSnapshot.CredentialRef == nil || len(run.ExecutionSnapshot.Recipe.Include) != 0 || len(run.ExecutionSnapshot.Recipe.Exclude) != 0 {
+		if run.Backend != domain.BackupBackendKopia || run.VerificationMode != domain.BackupVerificationNone || run.ExecutionSnapshot == nil ||
+			(run.ExecutionSnapshot.Policy != nil && (run.ExecutionSnapshot.Policy.RequireVerification || run.ExecutionSnapshot.Policy.VerificationMode != domain.BackupVerificationNone)) ||
+			run.ExecutionSnapshot.CredentialRef == nil || len(run.ExecutionSnapshot.Recipe.Include) != 0 || len(run.ExecutionSnapshot.Recipe.Exclude) != 0 {
 			return fmt.Errorf("bahia-cd0wr: multi-step or non-Kopia backup recipe remains fail-closed")
 		}
 		receipt = backupRunEffectReceipt{IntentID: current.IntentID, Coordinate: current.Coordinate, RequestEventID: current.RequestEventID,

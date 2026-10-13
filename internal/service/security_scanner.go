@@ -114,19 +114,25 @@ type SecurityScannerConfig struct {
 	RecoveryLimit      int
 	FindingChunkSize   int
 	MaxConcurrentScans int
+	Attributions       interface {
+		HasAttribution(context.Context, domain.SecurityAttribution) (bool, error)
+	}
 }
 
 type SecurityScanner struct {
-	repo       repository.SecurityRepository
-	sboms      repository.SBOMManifestRepository
-	policies   SecurityPolicyProvider
-	events     events.Publisher
-	storage    *sbomadapter.StorageResolver
-	osv        SecurityOSVClient
-	publisher  SecurityVerifiedPublisher
-	subscriber SecurityRelaySubscriber
-	pubkey     string
-	logger     *zap.Logger
+	repo         repository.SecurityRepository
+	sboms        repository.SBOMManifestRepository
+	policies     SecurityPolicyProvider
+	events       events.Publisher
+	storage      *sbomadapter.StorageResolver
+	osv          SecurityOSVClient
+	publisher    SecurityVerifiedPublisher
+	subscriber   SecurityRelaySubscriber
+	pubkey       string
+	attributions interface {
+		HasAttribution(context.Context, domain.SecurityAttribution) (bool, error)
+	}
+	logger *zap.Logger
 
 	recoveryLimit      int
 	findingChunkSize   int
@@ -198,6 +204,7 @@ type SecurityObservableHint struct {
 }
 
 type SecurityFindingsListRequest struct {
+	OrgID         uuid.UUID               `json:"org_id,omitempty"`
 	RunID         *uuid.UUID              `json:"run_id,omitempty"`
 	TargetKeyHash string                  `json:"target_key_hash,omitempty"`
 	Severity      domain.SecuritySeverity `json:"severity,omitempty"`
@@ -268,6 +275,7 @@ func NewSecurityScanner(cfg SecurityScannerConfig) *SecurityScanner {
 		publisher:          cfg.Publisher,
 		subscriber:         cfg.Subscriber,
 		pubkey:             strings.TrimSpace(cfg.Pubkey),
+		attributions:       cfg.Attributions,
 		logger:             logger.Named("security-scanner"),
 		recoveryLimit:      recoveryLimit,
 		findingChunkSize:   chunkSize,
@@ -400,6 +408,29 @@ func (s *SecurityScanner) ListFindings(ctx context.Context, req SecurityFindings
 	}
 	if (req.RunID == nil || *req.RunID == uuid.Nil) && strings.TrimSpace(req.TargetKeyHash) == "" {
 		return nil, fmt.Errorf("security/findings-list requires run_id or target_key_hash")
+	}
+	if req.OrgID != uuid.Nil {
+		if s.attributions == nil {
+			return nil, fmt.Errorf("security attribution authorization is unavailable")
+		}
+		hash := strings.TrimSpace(req.TargetKeyHash)
+		if req.RunID != nil && *req.RunID != uuid.Nil {
+			run, err := s.repo.GetSecurityScanRun(ctx, *req.RunID)
+			if err != nil || run == nil {
+				return nil, fmt.Errorf("security run has no canonical state")
+			}
+			if hash != "" && hash != run.TargetKeyHash {
+				return nil, fmt.Errorf("security run and target hash conflict")
+			}
+			hash = run.TargetKeyHash
+		}
+		visible, err := s.attributions.HasAttribution(ctx, domain.SecurityAttribution{OrgID: req.OrgID, SubjectType: "security-target", SubjectDigest: hash})
+		if err != nil {
+			return nil, err
+		}
+		if !visible {
+			return nil, fmt.Errorf("security target is not attributed to this org")
+		}
 	}
 	limit, offset := boundedServiceLimit(req.Limit), req.Offset
 	if offset < 0 {

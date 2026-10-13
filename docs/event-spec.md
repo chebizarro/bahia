@@ -170,7 +170,7 @@ outcome is a bounded `30315` intent status. PostgreSQL is only an index.
 
 | `build` | `request` |
 | `tool` | `approval-response` |
-| `security` | `scan-run` |
+| `security` | `scan-run`, `attribution-apply` (operator-approved org visibility edge) |
 | `sbom` | `generate`, `import` |
 | `relay` | `policy-set` |
 
@@ -338,6 +338,7 @@ service pubkey:
 | Supply chain | `sbom-reference`, `sbom-availability`, `artifact-signature`, `artifact-sbom`, `artifact-sbom-package` | content-addressed (`sbom:…:<sha256>`) | public |
 | Security | `security-scan-status`, `security-summary` | `security:scan-summary:<run>`, `security:target:<hash>` | public |
 | Security (execution) | `security-target`, `security-run`, `security-schedule`, `security-finding`, `security-finding-detail` | `security:target:<hash>`, `security:run:<id>` | fleet-OCK ciphertext |
+| Security attribution | `security-attribution` | `security:attribution:<org-id>:<security-target\|sbom>:<sha256>` | org-OCK ciphertext; signed `org`, `subject_type`, `subject_digest` tags |
 | Security (details) | `security-findings`, `security-audit` | per run | protected (NIP-42) |
 | Runtime | `runtime-instance-health`, `route-canary`, `runtime-observation` | `runtime:recovery:…`, `runtime:maintenance:…`, `route:<svc>:<env>:<unit>:<host>` | health and canary public; observations protected |
 | Org and tenancy | `org-registry`, `org-member`, `org-invite`, `org-key-envelope` | `org:<id>`, `org:member:<org>:<pubkey>`, `org:invite:<org>:<id>` | OCK ciphertext |
@@ -352,6 +353,15 @@ service pubkey:
 | SoulFactory | `soul-factory-runtime-policy`, `soul-factory-saga-run`, `soul-factory-adapter-ledger` | per saga / ledger | protected; ledger is fleet-OCK ciphertext |
 | Continuity | `continuity-heartbeat` (on `30315`) | per worker | public |
 | Audit correlation | `cp-audit` (on `4903`) | — | protected (kind) |
+
+Backup repository, policy, recipe, definition, and run records carry an `org`
+tag and matching `content.org_id`. A backup run also carries
+`definition=backup-definition:<uuid>` and matching `definition_id` and
+`definition_coordinate` content fields. Its signed intent binds that org and
+definition ID; its execution snapshot pins the exact service-signed
+definition, recipe, repository, and optional policy event IDs. An ownerless
+legacy record does not confer authorization: the operator republishes
+owner-attested canonical state, rather than filling an ownership column in SQL.
 
 "Public" means the sidecar serves the topic to unauthenticated readers;
 "protected" means a NIP-42-authenticated, admitted reader is required

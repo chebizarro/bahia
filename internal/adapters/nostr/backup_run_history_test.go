@@ -57,7 +57,7 @@ func TestBackupRunHistoryStagesOnceWithLiveProof(t *testing.T) {
 	runner.SetAdmission(func(ctx context.Context, pending localstore.BackupRunPending, proof *BackupRunHistoryProof) error {
 		stages++
 		require.NoError(t, proof.StillCurrent())
-		run := &domain.BackupRun{ID: runID, RecipeID: uuid.New(), RepositoryID: uuid.New(), RequestedBy: actor.Public().Hex(),
+		run := &domain.BackupRun{ID: runID, OrgID: uuid.New(), DefinitionID: uuid.New(), RecipeID: uuid.New(), RepositoryID: uuid.New(), RequestedBy: actor.Public().Hex(),
 			RequestEventID: request.ID.Hex(), RequestKind: int(request.Kind), RequestDTag: coordinate, Status: domain.RunStatusQueued,
 			Backend: domain.BackupBackendKopia, TargetRef: "/data", VerificationMode: domain.BackupVerificationNone,
 			VerificationStatus: domain.BackupVerificationPending, CreatedAt: now, UpdatedAt: now}

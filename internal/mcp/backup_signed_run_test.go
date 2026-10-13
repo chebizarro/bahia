@@ -25,13 +25,15 @@ func signedMCPBackupRunEvent(t *testing.T, key nostr.SecretKey) nostr.Event {
 	id, err := uuid.NewV7()
 	require.NoError(t, err)
 	recipeID, repoID := uuid.New(), uuid.New()
+	orgID, definitionID := uuid.New(), uuid.New()
 	now := time.Now().UTC().Truncate(time.Second)
-	repository := domain.BackupRepository{ID: repoID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "file:/backup", CreatedAt: now, UpdatedAt: now}
-	recipe := domain.BackupRecipe{ID: recipeID, Name: "database", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: repoID, TargetRef: "/database", VerificationMode: domain.BackupVerificationNone, CreatedAt: now, UpdatedAt: now}
-	req := client.PublishIntentRequest{Domain: "backup", Op: "run", OrgID: uuid.NewString(), Coordinate: "backup-run:" + id.String(), IntentID: "backup-request:" + id.String(), Content: map[string]any{
-		"id": id.String(), "recipe_id": recipeID.String(), "repository_id": repoID.String(),
+	repository := domain.BackupRepository{ID: repoID, OrgID: orgID, Name: "archive", Backend: domain.BackupBackendKopia, RepositoryURI: "file:/backup", CreatedAt: now, UpdatedAt: now}
+	recipe := domain.BackupRecipe{ID: recipeID, OrgID: orgID, Name: "database", Version: "1", Backend: domain.BackupBackendKopia, RepositoryID: repoID, TargetRef: "/database", VerificationMode: domain.BackupVerificationNone, CreatedAt: now, UpdatedAt: now}
+	definition := domain.BackupDefinition{ID: definitionID, OrgID: orgID, RepositoryID: repoID, RecipeID: recipeID, CreatedAt: now, UpdatedAt: now}
+	req := client.PublishIntentRequest{Domain: "backup", Op: "run", OrgID: orgID.String(), Coordinate: "backup-run:" + id.String(), IntentID: "backup-request:" + id.String(), Content: map[string]any{
+		"id": id.String(), "org_id": orgID.String(), "definition_id": definitionID.String(), "recipe_id": recipeID.String(), "repository_id": repoID.String(),
 		"backend": recipe.Backend, "target_ref": recipe.TargetRef, "verification_mode": recipe.VerificationMode,
-		"execution_snapshot": domain.BackupExecutionSnapshot{RecipeEventID: nostr.Generate().Public().Hex(), RepositoryEventID: nostr.Generate().Public().Hex(), Recipe: recipe, Repository: repository},
+		"execution_snapshot": domain.BackupExecutionSnapshot{DefinitionEventID: nostr.Generate().Public().Hex(), RecipeEventID: nostr.Generate().Public().Hex(), RepositoryEventID: nostr.Generate().Public().Hex(), Definition: definition, Recipe: recipe, Repository: repository},
 	}}
 	event, err := (&client.IntentPublisher{}).BuildIntentEvent(req)
 	require.NoError(t, err)
@@ -157,7 +159,7 @@ func TestMCPBackupRunRetainedPendingCannotClaimPendingWhileIntakePaused(t *testi
 	signer, err := controlplane.NewPrivateKeySigner(service.Hex())
 	require.NoError(t, err)
 	status := controlplane.NewIntentStatusPublisher(func(context.Context, nostr.Event) error { return nil }, signer, zap.NewNop())
-	processor := controlplane.NewIntentProcessor(controlplane.NewTrustSet([]string{operator.Public().Hex()}, zap.NewNop()), store, status,
+	processor := controlplane.NewIntentProcessor(controlplane.NewTrustSet([]string{operator.Public().Hex()}, zap.NewNop(), controlplane.WithBootstrapOwners(map[string]string{intent.OrgID.String(): operator.Public().Hex()})), store, status,
 		controlplane.IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 	processor.RegisterHandler("backup", controlplane.NewBackupIntentHandler(controlplane.BackupIntentHandlerConfig{
 		RunAdmission: deps, RunPending: deps, RunReceipts: deps, Logger: zap.NewNop(),

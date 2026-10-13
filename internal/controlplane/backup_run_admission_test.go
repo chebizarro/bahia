@@ -81,6 +81,9 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 	raw, err := json.Marshal(content["execution_snapshot"])
 	require.NoError(t, err)
 	require.NoError(t, json.Unmarshal(raw, &snapshot))
+	definitionTags, definitionContent := nostradapter.BackupDefinitionRegistryRecord(&snapshot.Definition, false)
+	definitionEvent := configSnapshotEvent(t, serviceKey, kinds.BackupDefinitionRegistry, kinds.CPStateTopicBackupDefinition,
+		nostradapter.BackupDefinitionDTag(snapshot.Definition.ID), definitionTags, definitionContent)
 	recipeTags, recipeContent := nostradapter.BackupRecipeRegistryRecord(&snapshot.Recipe, false)
 	recipeEvent := configSnapshotEvent(t, serviceKey, kinds.BackupRecipeRegistry, kinds.CPStateTopicBackupRecipe,
 		nostradapter.BackupRecipeDTag(snapshot.Recipe.ID), recipeTags, recipeContent)
@@ -90,13 +93,13 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 	policyTags, policyContent := nostradapter.BackupPolicyRegistryRecord(snapshot.Policy, false)
 	policyEvent := configSnapshotEvent(t, serviceKey, kinds.BackupPolicyRegistry, kinds.CPStateTopicBackupPolicy,
 		nostradapter.BackupPolicyDTag(snapshot.Policy.ID), policyTags, policyContent)
-	snapshot.RecipeEventID, snapshot.RepositoryEventID, snapshot.PolicyEventID = recipeEvent.ID.Hex(), repoEvent.ID.Hex(), policyEvent.ID.Hex()
+	snapshot.DefinitionEventID, snapshot.RecipeEventID, snapshot.RepositoryEventID, snapshot.PolicyEventID = definitionEvent.ID.Hex(), recipeEvent.ID.Hex(), repoEvent.ID.Hex(), policyEvent.ID.Hex()
 	content["execution_snapshot"] = snapshot
 	encoded, err := json.Marshal(content)
 	require.NoError(t, err)
 	request.Content = string(encoded)
 	require.NoError(t, request.Sign(operatorKey))
-	for _, ev := range []nostr.Event{recipeEvent, repoEvent, policyEvent} {
+	for _, ev := range []nostr.Event{definitionEvent, recipeEvent, repoEvent, policyEvent} {
 		_, err = events.SaveEvent(ev)
 		require.NoError(t, err)
 		_, err = outbox.Enqueue(localstore.OutboxEntry{Event: ev, Target: "control-plane"})
@@ -109,7 +112,7 @@ func TestBackupRunAdmissionRetainsSignedPendingRequestAcrossRestart(t *testing.T
 	newProcessor := func() *IntentProcessor {
 		reader, err := NewLocalBackupRunReceipts(events, outbox, serviceKey.Public().Hex())
 		require.NoError(t, err)
-		processor := NewIntentProcessor(NewTrustSet([]string{operatorKey.Public().Hex()}, zap.NewNop()), openTestStore(t),
+		processor := NewIntentProcessor(NewTrustSet([]string{operatorKey.Public().Hex()}, zap.NewNop(), WithBootstrapOwners(map[string]string{tagValueNostr(request.Tags, "org"): operatorKey.Public().Hex()})), openTestStore(t),
 			NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 			IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 		admission := testBackupRunAdmission{events: events, outbox: outbox, key: serviceKey}

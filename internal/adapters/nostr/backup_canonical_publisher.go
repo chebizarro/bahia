@@ -88,6 +88,9 @@ func (p *BackupCanonicalPublisher) PublishRecipe(ctx context.Context, recipe *do
 	if p.projector == nil || !p.projector.Enabled() || recipe == nil {
 		return nil
 	}
+	if recipe.OrgID == uuid.Nil {
+		return fmt.Errorf("backup recipe requires canonical org ownership")
+	}
 	dTag := BackupRecipeDTag(recipe.ID)
 	tags, content := BackupRecipeRegistryRecord(recipe, false)
 	return p.projector.publishControlState(ctx, KindBackupRecipeRegistry, dTag, false, tags, content, "backup_recipe.projection", &recipe.ID)
@@ -97,6 +100,9 @@ func (p *BackupCanonicalPublisher) PublishRecipe(ctx context.Context, recipe *do
 func (p *BackupCanonicalPublisher) PublishPolicy(ctx context.Context, policy *domain.BackupPolicy) error {
 	if p.projector == nil || !p.projector.Enabled() || policy == nil {
 		return nil
+	}
+	if policy.OrgID == uuid.Nil {
+		return fmt.Errorf("backup policy requires canonical org ownership")
 	}
 	dTag := BackupPolicyDTag(policy.ID)
 	tags, content := BackupPolicyRegistryRecord(policy, false)
@@ -108,6 +114,9 @@ func (p *BackupCanonicalPublisher) PublishRepository(ctx context.Context, repo *
 	if p.projector == nil || !p.projector.Enabled() || repo == nil {
 		return nil
 	}
+	if repo.OrgID == uuid.Nil {
+		return fmt.Errorf("backup repository requires canonical org ownership")
+	}
 	dTag := BackupRepositoryDTag(repo.ID)
 	tags, content := BackupRepositoryRegistryRecord(repo, false)
 	return p.projector.publishControlState(ctx, KindBackupRepositoryRegistry, dTag, false, tags, content, "backup_repository.projection", &repo.ID)
@@ -117,6 +126,9 @@ func (p *BackupCanonicalPublisher) PublishRepository(ctx context.Context, repo *
 func (p *BackupCanonicalPublisher) PublishDefinition(ctx context.Context, def *domain.BackupDefinition) error {
 	if p.projector == nil || !p.projector.Enabled() || def == nil {
 		return nil
+	}
+	if def.OrgID == uuid.Nil {
+		return fmt.Errorf("backup definition requires canonical org ownership")
 	}
 	dTag := BackupDefinitionDTag(def.ID)
 	tags, content := BackupDefinitionRegistryRecord(def, false)
@@ -128,6 +140,9 @@ func (p *BackupCanonicalPublisher) PublishDefinition(ctx context.Context, def *d
 func (p *BackupCanonicalPublisher) PublishRun(ctx context.Context, run *domain.BackupRun) error {
 	if p.projector == nil || !p.projector.Enabled() || run == nil {
 		return nil
+	}
+	if run.OrgID == uuid.Nil || run.DefinitionID == uuid.Nil {
+		return fmt.Errorf("backup run requires canonical org and definition ownership")
 	}
 	var verification *domain.BackupVerificationRecord
 	if p.runVerifier != nil {

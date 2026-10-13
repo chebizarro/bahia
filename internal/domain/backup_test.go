@@ -19,6 +19,8 @@ func TestValidateBackupPolicyRequiresConcreteVerificationMode(t *testing.T) {
 
 func TestValidateBackupRunDefaultsQueuedAndPending(t *testing.T) {
 	run := &BackupRun{
+		OrgID:          uuid.New(),
+		DefinitionID:   uuid.New(),
 		RecipeID:       uuid.New(),
 		RepositoryID:   uuid.New(),
 		RequestedBy:    " requester ",
@@ -196,7 +198,7 @@ func TestValidateBackupRecipeAndRunRejectVeleroUntilSnapshotCapabilityExists(t *
 	require.ErrorIs(t, err, ErrInvalidValue)
 	require.Contains(t, err.Error(), "cannot create backup runs")
 
-	run := &BackupRun{RecipeID: uuid.New(), RepositoryID: repoID, RequestedBy: "pubkey", RequestEventID: "event", RequestKind: 38400, RequestDTag: "run", Backend: BackupBackendVelero, TargetRef: "velero:cluster-a"}
+	run := &BackupRun{OrgID: uuid.New(), DefinitionID: uuid.New(), RecipeID: uuid.New(), RepositoryID: repoID, RequestedBy: "pubkey", RequestEventID: "event", RequestKind: 38400, RequestDTag: "run", Backend: BackupBackendVelero, TargetRef: "velero:cluster-a"}
 	err = ValidateBackupRun(run)
 	require.ErrorIs(t, err, ErrInvalidValue)
 	require.Contains(t, err.Error(), "cannot create backup runs")

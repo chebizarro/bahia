@@ -96,7 +96,7 @@ func validateSignedBackupRunRequestWithFreshness(event *nostr.Event, actor strin
 	}
 	for key := range intent.Content {
 		switch key {
-		case "id", "recipe_id", "repository_id", "policy_id", "backend", "target_ref", "verification_mode", "execution_snapshot", "metadata", "intent_id":
+		case "id", "org_id", "definition_id", "recipe_id", "repository_id", "policy_id", "backend", "target_ref", "verification_mode", "execution_snapshot", "metadata", "intent_id":
 		default:
 			return nil, fmt.Errorf("backup request contains non-request field %q", key)
 		}
@@ -114,6 +114,9 @@ func validateSignedBackupRunRequestWithFreshness(event *nostr.Event, actor strin
 	if intent.Coordinate != "backup-run:"+run.ID.String() {
 		return nil, fmt.Errorf("backup request coordinate does not bind the run id")
 	}
+	if run.OrgID == uuid.Nil || run.OrgID != intent.OrgID || run.DefinitionID == uuid.Nil {
+		return nil, fmt.Errorf("backup request requires org_id matching the signed org tag and a definition_id; republish ownerless legacy definitions")
+	}
 	if run.RecipeID == uuid.Nil || run.RepositoryID == uuid.Nil || !run.Backend.IsValid() ||
 		strings.TrimSpace(run.TargetRef) == "" || !run.VerificationMode.IsValid() {
 		return nil, fmt.Errorf("backup request omits resolved execution inputs")
@@ -121,7 +124,7 @@ func validateSignedBackupRunRequestWithFreshness(event *nostr.Event, actor strin
 	if err := validateBackupExecutionSnapshot(run, run); err != nil {
 		return nil, err
 	}
-	for _, source := range []string{run.ExecutionSnapshot.RecipeEventID, run.ExecutionSnapshot.RepositoryEventID} {
+	for _, source := range []string{run.ExecutionSnapshot.DefinitionEventID, run.ExecutionSnapshot.RecipeEventID, run.ExecutionSnapshot.RepositoryEventID} {
 		if _, err := nostr.IDFromHex(source); err != nil {
 			return nil, fmt.Errorf("backup request has an invalid canonical config event id: %w", err)
 		}

@@ -887,7 +887,7 @@ func isBackupConfigEvent(ev nostr.Event) bool {
 		return false
 	}
 	switch outboxTag(ev.Tags, "t") {
-	case kinds.CPStateTopicBackupRecipe, kinds.CPStateTopicBackupRepository, kinds.CPStateTopicBackupPolicy:
+	case kinds.CPStateTopicBackupRecipe, kinds.CPStateTopicBackupRepository, kinds.CPStateTopicBackupPolicy, kinds.CPStateTopicBackupDefinition:
 		return true
 	default:
 		return false

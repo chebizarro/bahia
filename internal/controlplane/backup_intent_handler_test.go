@@ -15,14 +15,21 @@ import (
 
 // --- BackupIntentHandler tests -----------------------------------------------
 //
-// Backup intent handler tests: operations, permission, fleet scope, and
+// Backup intent handler tests: operations, permission, org scope, and
 // idempotent intent_id.
 
 func TestBackupIntentHandler_IsFleetScoped(t *testing.T) {
 	h := NewBackupIntentHandler(BackupIntentHandlerConfig{Logger: zap.NewNop()})
-	if !h.IsFleetScoped() {
-		t.Error("backup intent handler must be fleet-scoped")
+	if h.IsFleetScoped() {
+		t.Error("backup intent handler must use org backups:manage")
 	}
+}
+
+type fakeBackupOwnerReader struct{ owned map[uuid.UUID]uuid.UUID }
+
+func (f fakeBackupOwnerReader) OwnerOf(_ context.Context, _ int, id uuid.UUID) (uuid.UUID, bool, error) {
+	owner, found := f.owned[id]
+	return owner, found, nil
 }
 
 func TestBackupIntentHandler_PermissionForManageBackups(t *testing.T) {
@@ -54,18 +61,22 @@ func TestBackupIntentHandler_UnknownOpReturnsError(t *testing.T) {
 func TestBackupIntentHandler_RecipeApply(t *testing.T) {
 	registry := newFakeBackupIntentRegistry()
 	publisher := &fakeBackupIntentPublisher{}
+	repoID, recipeID := uuid.New(), uuid.New()
 	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
-		Registry:  registry,
-		Publisher: publisher,
-		Logger:    zap.NewNop(),
+		Registry:    registry,
+		Publisher:   publisher,
+		OwnerReader: fakeBackupOwnerReader{owned: map[uuid.UUID]uuid.UUID{repoID: testOrgID()}},
+		Logger:      zap.NewNop(),
 	})
 
-	repoID := uuid.New()
-	registry.repositories[repoID] = &domain.BackupRepository{ID: repoID, Name: "test-repo", Backend: domain.BackupBackendKopia}
+	registry.repositories[repoID] = &domain.BackupRepository{ID: repoID, OrgID: testOrgID(), Name: "test-repo", Backend: domain.BackupBackendKopia}
 
 	intent := &Intent{
-		Op: "recipe-apply",
+		Op:    "recipe-apply",
+		OrgID: testOrgID(),
 		Content: map[string]any{
+			"id":            recipeID.String(),
+			"org_id":        testOrgID().String(),
 			"name":          "daily-backup",
 			"version":       "v1.0",
 			"backend":       "kopia",
@@ -82,25 +93,40 @@ func TestBackupIntentHandler_RecipeApply(t *testing.T) {
 	if len(registry.recipes) != 1 {
 		t.Errorf("expected 1 recipe, got %d", len(registry.recipes))
 	}
+	require.Equal(t, testOrgID(), registry.recipes[recipeID].OrgID)
 	if publisher.recipeCount != 1 {
 		t.Errorf("expected 1 recipe publish, got %d", publisher.recipeCount)
 	}
 }
 
+func TestBackupIntentHandlerDoesNotIndexUnpublishedPolicy(t *testing.T) {
+	id := uuid.New()
+	registry := newFakeBackupIntentRegistry()
+	publisher := &fakeBackupIntentPublisher{err: fmt.Errorf("relay outbox unavailable")}
+	h := NewBackupIntentHandler(BackupIntentHandlerConfig{Registry: registry, Publisher: publisher, OwnerReader: fakeBackupOwnerReader{}, Logger: zap.NewNop()})
+	intent := &Intent{Op: "policy-apply", OrgID: testOrgID(), Content: map[string]any{
+		"id": id.String(), "org_id": testOrgID().String(), "name": "retention", "verification_mode": "none",
+	}}
+	require.ErrorContains(t, h.HandleIntent(t.Context(), intent), "relay outbox unavailable")
+	require.Empty(t, registry.policies, "SQL cannot advance before canonical publication")
+}
+
 func TestBackupIntentHandler_Delete(t *testing.T) {
 	registry := newFakeBackupIntentRegistry()
 	publisher := &fakeBackupIntentPublisher{}
+	recipeID := uuid.New()
 	h := NewBackupIntentHandler(BackupIntentHandlerConfig{
-		Registry:  registry,
-		Publisher: publisher,
-		Logger:    zap.NewNop(),
+		Registry:    registry,
+		Publisher:   publisher,
+		OwnerReader: fakeBackupOwnerReader{owned: map[uuid.UUID]uuid.UUID{recipeID: testOrgID()}},
+		Logger:      zap.NewNop(),
 	})
 
-	recipeID := uuid.New()
-	registry.recipes[recipeID] = &domain.BackupRecipe{ID: recipeID, Name: "to-delete", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/"}
+	registry.recipes[recipeID] = &domain.BackupRecipe{ID: recipeID, OrgID: testOrgID(), Name: "to-delete", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "/"}
 
 	intent := &Intent{
-		Op: "delete",
+		Op:    "delete",
+		OrgID: testOrgID(),
 		Content: map[string]any{
 			"entity_type": "recipe",
 			"entity_id":   recipeID.String(),
@@ -234,6 +260,7 @@ func (r *fakeBackupIntentRegistry) CreateBackupRetentionRunIfAbsent(_ context.Co
 }
 
 type fakeBackupIntentPublisher struct {
+	err             error
 	recipeCount     int
 	policyCount     int
 	repositoryCount int
@@ -247,6 +274,9 @@ func (p *fakeBackupIntentPublisher) PublishRecipe(_ context.Context, _ *domain.B
 }
 
 func (p *fakeBackupIntentPublisher) PublishPolicy(_ context.Context, _ *domain.BackupPolicy) error {
+	if p.err != nil {
+		return p.err
+	}
 	p.policyCount++
 	return nil
 }

@@ -578,6 +578,7 @@ var cpStateFamilies = map[int]cpStateFamily{
 	KindSecurityFindingDetailRecord: {"security", "finding-detail", kinds.CPStateTopicSecurityFindingDetail},
 	KindSecurityTargetRecord:        {"security", "target", kinds.CPStateTopicSecurityTarget},
 	KindSecurityRunRecord:           {"security", "run", kinds.CPStateTopicSecurityRun},
+	KindSecurityAttributionRecord:   {"security", "attribution", kinds.CPStateTopicSecurityAttribution},
 	// Adoption binding family.
 	KindAdoptionBindingRecord:  {"adoption", "binding", kinds.CPStateTopicAdoptionBinding},
 	KindHiveCIPolicyRecord:     {"hiveci", "policy", kinds.CPStateTopicHiveCIPolicy},

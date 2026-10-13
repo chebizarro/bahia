@@ -17,9 +17,8 @@ import (
 )
 
 // SecurityCanonicalPublisher publishes authoritative security cp-state records
-// through the shared signing/outbox pipeline. Content is OCK-encrypted under
-// the "fleet" scope: security findings contain per-org vulnerability data and
-// scan schedules contain policy configuration that must not appear in plaintext.
+// through the shared signing/outbox pipeline. Execution content is OCK-encrypted
+// under the "fleet" scope; attribution edges use their organization's OCK.
 //
 // It is the canonical security store: targets, runs, schedules
 // and findings are published here before any SQL index is written, and the
@@ -347,6 +346,72 @@ func (p *SecurityCanonicalPublisher) PublishTarget(ctx context.Context, target *
 	d := "security:target:" + target.TargetKeyHash
 	tags := gonostr.Tags{{"target_key_hash", target.TargetKeyHash}, {"target_type", string(target.Type)}}
 	return p.publishConfidential(ctx, KindSecurityTargetRecord, d, false, tags, string(content), "security_target.projection", &target.ID)
+}
+
+func SecurityAttributionDTag(a domain.SecurityAttribution) string {
+	return "security:attribution:" + a.OrgID.String() + ":" + a.SubjectType + ":" + a.SubjectDigest
+}
+
+// PublishAttribution records an operator-approved visibility edge under the
+// subject organization's OCK. Revocation replaces the same coordinate.
+func (p *SecurityCanonicalPublisher) PublishAttribution(ctx context.Context, a *domain.SecurityAttribution) error {
+	if err := domain.ValidateSecurityAttribution(a); err != nil {
+		return err
+	}
+	if p == nil || p.projector == nil || !p.projector.Enabled() || p.encryptor == nil {
+		return fmt.Errorf("security attribution publisher is unavailable")
+	}
+	d := SecurityAttributionDTag(*a)
+	content, err := json.Marshal(a)
+	if err != nil {
+		return err
+	}
+	tags := gonostr.Tags{{"org", a.OrgID.String()}, {"subject_type", a.SubjectType}, {"subject_digest", a.SubjectDigest}}
+	encrypted, err := p.encryptor.EncryptConfidential(ctx, a.OrgID.String(), content, KindSecurityAttributionRecord, d, kinds.CPStateTopicSecurityAttribution, nil)
+	if err != nil {
+		return fmt.Errorf("encrypt security attribution: %w", err)
+	}
+	return p.projector.publishCanonicalFirst(ctx, KindSecurityAttributionRecord, d, !a.Visible, tags, string(content), encrypted, "security_attribution.projection", nil)
+}
+
+// HasAttribution reads the signed, org-encrypted relationship from retained
+// canonical state; neither a SQL row nor an unsigned subject claim grants access.
+func (p *SecurityCanonicalPublisher) HasAttribution(ctx context.Context, a domain.SecurityAttribution) (bool, error) {
+	if err := domain.ValidateSecurityAttribution(&a); err != nil {
+		return false, err
+	}
+	if p == nil || p.projector == nil || p.projector.history == nil || p.encryptor == nil || p.projector.servicePubkey == "" {
+		return false, fmt.Errorf("security attribution canonical reader is unavailable")
+	}
+	d := SecurityAttributionDTag(a)
+	records, err := p.projector.history.FindByTag(ctx, "d", d, []int{KindCASControlState}, 2)
+	if err != nil {
+		return false, err
+	}
+	for _, record := range records {
+		ev, err := SignedEventFromRecord(record)
+		if err != nil || ev.PubKey.Hex() != p.projector.servicePubkey ||
+			tagValue(ev.Tags, "d") != d || tagValue(ev.Tags, "t") != kinds.CPStateTopicSecurityAttribution ||
+			tagValue(ev.Tags, "domain") != "security" || tagValue(ev.Tags, "schema") != kinds.CASControlStateSchema ||
+			tagValue(ev.Tags, "legacy_kind") != strconv.Itoa(KindSecurityAttributionRecord) ||
+			tagValue(ev.Tags, "org") != a.OrgID.String() || tagValue(ev.Tags, "subject_digest") != a.SubjectDigest ||
+			tagValue(ev.Tags, "subject_type") != a.SubjectType {
+			return false, fmt.Errorf("security attribution has invalid canonical signature or envelope")
+		}
+		if isTombstoneTags(ev.Tags) {
+			return false, nil
+		}
+		content, err := p.encryptor.DecryptConfidential(ctx, ev.Content, KindSecurityAttributionRecord, d, kinds.CPStateTopicSecurityAttribution)
+		if err != nil {
+			return false, err
+		}
+		var saved domain.SecurityAttribution
+		if json.Unmarshal(content, &saved) != nil || saved.OrgID != a.OrgID || saved.SubjectType != a.SubjectType || saved.SubjectDigest != a.SubjectDigest {
+			return false, fmt.Errorf("security attribution content conflicts with signed coordinate")
+		}
+		return saved.Visible, nil
+	}
+	return false, nil
 }
 func (p *SecurityCanonicalPublisher) PublishRun(ctx context.Context, run *domain.SecurityScanRun) error {
 	if run == nil || p == nil || p.projector == nil || !p.projector.Enabled() {

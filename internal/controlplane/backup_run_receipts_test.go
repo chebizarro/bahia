@@ -76,7 +76,7 @@ func TestLocalBackupRunReceiptsRequireSignedACKAndSurviveRestart(t *testing.T) {
 }
 
 func TestLocalBackupRunReceiptsRejectTamperedAndMismatchedState(t *testing.T) {
-	for _, variant := range []string{"tampered content", "wrong family", "wrong content id", "wrong author", "wrong publish target"} {
+	for _, variant := range []string{"tampered content", "wrong family", "wrong content id", "wrong definition coordinate", "wrong author", "wrong publish target"} {
 		t.Run(variant, func(t *testing.T) {
 			events, err := localstore.Open(filepath.Join(t.TempDir(), "events.db"))
 			require.NoError(t, err)
@@ -99,6 +99,14 @@ func TestLocalBackupRunReceiptsRejectTamperedAndMismatchedState(t *testing.T) {
 				require.NoError(t, event.Sign(secret))
 			case "wrong content id":
 				event.Content = `{"id":"` + uuid.NewString() + `","deleted":false}`
+				require.NoError(t, event.Sign(secret))
+			case "wrong definition coordinate":
+				var content map[string]any
+				require.NoError(t, json.Unmarshal([]byte(event.Content), &content))
+				content["definition_coordinate"] = "backup-definition:" + uuid.NewString()
+				encoded, err := json.Marshal(content)
+				require.NoError(t, err)
+				event.Content = string(encoded)
 				require.NoError(t, event.Sign(secret))
 			case "wrong author":
 				require.NoError(t, event.Sign(nostr.Generate()))
@@ -160,7 +168,7 @@ func TestBackupIntakeWithoutAdmissionWriterRefusesRegardlessOfSQL(t *testing.T) 
 	intent.Actor = request.PubKey.Hex()
 	require.ErrorContains(t, handler.HandleIntent(t.Context(), intent), "canonical acceptance is unavailable")
 	statuses := &statusCollector{}
-	processor := NewIntentProcessor(NewTrustSet([]string{request.PubKey.Hex()}, zap.NewNop()), openTestStore(t),
+	processor := NewIntentProcessor(NewTrustSet([]string{request.PubKey.Hex()}, zap.NewNop(), WithBootstrapOwners(map[string]string{testOrgID().String(): request.PubKey.Hex()})), openTestStore(t),
 		NewIntentStatusPublisher(statuses.publish, &testSigner{}, zap.NewNop()),
 		IntentProcessorConfig{EnabledDomains: map[string]bool{"backup": true}}, zap.NewNop())
 	processor.RegisterHandler("backup", handler)
@@ -198,7 +206,7 @@ func TestBackupIntakeWithoutAdmissionWriterRefusesRegardlessOfSQL(t *testing.T) 
 func backupReceiptRequest(t *testing.T, key nostr.SecretKey) nostr.Event {
 	t.Helper()
 	content, err := json.Marshal(map[string]any{
-		"id": uuid.NewString(), "recipe_id": uuid.NewString(), "repository_id": uuid.NewString(),
+		"id": uuid.NewString(), "org_id": testOrgID().String(), "definition_id": uuid.NewString(), "recipe_id": uuid.NewString(), "repository_id": uuid.NewString(),
 		"policy_id": uuid.NewString(), "backend": domain.BackupBackendKopia, "target_ref": "/data",
 		"verification_mode": domain.BackupVerificationNone, "metadata": map[string]any{"source": "test"},
 	})

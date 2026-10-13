@@ -94,6 +94,7 @@ const (
 // BackupRecipe is an authoritative backup recipe definition.
 type BackupRecipe struct {
 	ID               uuid.UUID              `json:"id"`
+	OrgID            uuid.UUID              `json:"org_id"`
 	Name             string                 `json:"name"`
 	Version          string                 `json:"version"`
 	Backend          BackupBackendKind      `json:"backend"`
@@ -111,6 +112,7 @@ type BackupRecipe struct {
 // BackupPolicy captures verification requirements and backend policy metadata.
 type BackupPolicy struct {
 	ID                  uuid.UUID              `json:"id"`
+	OrgID               uuid.UUID              `json:"org_id"`
 	Name                string                 `json:"name"`
 	RequireVerification bool                   `json:"require_verification"`
 	VerificationMode    BackupVerificationMode `json:"verification_mode"`
@@ -122,6 +124,7 @@ type BackupPolicy struct {
 // BackupRepository records a configured backup repository target.
 type BackupRepository struct {
 	ID                uuid.UUID         `json:"id"`
+	OrgID             uuid.UUID         `json:"org_id"`
 	Name              string            `json:"name"`
 	Backend           BackupBackendKind `json:"backend"`
 	RepositoryURI     string            `json:"repository_uri"`
@@ -141,6 +144,7 @@ const (
 // executor targeting, and grouping intent without executing backup work itself.
 type BackupDefinition struct {
 	ID                     uuid.UUID      `json:"id"`
+	OrgID                  uuid.UUID      `json:"org_id"`
 	Name                   string         `json:"name"`
 	RepositoryID           uuid.UUID      `json:"repository_id"`
 	RepositoryName         string         `json:"repository_name"`
@@ -225,6 +229,7 @@ func BackupDefinitionMaintenanceWindowTimeZone(definition *BackupDefinition) str
 // service-signed registry events. Event IDs identify immutable versions; the
 // local outbox must prove relay ACK for each version before intake can proceed.
 type BackupExecutionSnapshot struct {
+	DefinitionEventID string `json:"definition_event_id"`
 	RecipeEventID     string `json:"recipe_event_id"`
 	RepositoryEventID string `json:"repository_event_id"`
 	PolicyEventID     string `json:"policy_event_id,omitempty"`
@@ -234,11 +239,14 @@ type BackupExecutionSnapshot struct {
 	Recipe        BackupRecipe         `json:"recipe"`
 	Repository    BackupRepository     `json:"repository"`
 	Policy        *BackupPolicy        `json:"policy,omitempty"`
+	Definition    BackupDefinition     `json:"definition"`
 }
 
 // BackupRun is the durable control-plane record for a backup request.
 type BackupRun struct {
 	ID                        uuid.UUID                `json:"id"`
+	OrgID                     uuid.UUID                `json:"org_id"`
+	DefinitionID              uuid.UUID                `json:"definition_id"`
 	RecipeID                  uuid.UUID                `json:"recipe_id"`
 	ExecutionSnapshot         *BackupExecutionSnapshot `json:"execution_snapshot,omitempty"`
 	RepositoryID              uuid.UUID                `json:"repository_id"`

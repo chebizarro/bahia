@@ -22,6 +22,15 @@ Finding detail may be split into fixed parts plus a manifest. Readers use only t
 
 Security routes require an authenticated operator with access to the owning organization. Finding records are OCK-encrypted. The browser verifies signatures and authors, unwraps the OCK with the active signer, and shows unreadable state when no envelope is available.
 
+An operator-approved `security/attribution-apply` intent publishes a separate
+org-OCK-encrypted `security-attribution` record for a SHA-256 security target or
+SBOM payload. Its signed coordinate binds the org, subject type, and digest;
+revocation replaces that coordinate with a tombstone. The daemon's org-scoped
+findings check and MCP SBOM reads with an explicit `org_id` consult this
+canonical edge, not a database row. Missing or legacy ownerless attribution
+does not grant visibility. MCP access itself remains operator-only; this edge
+does not by itself grant a tenant a new read route.
+
 ## Notifications and policy
 
 Channels can subscribe to `security.policy_breached`. Bahia deduplicates breach fingerprints so an unchanged finding set does not create a new alert on every pass. Blocking policies may require a completed scan or constrain accepted severity.

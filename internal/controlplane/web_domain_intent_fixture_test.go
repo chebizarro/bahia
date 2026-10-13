@@ -45,9 +45,9 @@ func TestWebDomainIntentFixtures(t *testing.T) {
 				Content: map[string]any{"id": releaseID, "route_id": routeID, "version": "v1", "model_ref": "hf://example/chat", "model_source": "huggingface", "backend_preferences": []string{"external_api"}, "external_backend": map[string]any{"base_url": "https://llm.example"}}}}},
 		"backup": {
 			{Name: "repository-register", Request: webIntentFixtureRequest{Domain: "backup", Op: "repository-register", Coordinate: "backup-repository:" + repoID, OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de952", CreatedAt: 1720000000, Pubkey: pubkey,
-				Content: map[string]any{"id": repoID, "name": "archive", "backend": "kopia", "repository_uri": "kopia://archive", "metadata": map[string]any{"source": "web.backup.repositories.register"}}}},
+				Content: map[string]any{"id": repoID, "org_id": fleetOrgID, "name": "archive", "backend": "kopia", "repository_uri": "kopia://archive", "metadata": map[string]any{"source": "web.backup.repositories.register"}}}},
 			{Name: "run", Request: webIntentFixtureRequest{Domain: "backup", Op: "run", Coordinate: "backup-run:018f1fae-7b91-7bea-81d6-0669758de946", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de953", CreatedAt: 1720000000, Pubkey: pubkey,
-				Content: map[string]any{"id": "018f1fae-7b91-7bea-81d6-0669758de946", "recipe_id": recipeID, "repository_id": repoID, "backend": "kopia", "target_ref": "fs:/srv/app", "verification_mode": "none", "metadata": map[string]any{"source": "web.backup.run"}}}}},
+				Content: map[string]any{"id": "018f1fae-7b91-7bea-81d6-0669758de946", "org_id": fleetOrgID, "definition_id": "018f1fae-7b91-7bea-81d6-0669758de947", "recipe_id": recipeID, "repository_id": repoID, "backend": "kopia", "target_ref": "fs:/srv/app", "verification_mode": "none", "metadata": map[string]any{"source": "web.backup.run"}}}}},
 		"package": {
 			{Name: "promote", Request: webIntentFixtureRequest{Domain: "package", Op: "promote", Coordinate: "package:" + targetRepoID + ":acme:api:v1:api.tgz", OrgID: fleetOrgID, IntentID: "018f1fae-7b91-7bea-81d6-0669758de954", CreatedAt: 1720000000, Pubkey: pubkey,
 				Content: map[string]any{"source_repository_id": repoID, "target_repository_id": targetRepoID, "namespace": "acme", "package_name": "api", "version": "v1", "filename": "api.tgz"}}},

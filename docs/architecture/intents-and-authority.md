@@ -416,8 +416,10 @@ the complete NIP-01 operator-signed event with a NIP-40 expiration no more
 than 15 minutes after creation, and observes that exact event in the local
 relay-synced event store before handing it to the intent processor. Local
 observation is not a relay `OK`, delivery quorum, or acceptance receipt.
-The signed payload binds run UUIDv7, recipe, repository, policy, backend,
-target, verification mode, immutable service-signed configuration event IDs,
+The signed payload binds run UUIDv7, owning org UUID (equal to the signed
+`org` tag), definition UUID and its `backup-definition:<uuid>` coordinate,
+recipe, repository, policy, backend, target, verification mode, immutable
+service-signed configuration event IDs,
 and the exact configuration snapshot. Repositories with a credential profile
 also require a pinned Signet `{credential_id, version}` reference in the
 snapshot; the former `credential_version_id` field is rejected. Kopia
