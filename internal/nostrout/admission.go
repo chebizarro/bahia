@@ -70,15 +70,15 @@ var (
 type Purpose string
 
 const (
-	// PurposePriority carries operator results, ContextVM traffic, gift wraps
-	// and tombstones.
+	// PurposePriority carries operator results, ContextVM traffic, assistant
+	// durability events, gift wraps and tombstones.
 	PurposePriority Purpose = "priority"
 	// PurposeState carries replaceable/addressable state projections.
 	PurposeState Purpose = "state"
 	// PurposeGeneral carries everything else.
 	PurposeGeneral Purpose = "general"
-	// PurposeBulk is used only by explicit multi-event operations (Concord
-	// rotations and invites). Its events are paced rather than rejected.
+	// PurposeBulk carries docs publications and explicit multi-event operations.
+	// Operations pace their events rather than rejecting them.
 	PurposeBulk Purpose = "bulk"
 	// PurposeSigner carries NIP-46 remote-signer RPC events.
 	PurposeSigner Purpose = "signer"
@@ -143,20 +143,20 @@ const (
 
 // DefaultConfig stays below the shared relay's historic 120 events/minute
 // bucket even when the Bahia server and one standalone Bahia-derived agent are
-// both active against the same relay (2 × (40 + 15) wire events/minute). There
+// both active against the same relay (2 × (25 + 30) wire events/minute). There
 // is intentionally no unlimited default.
 func DefaultConfig() Config {
 	return Config{
-		Aggregate: PurposeBudget{RatePerMinute: 45, Burst: 15},
+		Aggregate: PurposeBudget{RatePerMinute: 65, Burst: 35},
 		PurposeBudgets: map[Purpose]PurposeBudget{
-			PurposePriority: {RatePerMinute: 10, Burst: 4},
+			PurposePriority: {RatePerMinute: 30, Burst: 24},
 			PurposeState:    {RatePerMinute: 10, Burst: 3},
 			PurposeGeneral:  {RatePerMinute: 10, Burst: 3},
 			PurposeBulk:     {RatePerMinute: 5, Burst: 1},
 			PurposeSigner:   {RatePerMinute: 10, Burst: 4},
 		},
-		RelayWire:             PurposeBudget{RatePerMinute: 40, Burst: 13},
-		RelayWirePriority:     PurposeBudget{RatePerMinute: 15, Burst: 5},
+		RelayWire:             PurposeBudget{RatePerMinute: 25, Burst: 7},
+		RelayWirePriority:     PurposeBudget{RatePerMinute: 30, Burst: 24},
 		BreakerMin:            2 * time.Second,
 		BreakerMax:            time.Minute,
 		KillSwitchFile:        strings.TrimSpace(os.Getenv(KillSwitchEnv)),
@@ -528,11 +528,40 @@ func PurposeForEvent(ev nostr.Event) Purpose {
 		return PurposePriority
 	case 24133:
 		return PurposeSigner
+	case 30023:
+		if eventHasTag(ev.Tags, "t", "bahia-docs") {
+			return PurposeBulk
+		}
+	case 30315:
+		if eventHasTag(ev.Tags, "t", "assistant-status") {
+			return PurposePriority
+		}
+	case 4903:
+		for _, tag := range ev.Tags {
+			if len(tag) >= 2 && tag[0] == "t" && strings.HasPrefix(tag[1], "assistant-checkpoint:") {
+				return PurposePriority
+			}
+		}
+	case 30900:
+		for _, tag := range ev.Tags {
+			if len(tag) >= 2 && tag[0] == "d" && strings.HasPrefix(tag[1], "bahia.assistant-session.v2:") {
+				return PurposePriority
+			}
+		}
 	}
 	if ev.Kind >= 10000 && ev.Kind < 20000 || ev.Kind >= 30000 && ev.Kind < 40000 {
 		return PurposeState
 	}
 	return PurposeGeneral
+}
+
+func eventHasTag(tags nostr.Tags, name, value string) bool {
+	for _, tag := range tags {
+		if len(tag) >= 2 && tag[0] == name && tag[1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 // NormalizeRelayURL returns the identity used for per-relay budgets and

@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -38,6 +39,49 @@ func (m *mockEventPublisher) published() []*nostr.Event {
 	return append([]*nostr.Event(nil), m.events...)
 }
 
+type admittedDocsPublisher struct {
+	count int
+}
+
+func (p *admittedDocsPublisher) PublishSignedEvent(ctx context.Context, ev *nostr.Event) error {
+	op := nostrout.OperationFromContext(ctx)
+	if op == nil {
+		return fmt.Errorf("docs publication has no bulk operation")
+	}
+	pub, err := op.Begin(ctx, *ev, []string{"wss://docs.example"})
+	if err != nil {
+		return err
+	}
+	defer pub.Close()
+	if err := pub.BeforeAttempt(ctx, "wss://docs.example"); err != nil {
+		return err
+	}
+	pub.Observe(nostrout.Result{RelayURL: "wss://docs.example", Accepted: true})
+	p.count++
+	return nil
+}
+
+func TestNostrDocsPublisherUsesBoundedBulkOperationPerTopic(t *testing.T) {
+	dir := t.TempDir()
+	writeTestDoc(t, dir, "a.md", "# A")
+	writeTestDoc(t, dir, "b.md", "# B")
+	admission := docsTestAdmission()
+	pub := &admittedDocsPublisher{}
+	publisher := NewNostrDocsPublisher(New(dir), pub, nil, admission, zap.NewNop())
+	if err := publisher.SyncToRelay(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if pub.count != 2 || admission.Metrics().OperationsStarted != 2 {
+		t.Fatalf("count=%d operations=%d", pub.count, admission.Metrics().OperationsStarted)
+	}
+}
+
+func docsTestAdmission() *nostrout.Admission {
+	return nostrout.New(nostrout.Config{PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
+		nostrout.PurposeBulk: {RatePerMinute: 60_000, Burst: 100},
+	}})
+}
+
 func TestNostrDocsPublisher_SyncToRelay_PublishesAllTopics(t *testing.T) {
 	dir := t.TempDir()
 	writeTestDoc(t, dir, "getting-started.md", "# Getting Started\n\nWelcome to Bahia.")
@@ -45,7 +89,7 @@ func TestNostrDocsPublisher_SyncToRelay_PublishesAllTopics(t *testing.T) {
 
 	svc := New(dir)
 	pub := &mockEventPublisher{}
-	publisher := NewNostrDocsPublisher(svc, pub, nil, zap.NewNop())
+	publisher := NewNostrDocsPublisher(svc, pub, nil, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)
@@ -105,7 +149,7 @@ func TestNostrDocsPublisher_SyncToRelay_SkipsUnchanged(t *testing.T) {
 	})
 
 	pub := &mockEventPublisher{}
-	publisher := NewNostrDocsPublisher(svc, pub, querier, zap.NewNop())
+	publisher := NewNostrDocsPublisher(svc, pub, querier, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)
@@ -146,7 +190,7 @@ func TestNostrDocsPublisher_SyncToRelay_PublishesChangedOnly(t *testing.T) {
 	})
 
 	pub := &mockEventPublisher{}
-	publisher := NewNostrDocsPublisher(svc, pub, querier, zap.NewNop())
+	publisher := NewNostrDocsPublisher(svc, pub, querier, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)
@@ -167,7 +211,7 @@ func TestNostrDocsPublisher_SyncToRelay_EmptyCatalog(t *testing.T) {
 	dir := t.TempDir()
 	svc := New(dir)
 	pub := &mockEventPublisher{}
-	publisher := NewNostrDocsPublisher(svc, pub, nil, zap.NewNop())
+	publisher := NewNostrDocsPublisher(svc, pub, nil, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)
@@ -181,7 +225,7 @@ func TestNostrDocsPublisher_SyncToRelay_EmptyCatalog(t *testing.T) {
 func TestNostrDocsPublisher_SyncToRelay_NilPublisher(t *testing.T) {
 	dir := t.TempDir()
 	svc := New(dir)
-	publisher := NewNostrDocsPublisher(svc, nil, nil, zap.NewNop())
+	publisher := NewNostrDocsPublisher(svc, nil, nil, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.Run(context.Background()); err != nil {
 		t.Fatalf("Run with nil publisher should succeed, got: %v", err)
@@ -194,7 +238,7 @@ func TestNostrDocsPublisher_NIP23EventStructure(t *testing.T) {
 
 	svc := New(dir)
 	pub := &mockEventPublisher{}
-	publisher := NewNostrDocsPublisher(svc, pub, nil, zap.NewNop())
+	publisher := NewNostrDocsPublisher(svc, pub, nil, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)
@@ -292,7 +336,7 @@ func TestNostrDocsPublisher_SyncToRelay_QueuedTopicsAreNotRepublished(t *testing
 	writeTestDoc(t, dir, "getting-started.md", "# Getting Started\n\nWelcome to Bahia.")
 	writeTestDoc(t, dir, "features/services.md", "# Services\n\nManage your services.")
 	pub := &queuedEventPublisher{}
-	publisher := NewNostrDocsPublisher(New(dir), pub, nil, zap.NewNop())
+	publisher := NewNostrDocsPublisher(New(dir), pub, nil, docsTestAdmission(), zap.NewNop())
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)
@@ -324,7 +368,7 @@ func TestNostrDocsPublisher_SyncToRelay_AbandonedTopicsCountAsFailed(t *testing.
 	writeTestDoc(t, dir, "features/services.md", "# Services\n\nManage your services.")
 	pub := &abandonedEventPublisher{}
 	core, logs := observer.New(zap.DebugLevel)
-	publisher := NewNostrDocsPublisher(New(dir), pub, nil, zap.New(core))
+	publisher := NewNostrDocsPublisher(New(dir), pub, nil, docsTestAdmission(), zap.New(core))
 
 	if err := publisher.SyncToRelay(context.Background()); err != nil {
 		t.Fatalf("SyncToRelay failed: %v", err)

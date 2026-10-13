@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"go.uber.org/zap"
 )
@@ -35,6 +36,7 @@ type NostrDocsPublisher struct {
 	docs      Service
 	publisher NostrEventPublisher
 	querier   NostrDocsQuerier
+	admission *nostrout.Admission
 	logger    *zap.Logger
 }
 
@@ -47,7 +49,7 @@ type NostrDocsQuerier interface {
 
 // NewNostrDocsPublisher creates a docs publisher.
 // querier is optional — when nil the publisher always publishes all topics.
-func NewNostrDocsPublisher(docs Service, publisher NostrEventPublisher, querier NostrDocsQuerier, logger *zap.Logger) *NostrDocsPublisher {
+func NewNostrDocsPublisher(docs Service, publisher NostrEventPublisher, querier NostrDocsQuerier, admission *nostrout.Admission, logger *zap.Logger) *NostrDocsPublisher {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -55,6 +57,7 @@ func NewNostrDocsPublisher(docs Service, publisher NostrEventPublisher, querier 
 		docs:      docs,
 		publisher: publisher,
 		querier:   querier,
+		admission: nostrout.Or(admission),
 		logger:    logger,
 	}
 }
@@ -114,7 +117,16 @@ func (p *NostrDocsPublisher) SyncToRelay(ctx context.Context) error {
 			continue
 		}
 
-		if err := p.publishTopic(ctx, doc, hash); err != nil {
+		// One operation per topic paces startup sync through the bounded bulk
+		// lane without staging an entire catalog in the outbox at once. Other
+		// bulk operations can take the slot between topics.
+		op, err := p.admission.BeginOperation(ctx, nostrout.OperationSpec{MaxEvents: 1})
+		if err != nil {
+			return fmt.Errorf("admit docs publication for %s: %w", topic.Topic, err)
+		}
+		err = p.publishTopic(nostrout.WithOperation(ctx, op), doc, hash)
+		op.Close()
+		if err != nil {
 			if nostrutil.IsPublishQueued(err) {
 				// Durably queued and still being retried by the outbox
 				// runner; the next sync must not re-sign it.

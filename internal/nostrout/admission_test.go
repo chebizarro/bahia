@@ -210,8 +210,59 @@ func TestPurposeForEventClassifiesLanes(t *testing.T) {
 	require.Equal(t, PurposeSigner, PurposeForEvent(nostr.Event{Kind: 24133}))
 	require.Equal(t, PurposeState, PurposeForEvent(nostr.Event{Kind: 10002}))
 	require.Equal(t, PurposeState, PurposeForEvent(nostr.Event{Kind: 30315}))
+	require.Equal(t, PurposePriority, PurposeForEvent(nostr.Event{Kind: 30315, Tags: nostr.Tags{{"t", "assistant-status"}}}))
 	require.Equal(t, PurposeGeneral, PurposeForEvent(nostr.Event{Kind: 4903}))
 	require.Equal(t, PurposeGeneral, PurposeForEvent(nostr.Event{Kind: 20001}))
+	require.Equal(t, PurposeBulk, PurposeForEvent(nostr.Event{Kind: 30023, Tags: nostr.Tags{{"t", "bahia-docs"}}}))
+	require.Equal(t, PurposeState, PurposeForEvent(nostr.Event{Kind: 30023, Tags: nostr.Tags{{"t", "other-docs"}}}))
+	require.Equal(t, PurposePriority, PurposeForEvent(nostr.Event{Kind: 4903, Tags: nostr.Tags{{"t", "assistant-checkpoint:s"}}}))
+	require.Equal(t, PurposePriority, PurposeForEvent(nostr.Event{Kind: 30900, Tags: nostr.Tags{{"d", "bahia.assistant-session.v2:s"}}}))
+	require.Equal(t, PurposeState, PurposeForEvent(nostr.Event{Kind: 30900, Tags: nostr.Tags{{"d", "other:s"}}}))
+}
+
+func TestDocsFloodCannotSpendAssistantDurabilityBudget(t *testing.T) {
+	a, clk := newTestAdmission(DefaultConfig())
+	doc := nostr.Event{Kind: 30023, Tags: nostr.Tags{{"t", "bahia-docs"}}}
+	publishDoc := func() error {
+		op, err := a.BeginOperation(context.Background(), OperationSpec{MaxEvents: 1})
+		if err != nil {
+			return err
+		}
+		defer op.Close()
+		pub, err := op.Begin(context.Background(), doc, []string{relayA})
+		if err != nil {
+			return err
+		}
+		defer pub.Close()
+		if err := pub.BeforeAttempt(context.Background(), relayA); err != nil {
+			return err
+		}
+		pub.Observe(accepted(relayA))
+		return nil
+	}
+	require.NoError(t, publishDoc())
+	second := make(chan error, 1)
+	go func() { second <- publishDoc() }()
+	clk.awaitTimer(t)
+	// A 38-page startup sync has one paced publication in flight. Even if
+	// other docs rounds contend, they cannot spend the assistant share.
+	for i := 0; i < 36; i++ {
+		require.ErrorIs(t, publishOnce(t, a, doc, []string{relayA}, accepted), ErrBudgetExceeded)
+	}
+	select {
+	case err := <-second:
+		t.Fatalf("second docs publication was not paced: %v", err)
+	default:
+	}
+	checkpoint := nostr.Event{Kind: 4903, Tags: nostr.Tags{{"t", "assistant-checkpoint:s"}}}
+	for i := 0; i < 10; i++ {
+		require.NoError(t, publishOnce(t, a, checkpoint, []string{relayA}, accepted), "checkpoint %d", i)
+	}
+	projection := nostr.Event{Kind: 30900, Tags: nostr.Tags{{"d", "bahia.assistant-session.v2:s"}}}
+	require.NoError(t, publishOnce(t, a, projection, []string{relayA}, accepted))
+	require.NoError(t, publishOnce(t, a, nostr.Event{Kind: 30315, Tags: nostr.Tags{{"t", "assistant-status"}}}, []string{relayA}, accepted))
+	clk.Advance(12 * time.Second)
+	require.NoError(t, <-second, "docs delivery remains eventual after paced admission")
 }
 
 func TestRateLimitOpensSharedCircuitWithBackoff(t *testing.T) {

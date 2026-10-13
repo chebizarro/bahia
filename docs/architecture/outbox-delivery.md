@@ -159,6 +159,10 @@ controller capacity — **skips** the round:
 - A process-wide gate (kill switch, open circuit, exhausted capacity) stops
   the whole redelivery pass at the first refusal; a lane budget refusal only
   skips the affected entries, because another lane may still have capacity.
+
+Startup NIP-23 docs sync paces one changed topic at a time through the bulk
+lane. Its outbox redelivery stays bulk; assistant checkpoints, session
+projections and statuses use the reserved priority lane and relay-wire share.
 - `PublishBeforeCommit` keeps its reversed order: a refused round queues
   nothing, the caller gets an error, and the producer commits nothing.
 
