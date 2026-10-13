@@ -98,6 +98,9 @@ func TestManagedDNSAndHTTPSRouteFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configure public route planner: %v", err)
 	}
+	// Claim admission is covered by the hostname intent tests; this fixture
+	// exercises provider convergence after a canonical claim is present.
+	planner.SetClaimChecker(func(context.Context, *domain.DesiredPublicRoutePlan) error { return nil })
 	plan, approvalRequired, err := planner.Plan(ctx, svc, env, deployedState, domain.PublicRouteRequest{
 		Hostname: "astillero.sharegap.net", UpstreamScheme: "http", UpstreamPort: 18088, HealthPath: "/health", TLS: "managed",
 	})

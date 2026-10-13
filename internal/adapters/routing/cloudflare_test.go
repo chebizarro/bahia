@@ -567,3 +567,96 @@ func TestCloudflareApplyCompensatesFailedHTTPSVerification(t *testing.T) {
 func staticToken(token string) func(context.Context) (string, error) {
 	return func(context.Context) (string, error) { return token, nil }
 }
+
+func TestCloudflareWithdrawDNSBeforeTunnelAndResume(t *testing.T) {
+	plan := cloudflareTestPlan()
+	owned := cfDNSRecord{ID: "owned", Type: "CNAME", Name: plan.Hostname, Content: plan.DNS.Value, Comment: cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)}
+	ingress := []map[string]any{{"hostname": plan.Hostname, "service": plan.Tunnel.OriginURL}, {"service": "http_status:404"}}
+	var calls []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/dns_records"):
+			if owned.ID == "" {
+				writeCFResult(t, w, []cfDNSRecord{})
+			} else {
+				writeCFResult(t, w, []cfDNSRecord{owned})
+			}
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/configurations"):
+			writeCFResult(t, w, map[string]any{"config": map[string]any{"ingress": ingress}})
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/dns_records/"):
+			calls = append(calls, "dns_delete")
+			owned.ID = ""
+			writeCFResult(t, w, nil)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/configurations"):
+			calls = append(calls, "tunnel_put")
+			var body struct {
+				Config struct {
+					Ingress []map[string]any `json:"ingress"`
+				} `json:"config"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			ingress = body.Config.Ingress
+			writeCFResult(t, w, nil)
+		default:
+			t.Fatalf("unexpected API request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	backend, err := NewCloudflareBackend(CloudflareConfig{APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account", TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"}}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := true
+	phase := func(_ context.Context, step string) error {
+		calls = append(calls, step)
+		if step == "dns_withdrawn" && interrupted {
+			interrupted = false
+			return context.Canceled
+		}
+		return nil
+	}
+	if err := backend.Withdraw(context.Background(), plan, phase); err != context.Canceled {
+		t.Fatalf("first withdrawal: %v", err)
+	}
+	if strings.Join(calls, ",") != "dns_delete,dns_withdrawn" {
+		t.Fatalf("tunnel changed before DNS receipt: %v", calls)
+	}
+	if err := backend.Withdraw(context.Background(), plan, phase); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, ",") != "dns_delete,dns_withdrawn,dns_withdrawn,tunnel_put,tunnel_withdrawn" {
+		t.Fatalf("withdrawal order: %v", calls)
+	}
+	if len(ingress) != 1 {
+		t.Fatalf("ingress not removed: %#v", ingress)
+	}
+}
+
+func TestCloudflareWithdrawRejectsChangedOwnedDNS(t *testing.T) {
+	plan := cloudflareTestPlan()
+	deletes := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeCFResult(t, w, []cfDNSRecord{{ID: "changed", Type: plan.DNS.Type, Name: plan.Hostname, Content: "foreign.example.net", Comment: cloudflareOwnershipMarker(plan.DNS.SourceCoordinate)}})
+		case http.MethodDelete:
+			deletes++
+			writeCFResult(t, w, nil)
+		default:
+			t.Fatalf("unexpected request %s", r.Method)
+		}
+	}))
+	defer server.Close()
+	backend, err := NewCloudflareBackend(CloudflareConfig{APIBaseURL: server.URL, APIToken: staticToken("token"), AccountID: "account", TunnelID: "tunnel-1", ZoneIDs: map[string]string{"example.com": "zone"}}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Withdraw(context.Background(), plan, nil); err == nil {
+		t.Fatal("changed DNS record was deleted")
+	}
+	if deletes != 0 {
+		t.Fatal("changed DNS record was deleted")
+	}
+}

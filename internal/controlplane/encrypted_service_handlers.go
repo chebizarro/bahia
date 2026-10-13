@@ -102,27 +102,18 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 	if err != nil {
 		return nil, fmt.Errorf("build desired-state preview: %w", err)
 	}
-	routeApprovalRequired := false
-	if params.PublicRoute != nil {
-		if h.publicRoutes == nil {
-			return nil, fmt.Errorf("public route provisioning is not configured")
-		}
-		plan, protected, err := h.publicRoutes.Plan(ctx, svc, env, desiredState, *params.PublicRoute)
-		if err != nil {
-			return nil, fmt.Errorf("plan public route: %w", err)
-		}
-		desiredState.PublicRoute = plan
-		desiredState.ComputeDesiredHash()
-		routeApprovalRequired = protected
+	currentDesiredState, err := h.latestDeployedDesiredState(ctx, params.ServiceID, params.EnvironmentID, desiredState.DeploymentUnitID)
+	if err != nil {
+		return nil, fmt.Errorf("load current desired state: %w", err)
+	}
+	routeApprovalRequired, err := h.applyPublicRouteMutation(ctx, svc, env, desiredState, currentDesiredState, params.RouteMutation, params.PublicRoute, true)
+	if err != nil {
+		return nil, err
 	}
 	if h.secretRecords != nil {
 		if err := pinDecisionSecrets(ctx, desiredState, h.secretRecords, h.secretStore); err != nil {
 			return nil, err
 		}
-	}
-	currentDesiredState, err := h.latestDeployedDesiredState(ctx, params.ServiceID, params.EnvironmentID, desiredState.DeploymentUnitID)
-	if err != nil {
-		return nil, fmt.Errorf("load current desired state: %w", err)
 	}
 	evaluation, err := h.policy.Evaluate(ctx, params.ArtifactID, params.EnvironmentID)
 	if err != nil {
@@ -160,6 +151,69 @@ func (h *encryptedServiceHandlers) previewDeploy(ctx context.Context, request Co
 		"route_approval_required": routeApprovalRequired,
 		"idempotency_key":         effectiveIdempotencyKey(request, params.IdempotencyKey),
 	}, nil
+}
+
+// applyPublicRouteMutation makes omission preserve the current route rather
+// than implicitly clearing it. Removal follows the signed hostname tombstone,
+// never a bare nil public_route in a deployment request.
+func (h *encryptedServiceHandlers) applyPublicRouteMutation(ctx context.Context, svc *domain.Service, env *domain.Environment, desired, current *domain.DesiredServiceSpec, mutation domain.RouteMutation, request *domain.PublicRouteRequest, preview bool) (bool, error) {
+	if mutation == "" {
+		if request != nil {
+			mutation = domain.RouteSet
+		} else {
+			mutation = domain.RoutePreserve
+		}
+	}
+	var prior *domain.DesiredPublicRoutePlan
+	if current != nil {
+		prior = current.PublicRoute
+	}
+	switch mutation {
+	case domain.RouteSet:
+		if request == nil || h.publicRoutes == nil {
+			return false, fmt.Errorf("set route requires a public_route and configured planner")
+		}
+		plan, protected, err := h.publicRoutes.Plan(ctx, svc, env, desired, *request)
+		if err != nil {
+			return false, fmt.Errorf("plan public route: %w", err)
+		}
+		if !preview {
+			if err := h.publicRoutes.RequireClaim(ctx, plan); err != nil {
+				return false, fmt.Errorf("public route canonical claim: %w", err)
+			}
+		}
+		if prior != nil && prior.Hostname != plan.Hostname {
+			return false, fmt.Errorf("replace route requires explicit release of prior hostname")
+		}
+		desired.PublicRoute = plan
+		desired.ComputeDesiredHash()
+		return protected, nil
+	case domain.RoutePreserve:
+		if request != nil {
+			return false, fmt.Errorf("preserve route must not carry public_route")
+		}
+		if prior != nil {
+			if h.publicRoutes == nil {
+				return false, fmt.Errorf("public route provisioning is not configured")
+			}
+			if err := h.publicRoutes.RequireClaim(ctx, prior); err != nil {
+				return false, fmt.Errorf("preserved route canonical claim: %w", err)
+			}
+			desired.PublicRoute = prior
+			desired.ComputeDesiredHash()
+		}
+		return false, nil
+	case domain.RouteRemove:
+		if request != nil || prior == nil || h.publicRoutes == nil {
+			return false, fmt.Errorf("remove route requires a prior route and no public_route payload")
+		}
+		if err := h.publicRoutes.RequireReleased(ctx, prior); err != nil {
+			return false, fmt.Errorf("route canonical release: %w", err)
+		}
+		return false, nil
+	default:
+		return false, fmt.Errorf("unsupported route_mutation %q", mutation)
+	}
 }
 
 func (h *encryptedServiceHandlers) latestDeployedDesiredState(ctx context.Context, serviceID, environmentID uuid.UUID, unitID *uuid.UUID) (*domain.DesiredServiceSpec, error) {
@@ -270,16 +324,12 @@ func (h *encryptedServiceHandlers) deploy(ctx context.Context, request ContextVM
 	if err != nil {
 		return nil, fmt.Errorf("build desired state: %w", err)
 	}
-	if params.PublicRoute != nil {
-		if h.publicRoutes == nil {
-			return nil, fmt.Errorf("public route provisioning is not configured")
-		}
-		plan, _, err := h.publicRoutes.Plan(ctx, svc, env, desiredState, *params.PublicRoute)
-		if err != nil {
-			return nil, fmt.Errorf("plan public route: %w", err)
-		}
-		desiredState.PublicRoute = plan
-		desiredState.ComputeDesiredHash()
+	currentDesiredState, err := h.latestDeployedDesiredState(ctx, serviceID, environmentID, desiredState.DeploymentUnitID)
+	if err != nil {
+		return nil, fmt.Errorf("load current desired state: %w", err)
+	}
+	if _, err := h.applyPublicRouteMutation(ctx, svc, env, desiredState, currentDesiredState, params.RouteMutation, params.PublicRoute, false); err != nil {
+		return nil, err
 	}
 	if h.secretRecords != nil {
 		if err := pinDecisionSecrets(ctx, desiredState, h.secretRecords, h.secretStore); err != nil {
@@ -462,6 +512,9 @@ func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request Cont
 	if err != nil {
 		return nil, fmt.Errorf("plan public route: %w", err)
 	}
+	if err := h.publicRoutes.RequireClaim(ctx, plan); err != nil {
+		return nil, fmt.Errorf("public route canonical claim: %w", err)
+	}
 	desiredState.PublicRoute = plan
 	desiredState.ComputeDesiredHash()
 	if h.secretRecords != nil {
@@ -478,7 +531,7 @@ func (h *encryptedServiceHandlers) routeAttach(ctx context.Context, request Cont
 		return nil, fmt.Errorf("route attachment blocked by policy: %s", summarizePolicyBlockReason(evaluation))
 	}
 	requestedBy := ""
-	metadata := map[string]any{"intent_op": "deployment/route-attach"}
+	metadata := map[string]any{"intent_op": "deployment/route-attach", "contextvm_method": "service/route-attach"}
 	if request.Event != nil {
 		requestedBy = strings.TrimSpace(request.Event.PubKey.Hex())
 		if request.Event.ID.Hex() != "" {

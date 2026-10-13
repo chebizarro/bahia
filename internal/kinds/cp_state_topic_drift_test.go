@@ -63,6 +63,8 @@ var goCPStateTopics = map[string]string{
 	"RUNTIME_OBSERVATION":        CPStateTopicRuntimeObservation,
 	"MANAGED_INSTANCE_HEALTH":    CPStateTopicManagedInstanceHealth,
 	"ROUTE_CANARY":               CPStateTopicRouteCanary,
+	"HOSTNAME_RESERVATION":       CPStateTopicHostnameReservation,
+	"HOSTNAME_RECOVERY":          CPStateTopicHostnameRecovery,
 	"SOUL_RUNTIME_POLICY":        CPStateTopicSoulRuntimePolicy,
 	"BLOSSOM_ADMIN":              CPStateTopicBlossomAdmin,
 	"BLOSSOM_BLOB":               CPStateTopicBlossomBlob,

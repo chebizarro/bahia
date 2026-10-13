@@ -76,6 +76,14 @@ func (p *IntentStatusPublisher) PublishRejectionChecked(ctx context.Context, int
 	return p.publishStatus(ctx, intent, "rejected", "rejected", reason, nil)
 }
 
+// PublishSupersededChecked reports that a newer trusted hostname intent won.
+func (p *IntentStatusPublisher) PublishSupersededChecked(ctx context.Context, intent *Intent, reason string) error {
+	if p == nil || p.publish == nil || p.signer == nil {
+		return fmt.Errorf("intent status publisher is not configured")
+	}
+	return p.publishStatus(ctx, intent, "superseded", "superseded", reason, nil)
+}
+
 // PublishConflict publishes a "conflict" status for a stale expected_updated_at.
 func (p *IntentStatusPublisher) PublishConflict(ctx context.Context, intent *Intent) {
 	_ = p.publishStatus(ctx, intent, "conflict", "revision_conflict", "stale expected_updated_at", nil)

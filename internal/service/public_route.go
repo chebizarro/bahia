@@ -55,8 +55,10 @@ type PublicRoutePlanOptions struct {
 }
 
 type PublicRoutePlanner struct {
-	cfg      PublicRoutePlannerConfig
-	backends routing.Resolver
+	cfg            PublicRoutePlannerConfig
+	backends       routing.Resolver
+	claimChecker   func(context.Context, *domain.DesiredPublicRoutePlan) error
+	releaseChecker func(context.Context, *domain.DesiredPublicRoutePlan) error
 }
 
 func NewPublicRoutePlanner(cfg PublicRoutePlannerConfig, backends routing.Resolver) (*PublicRoutePlanner, error) {
@@ -160,9 +162,87 @@ func (p *PublicRoutePlanner) PlanWithOptions(ctx context.Context, svc *domain.Se
 	return plan, zone.Protected, nil
 }
 
+// SetClaimChecker binds provider effects to service-signed hostname ownership.
+func (p *PublicRoutePlanner) SetClaimChecker(check func(context.Context, *domain.DesiredPublicRoutePlan) error) {
+	p.claimChecker = check
+}
+
+// SetReleaseChecker binds explicit desired-route removal to a canonical tombstone.
+func (p *PublicRoutePlanner) SetReleaseChecker(check func(context.Context, *domain.DesiredPublicRoutePlan) error) {
+	p.releaseChecker = check
+}
+
+// RequireReleased refuses desired-state removal until the signed hostname release completes.
+func (p *PublicRoutePlanner) RequireReleased(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	if p.releaseChecker == nil {
+		return fmt.Errorf("canonical hostname release checker is not configured")
+	}
+	return p.releaseChecker(ctx, plan)
+}
+
+// RequireClaim checks the canonical reservation before accepting a desired route.
+func (p *PublicRoutePlanner) RequireClaim(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	return p.requireClaim(ctx, plan)
+}
+
+func (p *PublicRoutePlanner) requireClaim(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	if p.claimChecker == nil {
+		return fmt.Errorf("canonical hostname claim checker is not configured")
+	}
+	return p.claimChecker(ctx, plan)
+}
+
+// CheckClaim validates zone ownership and the configured origin before reading
+// provider state. A signed intent cannot reserve another organization's zone.
+func (p *PublicRoutePlanner) CheckClaim(ctx context.Context, plan *domain.DesiredPublicRoutePlan, orgID uuid.UUID, environmentProtected bool) error {
+	if err := domain.ValidateDesiredPublicRoute(plan); err != nil {
+		return err
+	}
+	zone, ok := p.resolveZone(plan.Hostname)
+	if !ok || zone.Name != plan.Zone || zone.BackendRef != plan.BackendRef || zone.TTL != plan.DNS.TTL || !uuidAllowed(orgID, zone.AllowedOrgIDs) || (zone.Protected && !environmentProtected) {
+		return fmt.Errorf("hostname zone is not configured for organization")
+	}
+	origin, ok := p.resolveOrigin(plan.DeploymentUnitID)
+	if !ok || !intAllowed(plan.Proxy.UpstreamPort, origin.AllowedPorts) || strings.Trim(strings.TrimSpace(origin.Host), "[]") != plan.Proxy.UpstreamHost || plan.DNS.Value != p.cfg.DNSTarget || plan.Tunnel.TunnelRef != p.cfg.TunnelRef || plan.Provider != p.cfg.Provider {
+		return fmt.Errorf("hostname route does not match configured origin or provider")
+	}
+	return p.Check(ctx, plan)
+}
+
+// Check revalidates the signed plan and reads the live provider before a claim.
+func (p *PublicRoutePlanner) Check(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
+	if err := domain.ValidateDesiredPublicRoute(plan); err != nil {
+		return err
+	}
+	backend, err := p.resolveValidatedBackend(plan)
+	if err != nil {
+		return err
+	}
+	return backend.Check(ctx, plan)
+}
+
+// Withdraw removes provider state only while the canonical claim still holds.
+func (p *PublicRoutePlanner) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error {
+	if err := p.requireClaim(ctx, plan); err != nil {
+		return err
+	}
+	backend, err := p.resolveValidatedBackend(plan)
+	if err != nil {
+		return err
+	}
+	withdrawing, ok := backend.(routing.WithdrawingBackend)
+	if !ok {
+		return fmt.Errorf("public route backend %q cannot withdraw", plan.BackendRef)
+	}
+	return withdrawing.Withdraw(ctx, plan, phase)
+}
+
 func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
 	backend, err := p.resolveValidatedBackend(plan)
 	if err != nil {
+		return err
+	}
+	if err := p.requireClaim(ctx, plan); err != nil {
 		return err
 	}
 	return backend.Apply(ctx, plan)
@@ -178,6 +258,9 @@ func (p *PublicRoutePlanner) Apply(ctx context.Context, plan *domain.DesiredPubl
 func (p *PublicRoutePlanner) ApplyWithCompensation(ctx context.Context, plan *domain.DesiredPublicRoutePlan) (routing.Compensation, error) {
 	backend, err := p.resolveValidatedBackend(plan)
 	if err != nil {
+		return nil, err
+	}
+	if err := p.requireClaim(ctx, plan); err != nil {
 		return nil, err
 	}
 	compensating, ok := backend.(routing.CompensatingBackend)

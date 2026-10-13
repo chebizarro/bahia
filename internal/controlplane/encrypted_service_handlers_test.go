@@ -149,6 +149,7 @@ func newRouteAttachFixture(t *testing.T, envProtected, zoneProtected bool) *rout
 	if err != nil {
 		t.Fatalf("new route planner: %v", err)
 	}
+	planner.SetClaimChecker(func(context.Context, *domain.DesiredPublicRoutePlan) error { return nil })
 	policy := service.NewPolicyService(&testPolicyRepo{}, &testSignatureRepo{hasVerifiedSignature: true}, &testSBOMRepo{}, zap.NewNop())
 	unitRepo := &routeAttachDeploymentUnitRepo{unit: &domain.DeploymentUnit{
 		ID: unitID, EnvironmentID: environmentID, Key: "prod-compose", RuntimeType: domain.RuntimeTypeCompose,
@@ -934,4 +935,60 @@ func TestCompactDeployPreviewExcludesEnvValues(t *testing.T) {
 		}
 	}
 	t.Fatalf("API_TOKEN key not present in compact summary env_keys: %v", summary.EnvKeys)
+}
+
+func TestDeploymentRouteMutationPreserveSetRemove(t *testing.T) {
+	fixture := newRouteAttachFixture(t, false, false)
+	ctx := context.Background()
+	svc, err := fixture.handlers.registry.GetService(ctx, fixture.serviceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := fixture.handlers.registry.GetEnvironment(ctx, fixture.environmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := *fixture.current.DesiredState
+	request := validRouteAttachRequest()
+	plan, _, err := fixture.handlers.publicRoutes.Plan(ctx, svc, env, &base, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior := *fixture.current.DesiredState
+	prior.PublicRoute = plan
+	prior.ComputeDesiredHash()
+	fresh := func() *domain.DesiredServiceSpec {
+		copy := *fixture.current.DesiredState
+		copy.PublicRoute = nil
+		copy.ComputeDesiredHash()
+		return &copy
+	}
+	preserved := fresh()
+	if _, err := fixture.handlers.applyPublicRouteMutation(ctx, svc, env, preserved, &prior, "", nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if preserved.PublicRoute != plan || preserved.DesiredHash == fixture.originalHash {
+		t.Fatalf("omission did not preserve route: %#v", preserved)
+	}
+	if _, err := fixture.handlers.applyPublicRouteMutation(ctx, svc, env, fresh(), &prior, domain.RoutePreserve, &request, false); err == nil {
+		t.Fatal("preserve accepted route payload")
+	}
+	if _, err := fixture.handlers.applyPublicRouteMutation(ctx, svc, env, fresh(), &prior, domain.RouteRemove, nil, false); err == nil {
+		t.Fatal("remove accepted without canonical release")
+	}
+	fixture.handlers.publicRoutes.SetReleaseChecker(func(context.Context, *domain.DesiredPublicRoutePlan) error { return nil })
+	removed := fresh()
+	if _, err := fixture.handlers.applyPublicRouteMutation(ctx, svc, env, removed, &prior, domain.RouteRemove, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if removed.PublicRoute != nil {
+		t.Fatal("explicit removal retained route")
+	}
+	set := fresh()
+	if _, err := fixture.handlers.applyPublicRouteMutation(ctx, svc, env, set, nil, domain.RouteSet, &request, false); err != nil {
+		t.Fatal(err)
+	}
+	if set.PublicRoute == nil {
+		t.Fatal("set did not attach route")
+	}
 }

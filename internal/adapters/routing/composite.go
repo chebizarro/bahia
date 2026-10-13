@@ -39,6 +39,30 @@ func (b *CompositeBackend) Check(ctx context.Context, plan *domain.DesiredPublic
 	return nil
 }
 
+func (b *CompositeBackend) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error) error {
+	if b == nil || plan == nil {
+		return fmt.Errorf("composite public route plan is required")
+	}
+	b.applyMu.Lock()
+	defer b.applyMu.Unlock()
+	public, ok := b.public.(WithdrawingBackend)
+	if !ok {
+		return fmt.Errorf("public route backend cannot withdraw")
+	}
+	if err := public.Withdraw(ctx, plan, phase); err != nil {
+		return err
+	}
+	withoutInternal := *plan
+	withoutInternal.InternalHTTPS = nil
+	if err := b.internal.Apply(ctx, &withoutInternal); err != nil {
+		return fmt.Errorf("remove internal HTTPS after DNS and tunnel: %w", err)
+	}
+	if phase != nil {
+		return phase(ctx, "internal_withdrawn")
+	}
+	return nil
+}
+
 func (b *CompositeBackend) Apply(ctx context.Context, plan *domain.DesiredPublicRoutePlan) error {
 	_, err := b.ApplyWithCompensation(ctx, plan)
 	return err
