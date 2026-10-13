@@ -1006,13 +1006,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// Intent framework: TrustSet, IntentProcessor, ReadinessTracker.
 	// These are wired unconditionally; domain handlers register at startup when
 	// their domain is not listed in nostr.intent_domains_disabled.
-	trustSetOpts := []controlplane.TrustSetOption{
-		controlplane.WithBootstrapOwners(cfg.Nostr.BootstrapOwners),
-	}
-	if tenantRBAC != nil {
-		trustSetOpts = append(trustSetOpts, controlplane.WithPostgresRBAC(tenantRBAC))
-	}
-	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger, trustSetOpts...)
+	trustSet := controlplane.NewTrustSet(cfg.Nostr.AuthorizedPubkeys, logger,
+		controlplane.WithBootstrapOwners(cfg.Nostr.BootstrapOwners))
 	intentReadiness := controlplane.NewReadinessTracker()
 	healthProvider.SetReadinessTracker(intentReadiness)
 	enabledDomains := controlplane.BuildEnabledDomains(cfg.Nostr.IntentDomainsDisabled)

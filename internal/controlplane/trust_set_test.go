@@ -50,69 +50,43 @@ func TestTrustSet_FleetOpsAreNotOrgMembers(t *testing.T) {
 	assert.True(t, ts.IsKnownPrincipal(fleetPK))
 }
 
-func TestTrustSet_PostgresSource(t *testing.T) {
+func TestTrustSet_PostgresRowsDoNotAuthorizeIntents(t *testing.T) {
 	orgID := uuid.New()
 	memberPK := "dddd000000000000000000000000000000000000000000000000000000000004"
-
 	members := &mockOrgMemberLookup{
 		members: map[string]*domain.OrgMember{
 			memberKey(orgID, memberPK): {
-				OrgID:  orgID,
-				Pubkey: memberPK,
-				Role:   domain.RoleAdmin,
+				OrgID: orgID, Pubkey: memberPK, Role: domain.RoleAdmin,
 			},
 		},
 	}
-	rbac := auth.NewRBAC(members)
-
-	ts := NewTrustSet(nil, zap.NewNop(), WithPostgresRBAC(rbac))
 	ctx := context.Background()
-
-	// Admin has write permission.
-	assert.True(t, ts.HasPermission(ctx, orgID, memberPK, domain.PermWriteServices))
-	// Admin lacks manage-members permission.
-	assert.False(t, ts.HasPermission(ctx, orgID, memberPK, domain.PermManageMembers))
-
-	// Viewer role in separate test.
-	viewerPK := "eeee000000000000000000000000000000000000000000000000000000000005"
-	members.members[memberKey(orgID, viewerPK)] = &domain.OrgMember{
-		OrgID:  orgID,
-		Pubkey: viewerPK,
-		Role:   domain.RoleViewer,
-	}
-	assert.False(t, ts.HasPermission(ctx, orgID, viewerPK, domain.PermWriteServices))
-	assert.True(t, ts.HasPermission(ctx, orgID, viewerPK, domain.PermReadServices))
-}
-
-func TestTrustSet_RelayMembersOverridePostgres(t *testing.T) {
-	orgID := uuid.New()
-	memberPK := "ffff000000000000000000000000000000000000000000000000000000000006"
-
-	// Postgres says viewer.
-	members := &mockOrgMemberLookup{
-		members: map[string]*domain.OrgMember{
-			memberKey(orgID, memberPK): {
-				OrgID:  orgID,
-				Pubkey: memberPK,
-				Role:   domain.RoleViewer,
-			},
-		},
-	}
+	// The derived PostgreSQL RBAC view grants this permission, but TrustSet
+	// must not consume it as intent authority.
 	rbac := auth.NewRBAC(members)
-
-	ts := NewTrustSet(nil, zap.NewNop(), WithPostgresRBAC(rbac))
-	ctx := context.Background()
-
-	// With Postgres only, viewer cannot write.
+	require.NoError(t, rbac.CheckPermission(ctx,
+		&auth.Principal{PubKey: memberPK, Method: auth.MethodNIP98}, orgID, domain.PermWriteServices))
+	ts := NewTrustSet(nil, zap.NewNop())
 	assert.False(t, ts.HasPermission(ctx, orgID, memberPK, domain.PermWriteServices))
+	assert.Empty(t, ts.RoleFor(ctx, orgID, memberPK))
+	assert.False(t, ts.IsKnownPrincipal(memberPK))
+	assert.NotContains(t, ts.AuthorPubkeys(), memberPK)
+	handler := &testDomainHandler{}
+	proc := NewIntentProcessor(ts, openTestStore(t), nil,
+		IntentProcessorConfig{EnabledDomains: map[string]bool{"test": true}}, zap.NewNop())
+	proc.RegisterHandler("test", handler)
+	intent := testIntent(t, "create", "pg-only-member")
+	intent.OrgID = orgID
+	intent.Actor = memberPK
+	require.ErrorContains(t, proc.ProcessInProcess(ctx, intent), "untrusted intent actor")
+	assert.Empty(t, handler.handled)
 
-	// Set relay members with admin role.
-	ts.SetRelayMembers(orgID.String(), map[string]domain.Role{
-		memberPK: domain.RoleAdmin,
-	})
-
-	// Now relay source wins: admin can write.
+	// A canonical membership record, not the SQL row, changes authority.
+	ts.SetRelayMembers(orgID.String(), map[string]domain.Role{memberPK: domain.RoleAdmin})
 	assert.True(t, ts.HasPermission(ctx, orgID, memberPK, domain.PermWriteServices))
+	assert.Equal(t, domain.RoleAdmin, ts.RoleFor(ctx, orgID, memberPK))
+	require.NoError(t, proc.ProcessInProcess(ctx, intent))
+	assert.Len(t, handler.handled, 1)
 }
 
 func TestTrustSet_RelayMembersOverrideBootstrapOwner(t *testing.T) {

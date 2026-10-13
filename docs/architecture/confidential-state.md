@@ -83,8 +83,8 @@ service-wrapped envelope in history. The fleet-scope OCK is wrapped to
 (`TrustSetMemberSource`).
 
 The roster source (`OCKMemberSource`) is pluggable and independent of key
-distribution; today it is the trust set (relay membership → Postgres →
-config).
+distribution; today it is the trust set (relay membership → config), with a separate
+PostgreSQL fallback for legacy key-envelope recipients.
 
 ## Lifecycle
 

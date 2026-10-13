@@ -154,30 +154,25 @@ func (s *IntentSubscriber) buildFilter() nostr.Filter {
 	}
 
 	// Author-scoped subscription (anti-amplification).
-	// When Postgres is the only trust source, we cannot enumerate all
-	// members, so we use an open subscription and rely on the processor
-	// to check permissions.
-	if !s.trustSet.HasPostgres() {
-		pubkeys := s.trustSet.AuthorPubkeys()
-		authors := make([]nostr.PubKey, 0, len(pubkeys))
-		for _, pk := range pubkeys {
-			if parsed, err := nostr.PubKeyFromHex(pk); err == nil {
-				authors = append(authors, parsed)
-			}
+	pubkeys := s.trustSet.AuthorPubkeys()
+	authors := make([]nostr.PubKey, 0, len(pubkeys))
+	for _, pk := range pubkeys {
+		if parsed, err := nostr.PubKeyFromHex(pk); err == nil {
+			authors = append(authors, parsed)
 		}
-		if len(authors) == 0 {
-			// An empty Authors list means every author in NIP-01. Scope the
-			// cold-start REQ to our own key instead: it yields EOSE (and
-			// readiness) without downloading unrelated operators' intents.
-			if self, err := nostr.PubKeyFromHex(s.selfPubkey); err == nil {
-				authors = append(authors, self)
-			}
-		}
-		if len(authors) == 0 {
-			filter.Kinds = nil // never issue an unscoped REQ
-		}
-		filter.Authors = authors
 	}
+	if len(authors) == 0 {
+		// An empty Authors list means every author in NIP-01. Scope the
+		// cold-start REQ to our own key instead: it yields EOSE (and
+		// readiness) without downloading unrelated operators' intents.
+		if self, err := nostr.PubKeyFromHex(s.selfPubkey); err == nil {
+			authors = append(authors, self)
+		}
+	}
+	if len(authors) == 0 {
+		filter.Kinds = nil // never issue an unscoped REQ
+	}
+	filter.Authors = authors
 
 	return filter
 }
@@ -193,15 +188,11 @@ func (s *IntentSubscriber) applyEvent(ctx context.Context, ev *nostr.Event) {
 	// Events may arrive despite the filter during trust-set transitions.
 	actor := ev.PubKey.Hex()
 	if !s.trustSet.IsKnownPrincipal(actor) {
-		// When Postgres is configured, unknown principals might still be
-		// valid org members. The processor will check HasPermission.
-		if !s.trustSet.HasPostgres() {
-			s.logger.Debug("dropping intent from untrusted author (post-filter)",
-				zap.String("pubkey", actor),
-				zap.String("event_id", ev.ID.Hex()),
-			)
-			return
-		}
+		s.logger.Debug("dropping intent from untrusted author (post-filter)",
+			zap.String("pubkey", actor),
+			zap.String("event_id", ev.ID.Hex()),
+		)
+		return
 	}
 
 	if err := s.processor.ProcessRelayIntent(ctx, ev); err != nil {

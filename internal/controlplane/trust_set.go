@@ -5,17 +5,15 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/openagentsinc/bahia/internal/auth"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
 
-// TrustSet resolves authorization across multiple orgs with pluggable sources.
+// TrustSet resolves org authorization from relay membership and configured bootstrap owners.
 //
 // Resolution order for HasPermission(orgID, pubkey, permission):
 //  1. If relay membership events exist for orgID, use them exclusively.
-//  2. Else if Postgres is configured, delegate to auth.RBAC.CheckPermission.
-//  3. Else if pubkey is a bootstrapOwner for orgID, grant owner-level permission.
+//  2. Else if pubkey is a bootstrapOwner for orgID, grant owner-level permission.
 //
 // Fleet operators (fleetOps) are never implicit org members. They authorize
 // only fleet-scoped operations through FleetOperatorGate, unchanged from
@@ -24,26 +22,17 @@ import (
 // See docs/architecture/intents-and-authority.md.
 type TrustSet struct {
 	mu sync.RWMutex
-	// Per-org membership from relay events (highest priority). Populated by
-	// the O1 slice; empty until then.
+	// Per-org membership from relay events.
 	relay map[string]map[string]domain.Role // org-id → pubkey → role
-	// Per-org membership from Postgres (read-only interim). Nil when no DB.
-	postgres *auth.RBAC
 	// Fleet-level operator pubkeys from config (not org members).
 	fleetOps []string
-	// Per-org bootstrap owners from config (used only when no relay or
-	// Postgres members exist for the org).
+	// Per-org bootstrap owners from config (used only when no relay members exist).
 	bootstrapOwners map[string]string // org-id → pubkey
 	logger          *zap.Logger
 }
 
 // TrustSetOption configures a TrustSet.
 type TrustSetOption func(*TrustSet)
-
-// WithPostgresRBAC sets the Postgres source for org membership lookups.
-func WithPostgresRBAC(rbac *auth.RBAC) TrustSetOption {
-	return func(ts *TrustSet) { ts.postgres = rbac }
-}
 
 // WithBootstrapOwners sets the per-org bootstrap owner map from config.
 func WithBootstrapOwners(owners map[string]string) TrustSetOption {
@@ -73,7 +62,7 @@ func NewTrustSet(fleetOps []string, logger *zap.Logger, opts ...TrustSetOption) 
 
 // HasPermission checks whether pubkey has permission in orgID. Returns true if
 // authorized, false if not. See resolution order in the type doc.
-func (ts *TrustSet) HasPermission(ctx context.Context, orgID uuid.UUID, pubkey string, permission domain.Permission) bool {
+func (ts *TrustSet) HasPermission(_ context.Context, orgID uuid.UUID, pubkey string, permission domain.Permission) bool {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -88,13 +77,7 @@ func (ts *TrustSet) HasPermission(ctx context.Context, orgID uuid.UUID, pubkey s
 		return domain.RoleHasPermission(role, permission)
 	}
 
-	// 2. Postgres (read-only interim).
-	if ts.postgres != nil {
-		err := ts.postgres.CheckPermission(ctx, &auth.Principal{PubKey: pubkey, Method: auth.MethodNIP98}, orgID, permission)
-		return err == nil
-	}
-
-	// 3. Bootstrap owners from config.
+	// 2. Bootstrap owners from config.
 	if owner, ok := ts.bootstrapOwners[orgStr]; ok && owner == pubkey {
 		// Bootstrap owners have owner-level permission.
 		return domain.RoleHasPermission(domain.RoleOwner, permission)
@@ -104,7 +87,7 @@ func (ts *TrustSet) HasPermission(ctx context.Context, orgID uuid.UUID, pubkey s
 }
 
 // RoleFor returns the role a pubkey holds in an org, or empty string if none.
-func (ts *TrustSet) RoleFor(ctx context.Context, orgID uuid.UUID, pubkey string) domain.Role {
+func (ts *TrustSet) RoleFor(_ context.Context, orgID uuid.UUID, pubkey string) domain.Role {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 
@@ -115,16 +98,7 @@ func (ts *TrustSet) RoleFor(ctx context.Context, orgID uuid.UUID, pubkey string)
 		return members[pubkey] // zero value if absent
 	}
 
-	// 2. Postgres.
-	if ts.postgres != nil {
-		authz, err := ts.postgres.LoadAuthzContext(ctx, &auth.Principal{PubKey: pubkey, Method: auth.MethodNIP98}, orgID)
-		if err == nil && authz.IsMember() {
-			return authz.Member.Role
-		}
-		return ""
-	}
-
-	// 3. Bootstrap owners.
+	// 2. Bootstrap owners.
 	if owner, ok := ts.bootstrapOwners[orgStr]; ok && owner == pubkey {
 		return domain.RoleOwner
 	}
@@ -132,8 +106,8 @@ func (ts *TrustSet) RoleFor(ctx context.Context, orgID uuid.UUID, pubkey string)
 }
 
 // AuthorPubkeys returns the deduplicated set of pubkeys the intent subscriber
-// should include in its authors filter. This includes org members from all
-// sources, plus fleet operators.
+// should include in its authors filter. This includes relay members,
+// bootstrap owners, and fleet operators.
 func (ts *TrustSet) AuthorPubkeys() []string {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
@@ -170,12 +144,6 @@ func (ts *TrustSet) AuthorPubkeys() []string {
 		add(pk)
 	}
 
-	// Note: Postgres members are not enumerable without scanning all orgs.
-	// The subscriber falls back to an open authors list when Postgres is the
-	// only source, which is safe because the processor still checks
-	// HasPermission before applying any intent. The anti-amplification
-	// property is weaker in the interim but closes with O1.
-
 	return pubkeys
 }
 
@@ -204,17 +172,8 @@ func (ts *TrustSet) IsKnownPrincipal(pubkey string) bool {
 	return false
 }
 
-// HasPostgres reports whether a Postgres RBAC source is configured.
-// When true, AuthorPubkeys cannot enumerate all members and the subscriber
-// must use an open (no authors filter) subscription.
-func (ts *TrustSet) HasPostgres() bool {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.postgres != nil
-}
-
 // SetRelayMembers replaces the relay-sourced membership for an org.
-// This is the seam for O1 to populate.
+// Updated from canonical member events.
 func (ts *TrustSet) SetRelayMembers(orgID string, members map[string]domain.Role) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
@@ -255,7 +214,7 @@ func (ts *TrustSet) BootstrapOwnerPubkeys() []string {
 
 // RelayMembersFor returns a copy of the relay-sourced membership map for an org,
 // or nil if no relay members exist. Used by RelayMemberEventHandler for
-// single-event merging when no Postgres is configured.
+// single-event merging.
 func (ts *TrustSet) RelayMembersFor(orgID string) map[string]domain.Role {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
