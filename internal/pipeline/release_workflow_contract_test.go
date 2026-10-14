@@ -146,6 +146,10 @@ func TestWebBootstrapEntrypoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	envsubst, err := exec.LookPath("envsubst")
+	if err != nil {
+		t.Fatalf("web entrypoint contract requires envsubst: %v", err)
+	}
 	const untouched = "// seed from the image build\n"
 	key := strings.Repeat("c", 64)
 	widget := strings.Repeat("d", 64)
@@ -170,7 +174,7 @@ func TestWebBootstrapEntrypoint(t *testing.T) {
 				t.Fatal(err)
 			}
 			cmd := exec.Command("sh", script)
-			cmd.Env = []string{"PATH=/usr/bin:/bin", "BAHIA_BOOTSTRAP_SCRIPT_PATH=" + path}
+			cmd.Env = []string{"PATH=/usr/bin:/bin:" + filepath.Dir(envsubst), "BAHIA_BOOTSTRAP_SCRIPT_PATH=" + path}
 			for name, value := range map[string]string{
 				"PUBLIC_BAHIA_BOOTSTRAP_RELAYS":     tc.relays,
 				"PUBLIC_BAHIA_SERVICE_PUBKEYS":      tc.keys,
