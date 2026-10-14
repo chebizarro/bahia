@@ -48,16 +48,20 @@ Configure repository variables `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and
 them to the `act` runner). Both workflows reject missing values rather than
 using a baked-in relay or signer. The rendered web service must carry non-empty
 values for both variables.
-`scripts/check_web_bootstrap_compose.py` enforces that invariant. The workflow
-also runs the relay-policy gate and image-admission policy before changing the
-stack.
+`bahia-deploy-edge preflight` checks the resolved typed project and fails
+closed on missing bootstrap values. The workflow also runs the relay-policy
+gate and image-admission policy before changing the stack.
 
 ### Apply and verify
 
 The workflow builds local SHA-tagged daemon and web images, stages the exact
-source/docs tree, saves the prior Compose override, generates a new override
-with `scripts/deploy_edge_compose_override.py`, and applies the static host
-base plus override with `up -d --wait`. The host base is never edited.
+source/docs tree, saves the prior resolved Compose project as a canonical
+JSON receipt, then applies typed image, docs-mount and bootstrap mutations
+through the Compose v5 SDK with wait semantics. The host base is never edited.
+The current receipt is `/srv/data/bahia-controlplane/compose-applied-project.json`;
+private backups are under `/srv/data/bahia-controlplane/backups`. During the
+first transition, the existing legacy override is read once to capture the
+previous project; subsequent deploys use receipts, not Compose overlays.
 The workflow then verifies readiness:
 
 ```bash
@@ -67,8 +71,8 @@ curl -fsS http://172.17.0.1:8080/ready
 After a successful run, verify:
 
 ```bash
-ssh edge-01 'docker compose -f /srv/data/bahia-controlplane/docker-compose.yml -f /srv/data/bahia-controlplane/docker-compose.deploy-override.yml ps'
-ssh edge-01 'docker compose -f /srv/data/bahia-controlplane/docker-compose.yml -f /srv/data/bahia-controlplane/docker-compose.deploy-override.yml images'
+ssh edge-01 'test -s /srv/data/bahia-controlplane/compose-applied-project.json'
+ssh edge-01 'docker ps --filter label=com.docker.compose.project'
 curl -fsS https://bahia.sharegap.net/health
 curl -fsS https://bahia.sharegap.net/ready
 curl -fsS -H 'Accept: application/nostr+json' https://bahia.sharegap.net/relay
@@ -79,13 +83,13 @@ REQ against the advertised relay reaches `EOSE`.
 
 ### Failure behavior and retention
 
-The gated apply owns rollback: on failure it restores the saved Compose file
-and its safe image references, reapplies the stack and reports the original
-error. Do not perform an unrelated manual Compose mutation while the workflow
-is running.
+The gated apply owns rollback: on failure it re-applies the prior typed
+project receipt with an admitted safe Bahia image, runs the same readiness,
+relay-policy and HTTP post-checks, and reports the original error. Do not
+perform an unrelated manual Compose mutation while the workflow is running.
 
-The final cleanup keeps the configured number of release trees and Compose
-backups and removes only Bahia-tagged images older than the configured age.
+The final cleanup keeps the configured number of release trees and project
+receipts and removes only Bahia-tagged images older than the configured age.
 It never runs `docker image prune -a`.
 
 ## Hive-CI build publication

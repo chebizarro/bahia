@@ -60,7 +60,8 @@ not a rebuild.
 
 `docker-compose.yml` forwards the three runtime variables from the shell
 environment; the edge deploy workflow (`.github/workflows/deploy-edge.yml`)
-injects the same entries into the host Compose file. With `pnpm dev` or
+adds missing entries to its in-memory typed Compose project without editing
+the host file. With `pnpm dev` or
 `pnpm preview` and no injected seed, the same variables are read at build
 time as a development fallback.
 

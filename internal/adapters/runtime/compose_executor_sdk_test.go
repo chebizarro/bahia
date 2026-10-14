@@ -366,6 +366,93 @@ func TestSDKComposeExecutor_Up_Options(t *testing.T) {
 	}
 }
 
+func TestSDKComposeExecutor_ApplyProjectWaitsAndKeepsScope(t *testing.T) {
+	dir := t.TempDir()
+	base := writeSDKTestFile(t, dir, composeFileName, `name: edge
+services:
+  bahia:
+    image: bahia:old
+    depends_on:
+      - postgres
+  web:
+    image: web:old
+  postgres:
+    image: postgres:16
+  unrelated:
+    image: busybox:latest
+`)
+	writeSDKTestFile(t, dir, "docker-compose.override.yml", "services:\n  stale:\n    image: busybox:latest\n")
+	e, fake := newFakeSDKExecutor(t, dir)
+	project, err := e.LoadProjectFiles(context.Background(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := project.Services["stale"]; ok {
+		t.Fatal("explicit base load discovered stale override")
+	}
+	bahia := project.Services["bahia"]
+	bahia.Image = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	project.Services["bahia"] = bahia
+	if err := e.ApplyProject(context.Background(), project, "bahia", "web"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.upCalls) != 1 {
+		t.Fatalf("up calls = %d", len(fake.upCalls))
+	}
+	call := fake.upCalls[0]
+	if !call.options.Start.Wait || !call.options.Create.IgnoreOrphans || call.options.Create.RemoveOrphans {
+		t.Fatalf("wait/scope options: %#v", call.options)
+	}
+	if _, ok := call.project.Services["unrelated"]; ok {
+		t.Fatal("unrelated service included in apply")
+	}
+	if _, ok := call.project.Services["postgres"]; !ok {
+		t.Fatal("dependency missing from apply")
+	}
+	if call.project.Services["bahia"].Image != bahia.Image {
+		t.Fatal("typed image mutation lost before SDK Up")
+	}
+	fake.upErr = errors.New("wait failed")
+	if err := e.ApplyProject(context.Background(), project, "bahia", "web"); !errors.Is(err, fake.upErr) {
+		t.Fatalf("SDK error not propagated: %v", err)
+	}
+}
+
+func TestSDKComposeExecutor_LoadProjectFilesNormalizesMappingAndListEnvironment(t *testing.T) {
+	for _, env := range []string{
+		"      PUBLIC_BAHIA_BOOTSTRAP_RELAYS: 'wss://relay.example/a?x=1&y=2|literal'\n",
+		"      - 'PUBLIC_BAHIA_BOOTSTRAP_RELAYS=wss://relay.example/a?x=1&y=2|literal'\n",
+	} {
+		t.Run(env, func(t *testing.T) {
+			dir := t.TempDir()
+			base := writeSDKTestFile(t, dir, composeFileName, "name: edge\nservices:\n  web:\n    image: web:old\n    environment:\n"+env)
+			e, _ := newFakeSDKExecutor(t, dir)
+			project, err := e.LoadProjectFiles(context.Background(), base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := project.Services["web"].Environment["PUBLIC_BAHIA_BOOTSTRAP_RELAYS"]
+			if got == nil || *got != "wss://relay.example/a?x=1&y=2|literal" {
+				t.Fatalf("environment lost delimiter-hostile value: %v", got)
+			}
+		})
+	}
+}
+
+func TestSDKComposeExecutor_LoadProjectFilesNormalizesShortDocsMount(t *testing.T) {
+	dir := t.TempDir()
+	base := writeSDKTestFile(t, dir, composeFileName, "name: edge\nservices:\n  bahia:\n    image: bahia:old\n    volumes:\n      - /srv/data/bahia-controlplane/releases/github-0000000/docs:/docs:ro\n")
+	e, _ := newFakeSDKExecutor(t, dir)
+	project, err := e.LoadProjectFiles(context.Background(), base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	volumes := project.Services["bahia"].Volumes
+	if len(volumes) != 1 || volumes[0].Type != "bind" || volumes[0].Target != "/docs" || !volumes[0].ReadOnly {
+		t.Fatalf("short docs mount not normalized: %#v", volumes)
+	}
+}
+
 func TestSDKComposeExecutor_Up_UsesDefaultDiscovery(t *testing.T) {
 	// The CLI executor runs `docker compose up` without -f, so Compose default
 	// discovery merges docker-compose.override.yml. The SDK path must match.

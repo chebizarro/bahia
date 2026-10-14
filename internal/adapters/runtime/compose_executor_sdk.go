@@ -193,6 +193,44 @@ func (e *SDKComposeExecutor) loadProjectWithEnv(ctx context.Context, workingDir 
 	return svc.LoadProject(ctx, opts)
 }
 
+// LoadProjectFiles resolves an explicit host Compose file set without applying it.
+// Passing explicit paths avoids discovery of stale deploy overrides.
+func (e *SDKComposeExecutor) LoadProjectFiles(ctx context.Context, configPaths ...string) (*types.Project, error) {
+	if len(configPaths) == 0 || strings.TrimSpace(configPaths[0]) == "" {
+		return nil, fmt.Errorf("compose sdk: base config path is required")
+	}
+	return e.loadProject(ctx, filepath.Dir(configPaths[0]), configPaths)
+}
+
+// ApplyProject converges only the requested services and their dependencies.
+// The project is already resolved and may have been mutated in memory; no
+// Compose files are read during this operation.
+func (e *SDKComposeExecutor) ApplyProject(ctx context.Context, project *types.Project, services ...string) error {
+	if project == nil || strings.TrimSpace(project.Name) == "" || len(services) == 0 {
+		return fmt.Errorf("compose sdk: resolved project and services are required")
+	}
+	for _, name := range services {
+		if _, ok := project.Services[name]; !ok {
+			return fmt.Errorf("compose sdk: missing service %q", name)
+		}
+	}
+	selected, err := project.WithSelectedServices(services, types.IncludeDependencies)
+	if err != nil {
+		return fmt.Errorf("compose sdk: select services: %w", err)
+	}
+	svc, err := e.service()
+	if err != nil {
+		return fmt.Errorf("compose sdk: %w", err)
+	}
+	if err := svc.Up(ctx, selected, api.UpOptions{
+		Create: api.CreateOptions{Services: services, QuietPull: true, IgnoreOrphans: true},
+		Start:  api.StartOptions{Wait: true, Services: services},
+	}); err != nil {
+		return fmt.Errorf("compose sdk: up with wait: %w", err)
+	}
+	return nil
+}
+
 // Ps uses the same project discovery and endpoint as SDK apply.
 func (e *SDKComposeExecutor) Ps(ctx context.Context, composeDir, serviceName string) ([]composePSEntry, error) {
 	svc, err := e.service()
