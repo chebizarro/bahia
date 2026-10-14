@@ -3,6 +3,7 @@ import { getNip07Signer } from '$lib/nostr/nip07-signer.js';
 import { getNip46Signer } from '$lib/nostr/nip46.js';
 import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from '$lib/nostr/boot.js';
 import { signIntent } from '$lib/nostr/intent-signer.js';
+import { INTENT_STATUS_TOPIC } from '$lib/nostr/intent-envelope.js';
 import { giftWrapIntent, sensitiveIntentBlocker } from '$lib/nostr/intent-giftwrap.js';
 import { createIntentOutbox } from '$lib/nostr/outbox.js';
 import { createPendingIntents, intentStatusCoordinates } from './pending-intents.svelte.js';
@@ -82,7 +83,7 @@ async function openSession() {
     }
   } });
   await outbox.open();
-  const statusFilter = { kinds: [30315], authors: [servicePubkey], '#p': [authState.pubkey], '#t': ['intent-status'], limit: 500 };
+  const statusFilter = { kinds: [30315], authors: [servicePubkey], '#p': [authState.pubkey], '#t': [INTENT_STATUS_TOPIC], limit: 500 };
   const unsubStatus = store.subscribe(statusFilter, event => void pending.handleStatus(event));
   for (const event of store.query(statusFilter)) await pending.handleStatus(event);
   const statusReq = pool.subscribe({ relays, filters: [statusFilter], filterKey: `intent-status:${authState.pubkey}` });
@@ -125,7 +126,7 @@ export async function waitForSensitiveIntentStatus({ domain, coordinate, intentI
   const requester = authState.pubkey;
   const service = getServicePubkey();
   const filter = { kinds: [30315], authors: [service],
-    '#d': intentStatusCoordinates(requester, { domain, coordinate, intentId }), '#p': [requester], '#t': ['intent-status'] };
+    '#d': intentStatusCoordinates(requester, { domain, coordinate, intentId }), '#p': [requester], '#t': [INTENT_STATUS_TOPIC] };
   const store = getEventStore();
   return new Promise((resolve, reject) => {
     let finished = false;
@@ -145,7 +146,7 @@ export async function waitForSensitiveIntentStatus({ domain, coordinate, intentI
     const onStatus = event => {
       const tag = name => event.tags?.find(item => item[0] === name)?.[1];
       if (event.kind !== 30315 || event.pubkey !== service || !filter['#d'].includes(tag('d')) ||
-          tag('p') !== requester || tag('intent_id') !== intentId || tag('t') !== 'intent-status') return;
+          tag('p') !== requester || tag('intent_id') !== intentId || tag('t') !== INTENT_STATUS_TOPIC) return;
       let body;
       try { body = JSON.parse(event.content || '{}'); }
       catch { finish(null, new Error('Invalid intent status content')); return; }

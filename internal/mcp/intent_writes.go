@@ -135,7 +135,7 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 	result := map[string]any{"status": "pending", "intent_id": intentID, "event_id": eventID}
 	if write.statusOnly {
 		result["status_kind"] = controlplane.KindNIP38Status
-		result["status_coordinate"] = "intent-status:" + actor + ":" + write.coordinate
+		result["status_coordinate"] = kinds.IntentStatusCoordinate(actor, write.coordinate)
 		status, readErr := s.readIntentOutcome(ctx, actor, write.coordinate, intentID)
 		if readErr != nil {
 			return intentWriteError("error", intentID, eventID, "read intent outcome: "+readErr.Error()), true
@@ -150,7 +150,7 @@ func (s *Server) callIntentWrite(ctx context.Context, name string, args map[stri
 	if name == "bahia_evaluate_policy" {
 		result["status"] = "accepted"
 		result["status_kind"] = controlplane.KindNIP38Status
-		result["status_coordinate"] = "intent-status:" + actor + ":" + write.coordinate
+		result["status_coordinate"] = kinds.IntentStatusCoordinate(actor, write.coordinate)
 	}
 	if write.deleted {
 		coordinate := write.deleteCoordinate
@@ -215,7 +215,7 @@ func (s *Server) readIntentOutcome(ctx context.Context, actor, coordinate, inten
 	if err != nil {
 		return nil, err
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(controlplane.KindNIP38Status)}, Authors: []nostr.PubKey{pubkey}, Tags: nostr.TagMap{"d": {"intent-status:" + actor + ":" + coordinate}}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(controlplane.KindNIP38Status)}, Authors: []nostr.PubKey{pubkey}, Tags: nostr.TagMap{"d": {kinds.IntentStatusCoordinate(actor, coordinate)}}}
 	for event := range s.stateStore.QueryEvents(filter) {
 		if err := ctx.Err(); err != nil {
 			return nil, err

@@ -88,7 +88,7 @@ func (s *LLMCanonicalSource) accepted(ctx context.Context, intent *controlplane.
 	if s.Outbox == nil || s.DeliveryTarget == "" {
 		return fmt.Errorf("bahia-4f10q.2.2: LLM acceptance proof store unavailable")
 	}
-	d := "intent-status:" + intent.Actor + ":" + intent.Coordinate
+	d := kinds.IntentStatusCoordinate(intent.Actor, intent.Coordinate)
 	for status := range s.Runtime.store.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{30315},
 		Authors: []nostr.PubKey{s.Runtime.author}, Tags: nostr.TagMap{"d": {d}, "status": {"accepted"}}}) {
 		if err := ctx.Err(); err != nil {

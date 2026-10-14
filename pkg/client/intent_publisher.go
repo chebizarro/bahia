@@ -11,6 +11,7 @@ import (
 	"fiatjaf.com/nostr/keyer"
 	"fiatjaf.com/nostr/nip59"
 	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
 const (
@@ -275,7 +276,7 @@ func (p *IntentPublisher) BuildIntentEvent(req PublishIntentRequest) (nostr.Even
 		{"d", req.Coordinate},
 		{"domain", req.Domain},
 		{"schema", req.Schema},
-		{"t", "bahia-intent"},
+		{"t", kinds.IntentTopic},
 		{"t", topicTag},
 		{"op", req.Op},
 	}

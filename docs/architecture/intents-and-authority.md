@@ -284,12 +284,16 @@ MCP (`ProcessInProcess`), sharing one idempotency store:
 ### 3.3 Intent status events
 
 Processing outcome is a **kind `30315`** (NIP-38 status) event from the service
-key with `d = intent-status:<requester-pubkey>:<entity-coordinate>` — one
-replaceable record per requester and entity, so status never grows without
-bound. Tags: `domain=intent`, `status`, `t=intent-status`, `e=<intent-event-id>`,
+key. Ordinary outcomes use `d = intent-status:<requester-pubkey>:<entity-coordinate>`
+(one replaceable record per requester and entity). Secret outcomes and rejected
+or conflicted outcomes in confidential tenant domains use
+`d = intent-status:<requester-pubkey>:<domain>:<intent-id>` instead, so the
+public envelope does not reveal the entity coordinate. Readers of those
+outcomes subscribe to both coordinates for the request. Tags: `domain=intent`,
+`status`, `t=intent-status`, `e=<intent-event-id>` when available,
 `p=<requester>`, `intent_id`, and a NIP-40 `expiration` of `created_at + 7 days`
-(the sidecar sweeps expired events). Content:
-`{"intent_id","coordinate","result"}`.
+(the sidecar sweeps expired events). Ordinary content includes
+`{"intent_id","coordinate","result"}`; confidential outcomes omit `coordinate`.
 
 Status values: `accepted`, `rejected` (authorization or validation failure for
 a trusted author), `conflict` (stale `expected_updated_at`), `superseded` (a

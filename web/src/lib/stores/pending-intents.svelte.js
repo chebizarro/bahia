@@ -1,12 +1,11 @@
+import { intentStatusCoordinates } from '$lib/nostr/intent-envelope.js';
+
+export { intentStatusCoordinates } from '$lib/nostr/intent-envelope.js';
+
 const STORE = 'pending_intents';
 
 function tag(event, name) { return event?.tags?.find(t => t[0] === name)?.[1]; }
 function key(coordinate, intentId) { return `${coordinate}\u0000${intentId}`; }
-
-export function intentStatusCoordinates(requester, { domain, coordinate, intentId }) {
-  const legacy = `intent-status:${requester}:${coordinate}`;
-  return domain === 'secret' ? [`intent-status:${requester}:secret:${intentId}`, legacy] : [legacy];
-}
 
 /** Merge UI-only desired state beside canonical rows without changing the store. */
 export function mergeWithPending(canonical, pending, domain) {

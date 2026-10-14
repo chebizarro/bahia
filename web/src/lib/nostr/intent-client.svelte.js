@@ -2,6 +2,7 @@ import { untrack } from 'svelte';
 import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from './boot.js';
 import { toWebSocketUrl } from './pool-utils.js';
 import { signIntent } from './intent-signer.js';
+import { INTENT_STATUS_TOPIC, intentStatusCoordinates } from './intent-envelope.js';
 import { createIntentOutbox } from './outbox.js';
 import { createPendingIntents } from '../stores/pending-intents.svelte.js';
 import { authState, resolveActiveSigner, signWithAuth } from '../stores/auth.svelte.js';
@@ -32,10 +33,10 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
     }
   } });
 
-  function retainStatus(coordinate) {
+  function retainStatus({ coordinate, domain, intentId }) {
     if (subscriptions.has(coordinate)) return;
-    const filter = { kinds: [30315], authors: [servicePubkey], '#d': [`intent-status:${requesterPubkey}:${coordinate}`],
-      '#p': [requesterPubkey], '#t': ['intent-status'] };
+    const filter = { kinds: [30315], authors: [servicePubkey], '#d': intentStatusCoordinates(requesterPubkey, { domain, coordinate, intentId }),
+      '#p': [requesterPubkey], '#t': [INTENT_STATUS_TOPIC] };
     const canonicalFilter = { kinds: [30900], authors: [servicePubkey], '#d': [coordinate], limit: 1 };
     const handle = pool.subscribe({ relays, filters: [{ ...filter, limit: 1 }, canonicalFilter] });
     subscriptions.set(coordinate, { handle });
@@ -62,10 +63,11 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
         void pending.handleCanonical(event).then(resolved => { if (resolved) releaseResolved(tag(event, 'd')); });
       });
       unsubscribeStatus = store.subscribe({ kinds: [30315], authors: [servicePubkey], '#p': [requesterPubkey],
-        '#t': ['intent-status'] }, event => {
-        void pending.handleStatus(event).then(resolved => { if (resolved) releaseResolved(tag(event, 'd')?.split(':').slice(2).join(':')); });
+        '#t': [INTENT_STATUS_TOPIC] }, event => {
+        const coordinate = pending.query().find(row => row.intentId === tag(event, 'intent_id'))?.coordinate;
+        void pending.handleStatus(event).then(resolved => { if (resolved) releaseResolved(coordinate); });
       });
-      for (const row of pending.query({ status: 'pending' })) retainStatus(row.coordinate);
+      for (const row of pending.query({ status: 'pending' })) retainStatus(row);
       await outbox.open();
     },
     close() {
@@ -74,9 +76,9 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
       for (const { handle } of subscriptions.values()) handle.unsubscribe();
       subscriptions.clear(); outbox.close(); pending.close();
     },
-    waitForStatus({ coordinate, intentId, signal }) {
+    waitForStatus({ domain, coordinate, intentId, signal }) {
       const filter = { kinds: [30315], authors: [servicePubkey],
-        '#d': [`intent-status:${requesterPubkey}:${coordinate}`], '#p': [requesterPubkey], '#t': ['intent-status'] };
+        '#d': intentStatusCoordinates(requesterPubkey, { domain, coordinate, intentId }), '#p': [requesterPubkey], '#t': [INTENT_STATUS_TOPIC] };
       return new Promise((resolve, reject) => {
         let finished = false;
         let unsubscribe = () => {};
@@ -95,8 +97,8 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
         const cancel = error => finish(null, error);
         const onEvent = event => {
           if (event?.kind !== 30315 || event.pubkey !== servicePubkey ||
-              tag(event, 'd') !== filter['#d'][0] || tag(event, 'p') !== requesterPubkey ||
-              tag(event, 'intent_id') !== intentId || tag(event, 't') !== 'intent-status') return;
+              !filter['#d'].includes(tag(event, 'd')) || tag(event, 'p') !== requesterPubkey ||
+              tag(event, 'intent_id') !== intentId || tag(event, 't') !== INTENT_STATUS_TOPIC) return;
           let body;
           try { body = JSON.parse(event.content || '{}'); }
           catch { finish(null, new Error('Invalid intent status content')); return; }
@@ -125,11 +127,11 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
     async submit({ domain, op, coordinate, orgId, content, currentRecord, expectedUpdatedAt, intentId }) {
       const signed = await signIntent({ domain, op, coordinate, orgId, content, currentRecord,
         expectedUpdatedAt, intentId }, signer);
-      retainStatus(coordinate);
+      retainStatus({ coordinate, domain, intentId: signed.intentId });
       await pending.add({ event: signed.event, domain, op, desiredState: content });
       store.ingest(signed.event);
       await outbox.enqueue(signed.event);
-      return { ...signed, pending: true, desiredState: content };
+      return { ...signed, domain, pending: true, desiredState: content };
     }
   };
 }
@@ -198,7 +200,7 @@ export async function publishIntent(request) {
 /** Resolve a request intent from its scoped daemon status, not a ContextVM result. */
 export async function acceptedIntentStatus(submitted, { signal } = {}) {
   if (submitted.sensitive) return waitForSensitiveIntentStatus(submitted, { signal });
-  return (await currentClient()).waitForStatus({ coordinate: submitted.coordinate,
+  return (await currentClient()).waitForStatus({ domain: submitted.domain, coordinate: submitted.coordinate,
     intentId: submitted.intentId, signal });
 }
 
@@ -216,7 +218,7 @@ export async function publishIntentForStatus(request, { signal } = {}) {
   const abort = () => controller.abort(signal.reason);
   if (signal?.aborted) abort();
   else signal?.addEventListener('abort', abort, { once: true });
-  const status = client.waitForStatus({ coordinate: request.coordinate, intentId: request.intentId,
+  const status = client.waitForStatus({ domain: request.domain, coordinate: request.coordinate, intentId: request.intentId,
     signal: controller.signal });
   void status.catch(() => {});
   try {
