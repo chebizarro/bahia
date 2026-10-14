@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - edge-01
+    - docker

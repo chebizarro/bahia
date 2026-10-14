@@ -21,7 +21,8 @@ seed_array() {
   IFS=,
   first=1
   for value in $values; do
-    value=$(printf '%s' "$value" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
     if [ "$(printf '%s' "$value" | tr -d '\r\n')" != "$value" ]; then
       echo "bahia-web invalid $kind: control character" >&2; IFS=$old_ifs; return 1
     fi
@@ -46,5 +47,8 @@ KEYS_JSON=$(seed_array "$SERVICE_PUBKEYS" "service pubkey")
 WIDGETS_JSON=$(seed_array "$WIDGET_PUBKEYS" "widget pubkey")
 TEMP_SCRIPT=$(mktemp "${SEED_SCRIPT}.XXXXXX")
 trap 'rm -f "$TEMP_SCRIPT"' EXIT
-printf 'window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:[%s],service_pubkeys:[%s],widget_pubkeys:[%s]};\n' "$RELAYS_JSON" "$KEYS_JSON" "$WIDGETS_JSON" > "$TEMP_SCRIPT"
+export RELAYS_JSON KEYS_JSON WIDGETS_JSON
+envsubst "\$RELAYS_JSON \$KEYS_JSON \$WIDGETS_JSON" > "$TEMP_SCRIPT" <<'TEMPLATE'
+window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:[$RELAYS_JSON],service_pubkeys:[$KEYS_JSON],widget_pubkeys:[$WIDGETS_JSON]};
+TEMPLATE
 mv "$TEMP_SCRIPT" "$SEED_SCRIPT"

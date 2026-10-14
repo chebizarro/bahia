@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -36,6 +36,20 @@ describe('web runtime bootstrap entrypoint', () => {
     expect(readFileSync(output, 'utf8')).toContain('relay_urls:["wss://relay.example/nostr","ws://localhost:3334/relay"]');
     expect(readFileSync(output, 'utf8')).toContain(`service_pubkeys:["${'a'.repeat(64)}","${'b'.repeat(64)}"]`);
     expect(readFileSync(output, 'utf8')).not.toContain('old build output');
+  });
+
+  it('preserves valid delimiter characters and leaves no partial temp file', () => {
+    const relays = 'wss://relay.example/nostr?a=1&b=2#section';
+    const keys = 'a'.repeat(64);
+    const result = run(` ${relays} `, ` ${keys} `);
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(output, 'utf8')).toContain(`relay_urls:["${relays}"]`);
+    expect(readFileSync(output, 'utf8')).toContain(`service_pubkeys:["${keys}"]`);
+    expect(readdirSync(dir)).toEqual(['bahia-bootstrap.js']);
+    const before = readFileSync(output, 'utf8');
+    expect(run('wss://relay.example/a|bad', keys).status).not.toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe(before);
+    expect(readdirSync(dir)).toEqual(['bahia-bootstrap.js']);
   });
 
   it('emits the optional widget publisher allowlist and denies all when it is unset', () => {

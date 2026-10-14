@@ -36,6 +36,7 @@ jobs:
     env:
       CONTROLPLANE_ROOT: /srv/data/bahia-controlplane
       COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
+      COMPOSE_OVERRIDE: /srv/data/bahia-controlplane/docker-compose.deploy-override.yml
       RELEASE_ROOT: /srv/data/bahia-controlplane/releases
       EDGE_HEALTH_HOST: 172.17.0.1
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${{ vars.PUBLIC_BAHIA_BOOTSTRAP_RELAYS }}
@@ -124,7 +125,7 @@ jobs:
           test -f Dockerfile
           test -f web/Dockerfile
           test -d docs
-          test -f scripts/deploy_edge_compose_update.py
+          test -f scripts/deploy_edge_compose_override.py
           test -f scripts/edge_image_admission.py
           test -f deploy/edge/image-admission-policy.json
           test -f scripts/relay_policy_rollout_gate.py
@@ -139,27 +140,17 @@ jobs:
             --repo . \
             --revision "$RELEASE_REVISION"
 
-      - name: Seed web runtime environment into host compose
-        # Order matters: this runs AFTER the read-only preflight and BEFORE any
-        # image build, compose backup, image swap, or `up`.
-        #   1. Inject the runtime bootstrap seed (`${PUBLIC_BAHIA_*}` /
-        #      `${PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS:-}` references) into the HOST
-        #      compose file's web.environment. Text-preserving and idempotent: only
-        #      missing keys are added, existing values are never rewritten, and the
-        #      file is left untouched when nothing is missing or the web service is
-        #      absent (non-zero exit).
-        #   2. Render the seeded file and gate on the result. Job-level values reach
-        #      Compose interpolation here, so a host that lacked the keys passes once
-        #      injection succeeds; a blank/missing value still fails before any stack
-        #      change. The deploy step's backup is taken later, so the rollback file
-        #      also carries the seed.
+      - name: Validate web runtime environment without changing host compose
         run: |
           set -euo pipefail
 
-          python3 scripts/deploy_edge_compose_update.py \
-            --compose-file "$COMPOSE_FILE" \
-            --seed-web-env-only
-          docker compose -f "$COMPOSE_FILE" config --format json \
+          preflight_override="$RUNNER_TEMP/bahia-web-seed-preflight.yml"
+          docker compose -f "$COMPOSE_FILE" config --format json |
+            python3 scripts/deploy_edge_compose_override.py \
+              --base-file "$COMPOSE_FILE" \
+              --override-file "$preflight_override" \
+              --seed-only
+          docker compose -f "$COMPOSE_FILE" -f "$preflight_override" config --format json \
             | python3 scripts/check_web_bootstrap_compose.py
 
       - name: Build local Bahia image
@@ -207,15 +198,26 @@ jobs:
           tag="github-${RELEASE_REVISION::7}"
           release_dir="$RELEASE_ROOT/$tag"
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          backup="$CONTROLPLANE_ROOT/backups/compose-${tag}-${timestamp}.yml"
-          rollback="$CONTROLPLANE_ROOT/backups/compose-${tag}-${timestamp}.rollback-safe.yml"
+          backup="$CONTROLPLANE_ROOT/backups/compose-override-${tag}-${timestamp}.yml"
+          rollback="$CONTROLPLANE_ROOT/backups/compose-override-${tag}-${timestamp}.rollback-safe.yml"
           baseline="$CONTROLPLANE_ROOT/backups/relay-policy-${tag}-${timestamp}.json"
           ready_url="http://${EDGE_HEALTH_HOST}:8080/ready"
 
           # Capture only public signed provenance when a policy head exists.
           # A fresh Nostr installation with no matching event remains deployable.
           python3 scripts/relay_policy_rollout_gate.py capture --url "$ready_url" --baseline "$baseline"
-          cp "$COMPOSE_FILE" "$backup"
+          if [[ -f "$COMPOSE_OVERRIDE" ]]; then
+            cp "$COMPOSE_OVERRIDE" "$backup"
+          else
+            # First override rollout: retain base web/docs and forward any
+            # missing bootstrap env while pinning Bahia to the safe image.
+            docker compose -f "$COMPOSE_FILE" config --format json |
+              python3 scripts/deploy_edge_compose_override.py \
+                --base-file "$COMPOSE_FILE" \
+                --override-file "$backup" \
+                --seed-only \
+                --rollback-backend-image "$SAFE_ROLLBACK_BAHIA_IMAGE"
+          fi
           python3 scripts/edge_image_admission.py sanitize-rollback \
             --repo . \
             --source "$backup" \
@@ -233,16 +235,16 @@ jobs:
           rollback() {
             status=$?
             if [[ "$rollback_armed" == "1" ]]; then
-              echo "Rollout health gate failed; restoring previous digest-pinned Compose state" >&2
-              if ! cp "$rollback" "$COMPOSE_FILE"; then
-                echo "::error::Rollback restore failed: Compose backup copy" >&2
+              echo "Rollout health gate failed; restoring previous digest-pinned Compose override" >&2
+              if ! cp "$rollback" "$COMPOSE_OVERRIDE"; then
+                echo "::error::Rollback restore failed: Compose override backup copy" >&2
                 status=1
               fi
-              if ! docker compose -f "$COMPOSE_FILE" config --quiet; then
+              if ! docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" config --quiet; then
                 echo "::error::Rollback restore failed: Compose config validation" >&2
                 status=1
               fi
-              if ! docker compose -f "$COMPOSE_FILE" up -d bahia web; then
+              if ! docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" up -d --wait bahia web; then
                 echo "::error::Rollback restore failed: Bahia/web Compose restart" >&2
                 status=1
               fi
@@ -269,14 +271,16 @@ jobs:
           }
           trap rollback EXIT
 
-          python3 scripts/deploy_edge_compose_update.py \
-            --compose-file "$COMPOSE_FILE" \
-            --tag "$tag" \
-            --release-dir "$release_dir" \
-            --backend-image "$backend_image" \
-            --web-image "$web_image"
-          docker compose -f "$COMPOSE_FILE" config --quiet
-          docker compose -f "$COMPOSE_FILE" up -d bahia web
+          docker compose -f "$COMPOSE_FILE" config --format json |
+            python3 scripts/deploy_edge_compose_override.py \
+              --base-file "$COMPOSE_FILE" \
+              --override-file "$COMPOSE_OVERRIDE" \
+              --tag "$tag" \
+              --release-dir "$release_dir" \
+              --backend-image "$backend_image" \
+              --web-image "$web_image"
+          docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" config --quiet
+          docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" up -d --wait bahia web
 
           # Tier-0 migration/bootstrap may take several minutes. If a relay-policy
           # head existed before rollout, reject its loss, regression, or hash change.
@@ -316,10 +320,10 @@ jobs:
           prune_dir() {
             local dir="$1" label="$2"
             [ -d "$dir" ] || return 0
-            # Never prune the release currently referenced by the live compose file.
+            # Never prune the release referenced by the live override.
             local live=""
-            if [ -f "$COMPOSE_FILE" ]; then
-              live="$(grep -oE "${RELEASE_ROOT}/[0-9a-f]{40}" "$COMPOSE_FILE" | head -1 || true)"
+            if [ -f "$COMPOSE_OVERRIDE" ]; then
+              live="$(grep -oE "${RELEASE_ROOT}/github-[0-9a-f]{7}" "$COMPOSE_OVERRIDE" | head -1 || true)"
             fi
             local n=0
             while IFS= read -r entry; do

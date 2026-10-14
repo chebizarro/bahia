@@ -202,10 +202,10 @@ The workflow:
 2. validates the runner, Compose file, runtime bootstrap seed and image policy;
 3. builds SHA-tagged daemon and web images locally;
 4. stages the release tree under `/srv/data/bahia-controlplane/releases`;
-5. updates the host Compose file through `scripts/deploy_edge_compose_update.py`;
-6. applies the stack under the relay-policy gate;
-7. waits for the daemon readiness URL;
-8. restores the saved Compose file and safe images if the gated apply fails;
+5. generates a digest-pinned Compose override through `scripts/deploy_edge_compose_override.py`, leaving the host base Compose file unchanged;
+6. applies the stack with `docker compose -f <base> -f <override> up -d --wait` under the relay-policy gate;
+7. verifies the daemon readiness URL;
+8. restores the saved, admission-sanitized override if the gated apply fails;
 9. prunes only release trees, backups and Bahia-tagged images outside the
    configured retention windows.
 
