@@ -31,6 +31,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
+	github.com/thomas-vilte/mls-go v1.6.0
 	go.etcd.io/bbolt v1.5.0
 	go.etcd.io/etcd/client/v3 v3.7.1
 	go.opentelemetry.io/otel v1.46.0
