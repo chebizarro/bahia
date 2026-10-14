@@ -117,6 +117,7 @@ func TestStatePolicyReadsNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	pubkey := nostr.GetPublicKey(sk).Hex()
 	now := time.Date(2026, 10, 3, 10, 0, 0, 123456000, time.UTC)
 	base := nostr.Timestamp(now.Unix())
@@ -174,6 +175,7 @@ func TestStatePolicyReadsNostrGolden(t *testing.T) {
 func TestStateReadStaleStoreWarnsAndSucceeds(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	now := time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
 	state := domain.EnvironmentServiceState{ServiceID: uuid.New(), EnvironmentID: uuid.New(), DriftStatus: domain.DriftStatusDrifted, UpdatedAt: now}
 	tags, content := nostradapter.RuntimeStateRecord(&state, nil)
@@ -197,8 +199,9 @@ func TestStateReadStaleStoreWarnsAndSucceeds(t *testing.T) {
 
 func TestPolicyGetMissingReturnsError(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
-	t.Setenv("BAHIA_NOSTR_NSEC", "not-a-key")
+	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	relay := &statePolicyRelay{}
 	server := httptest.NewServer(http.HandlerFunc(relay.serve))
 	defer server.Close()

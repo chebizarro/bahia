@@ -13,6 +13,7 @@ make build && ./bin/bahia --help
 ## Signer and relays
 
 Every command needs a relay and, for writes and protected reads, a signer.
+Fleet-state reads (`services`, `environments`, `state`, `policies`, `workers`, `builds`, and `artifacts`) require an admitted operator signer for NIP-42 relay AUTH. Without one, the CLI refuses the read rather than treating an auth-required `CLOSED` as an empty or fresh result.
 
 | Flag | Environment | Purpose |
 |------|-------------|---------|

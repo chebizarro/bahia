@@ -38,7 +38,8 @@ import (
 //   - "off":     no read-side auth
 //
 // Readers that only need public topics (FIPS bridge, DNS agent zone reads,
-// CLI state reads, the web's pre-login bootstrap) are unaffected by enforce.
+// the web's pre-login bootstrap) are unaffected by enforce. CLI fleet reads
+// authenticate with the configured operator signer.
 // Every reader of a protected topic or non-public kind must answer the NIP-42
 // challenge with a pubkey in the allowed set above: the daemon with its
 // service key, operators and org members through the intent-authors sync
@@ -121,17 +122,17 @@ var publicKindRanges = [][2]nostr.Kind{
 //	  web pre-login bootstrap reads these for the DNS dashboard; the DNS agent
 //	  applies dns-zone-sync with a key the sidecar need not admit.
 //
-//	service-state, service-registry, environment-registry — PUBLIC:
-//	  CLI NostrClient (pkg/client) reads anonymously (no WithPrivateKey in its pool);
-//	  web pre-login bootstrap reads these for the services dashboard.
+//	service-state, service-registry, environment-registry — PROTECTED:
+//	  Plaintext fleet inventory requires an admitted NIP-42 reader.
 //
 //	artifact-registry, build-registry, deployment-intent, deployment-run,
-//	policy-registry, package-repository, package-artifact, package-promotion — PUBLIC:
-//	  Web pre-login bootstrap reads all of these for fleet dashboards.
+//	policy-registry, package-repository, package-artifact, package-promotion — PROTECTED:
+//	  These are plaintext fleet state.
 //
 //	worker-state, worker-assignment, worker-drain, worker-eligibility,
-//	worker-cleanup — PUBLIC:
-//	  Web pre-login bootstrap reads worker state; loom worker adverts are open interop.
+//	worker-cleanup — PROTECTED:
+//	  Worker placement and lifecycle are plaintext fleet state; separate loom
+//	  advertisements remain open interop.
 //
 //	sbom-reference, sbom-availability — PUBLIC (as 30900 topics):
 //	  Supply-chain attestations consumed by the security scanner and external verifiers.
@@ -157,8 +158,8 @@ var publicKindRanges = [][2]nostr.Kind{
 //	llm-route, llm-state — PUBLIC:
 //	  Web pre-login bootstrap reads LLM routing state.
 //
-//	backup-*, ml-* — PUBLIC:
-//	  Web pre-login bootstrap reads all cp-state topics via controlplaneStateTopics().
+//	backup-*, ml-* — PROTECTED:
+//	  Backup and model pipeline records are plaintext fleet state.
 //
 //	security-findings, security-audit — PROTECTED:
 //	  Detailed vulnerability data and audit logs; sensitive.
@@ -185,28 +186,6 @@ var publicCPStateTopics = map[string]bool{
 	kinds.DNSBackendTopic:  true,
 	"dns-zone-sync":        true,
 
-	// Core fleet state — CLI NostrClient, web pre-login bootstrap.
-	kinds.CPStateTopicServiceState:        true,
-	kinds.CPStateTopicServiceRegistry:     true,
-	kinds.CPStateTopicEnvironmentRegistry: true,
-	kinds.CPStateTopicLLMRoute:            true,
-	kinds.CPStateTopicLLMState:            true,
-	kinds.CPStateTopicArtifactRegistry:    true,
-	kinds.CPStateTopicDeploymentIntent:    true,
-	kinds.CPStateTopicDeploymentRun:       true,
-	kinds.CPStateTopicBuildRegistry:       true,
-	kinds.CPStateTopicPolicyRegistry:      true,
-	kinds.CPStateTopicPackageRepository:   true,
-	kinds.CPStateTopicPackageArtifact:     true,
-	kinds.CPStateTopicPackagePromotion:    true,
-
-	// Workers — web pre-login bootstrap, loom open interop.
-	kinds.WorkerStateTopic:       true,
-	kinds.WorkerAssignmentTopic:  true,
-	kinds.WorkerDrainTopic:       true,
-	kinds.WorkerEligibilityTopic: true,
-	kinds.WorkerCleanupTopic:     true,
-
 	// SBOM — supply-chain attestations, external verifiers.
 	kinds.SBOMReferenceTopic:    true,
 	kinds.SBOMAvailabilityTopic: true,
@@ -218,29 +197,6 @@ var publicCPStateTopics = map[string]bool{
 	// Monitoring — assistant health, continuity heartbeat.
 	kinds.AssistantStatusTopic:     true,
 	kinds.ContinuityHeartbeatTopic: true,
-
-	// ML pipeline — web pre-login bootstrap.
-	kinds.CPStateTopicMLModel:             true,
-	kinds.CPStateTopicMLModelVersion:      true,
-	kinds.CPStateTopicMLDataset:           true,
-	kinds.CPStateTopicMLRecipe:            true,
-	kinds.CPStateTopicMLRecipeRun:         true,
-	kinds.CPStateTopicMLEndpoint:          true,
-	kinds.CPStateTopicMLEndpointState:     true,
-	kinds.CPStateTopicMLEvaluation:        true,
-	kinds.CPStateTopicMLProvenance:        true,
-	kinds.CPStateTopicMLRuntimeCapability: true,
-
-	// Backup — web pre-login bootstrap.
-	kinds.CPStateTopicBackupDefinition:         true,
-	kinds.CPStateTopicBackupPolicy:             true,
-	kinds.CPStateTopicBackupRepository:         true,
-	kinds.CPStateTopicBackupRetention:          true,
-	kinds.CPStateTopicBackupRecipe:             true,
-	kinds.CPStateTopicBackupRun:                true,
-	kinds.CPStateTopicBackupVerification:       true,
-	kinds.CPStateTopicBackupRestore:            true,
-	kinds.CPStateTopicBackupRuntimeObservation: true,
 
 	// OCK-encrypted families — content is ciphertext; read auth is redundant.
 	kinds.CPStateTopicOrgRegistry:                 true,
@@ -278,6 +234,8 @@ var publicCPStateTopics = map[string]bool{
 	kinds.CPStateTopicNotificationLog:     true,
 
 	// Protected topics (NOT in this map):
+	//   plaintext service, artifact, deployment, policy, package, worker,
+	//   backup, ML and LLM fleet state
 	//   security-findings, security-audit — detailed vulnerability data
 	//   assistant-transcript — private conversation content
 	//   assistant-session — session recovery data

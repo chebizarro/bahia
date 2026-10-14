@@ -128,12 +128,12 @@ func TestFilterNeedsAuth(t *testing.T) {
 		},
 		{
 			name:      "30900 with all public topics is open",
-			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState, kinds.WorkerStateTopic}}},
+			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.SBOMReferenceTopic, kinds.SBOMAvailabilityTopic}}},
 			needsAuth: false,
 		},
 		{
 			name:      "mixed 30900-public-topic and public kind is open",
-			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindProfileMetadata, 30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState}}},
+			filter:    nostr.Filter{Kinds: []nostr.Kind{nostr.KindProfileMetadata, 30900}, Tags: nostr.TagMap{"t": []string{kinds.SBOMReferenceTopic}}},
 			needsAuth: false,
 		},
 		{
@@ -170,9 +170,9 @@ func TestFilterNeedsAuth(t *testing.T) {
 			needsAuth: false,
 		},
 		{
-			name:      "web bootstrap topics (service, worker, backup, ml) are public",
+			name:      "plaintext fleet topics (service, worker, backup, ml) require auth",
 			filter:    nostr.Filter{Kinds: []nostr.Kind{30900}, Tags: nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState, kinds.WorkerAssignmentTopic, kinds.CPStateTopicBackupRun, kinds.CPStateTopicMLEndpoint}}},
-			needsAuth: false,
+			needsAuth: true,
 		},
 	}
 	for _, tc := range tests {
@@ -442,14 +442,14 @@ func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 }
 
 // TestReadAuth_30900_PublicTopic_ServedAnonymously verifies that an anonymous
-// REQ for a public 30900 topic is served even in enforce mode.
+// REQ for a public supply-chain topic is served even in enforce mode.
 func TestReadAuth_30900_PublicTopic_ServedAnonymously(t *testing.T) {
 	server, _, _ := testSidecarForReadAuth(t, config.ReadAuthModeEnforce)
 	defer closeSidecarTest(t, server)
 
 	filter := nostr.Filter{
 		Kinds: []nostr.Kind{30900},
-		Tags:  nostr.TagMap{"t": []string{kinds.CPStateTopicServiceState}},
+		Tags:  nostr.TagMap{"t": []string{kinds.SBOMReferenceTopic}},
 	}
 	reject, _ := server.readAuth.checkReadAuth(context.Background(), filter)
 	assert.False(t, reject, "anonymous REQ for public 30900 topic must be served in enforce mode")
@@ -497,8 +497,8 @@ func TestReadAuth_30900_MixedTopics_RejectsUnderEnforce(t *testing.T) {
 	filter := nostr.Filter{
 		Kinds: []nostr.Kind{30900},
 		Tags: nostr.TagMap{"t": []string{
-			kinds.CPStateTopicServiceState, // public
-			kinds.SecurityFindingsTopic,    // protected
+			kinds.SBOMReferenceTopic,    // public
+			kinds.SecurityFindingsTopic, // protected
 		}},
 	}
 	reject, reason := server.readAuth.checkReadAuth(context.Background(), filter)

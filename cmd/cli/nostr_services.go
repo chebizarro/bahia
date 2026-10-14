@@ -18,8 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
-var newCLIReadPool = func(ctx context.Context, relays []string) (client.SubscriptionPool, func(), error) {
-	pool := nostrpool.NewRelayPool(relays, zap.NewNop())
+var newCLIReadPool = func(ctx context.Context, relays []string, signer nostr.Keyer) (client.SubscriptionPool, func(), error) {
+	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), nostrpool.WithAuthSigner(signer))
 	pool.Connect(ctx)
 	return client.WrapRelayPool(pool), pool.Close, nil
 }
@@ -40,7 +40,14 @@ func readNostrEvents(cmd *cobra.Command, domainName string, legacyKind int) ([]n
 	if err != nil {
 		return nil, err
 	}
-	pool, closePool, err := newCLIReadPool(cmd.Context(), relays)
+	signer, closeSigner, err := newCLIReadSigner(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if closeSigner != nil {
+		defer func() { _ = closeSigner() }()
+	}
+	pool, closePool, err := newCLIReadPool(cmd.Context(), relays, signer)
 	if err != nil {
 		return nil, fmt.Errorf("connect to relays: %w", err)
 	}

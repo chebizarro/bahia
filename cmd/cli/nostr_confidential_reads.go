@@ -50,7 +50,7 @@ func newCLIReadSigner(cmd *cobra.Command) (nostr.Keyer, func() error, error) {
 		return decryptor, closeSigner, nil
 	}
 	if strings.TrimSpace(privateKey) == "" {
-		return nil, nil, fmt.Errorf("confidential reads require --nostr-key-file or a NIP-46 bunker signer")
+		return nil, nil, fmt.Errorf("fleet and confidential reads require --nostr-key-file or a NIP-46 bunker signer for relay AUTH")
 	}
 	normalized, err := client.NormalizeNostrPrivateKey(privateKey)
 	if err != nil {

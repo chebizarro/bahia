@@ -140,8 +140,9 @@ production.
 What is protected is decided per filter in
 `internal/relaysidecar/read_auth.go`:
 
-- Kind `30900` is classified by its `#t` topic. The public topics are the
-  registry, state, worker, DNS, backup, ML, SBOM, security-summary,
+- Kind `30900` is classified by its `#t` topic. Plaintext service, artifact,
+  deployment, policy, package, worker, backup, ML and LLM fleet state requires
+  an admitted NIP-42 reader. The public topics are DNS, SBOM, security-summary,
   assistant-status, continuity-heartbeat, managed-instance-health and
   route-canary families, and every OCK-encrypted family (org, member,
   invite, key envelope, secret, notification, payment, security finding,
@@ -163,18 +164,19 @@ administrators and allowed pubkeys, the intent-author set, and
 `read_auth_allowed_pubkeys`. Any service that subscribes to a protected topic
 with its own key must be listed: a separate SoulFactory controller key,
 pinned runtime pubkeys, Loom workers reading job kinds, the Hive-CI runner.
-The DNS agent (`dns-zone-sync`), the FIPS bridge (`dns-endpoint`), CLI state
-reads and `pkg/discovery` read public topics only. `bahia config …` and
+The DNS agent (`dns-zone-sync`), the FIPS bridge (`dns-endpoint`) and
+`pkg/discovery` read public topics only. CLI fleet-state reads require an
+admitted operator signer when connecting to an enforcing sidecar. `bahia config …` and
 `pkg/client` intent and ContextVM clients authenticate with the operator key,
-which is admitted through the intent-author sync. The web app hydrates public
+which is admitted through the intent-author sync. The web app hydrates only public
 read models before sign-in and answers the challenge with the signed-in
 operator's signer; a signed-in pubkey the sidecar does not admit sees
 `restricted:` in its connection status and only the public models.
 
 Verify with `curl -H 'Accept: application/nostr+json' https://relay.example/`
 (`"limitation":{…,"auth_required":true}`) and an unauthenticated
-`["REQ","x",{"kinds":[30900],"#t":["soul-factory-runtime-policy"]}]`, which
-is answered with `AUTH` and `CLOSED`, while `#t: ["service-state"]` returns
+`["REQ","x",{"kinds":[30900],"#t":["service-state"]}]`, which
+is answered with `AUTH` and `CLOSED`, while `#t: ["sbom-reference"]` returns
 events and `EOSE`.
 
 ## Storage, queries and delivery
