@@ -129,6 +129,16 @@ describe('encrypted route stores', () => {
     }));
   });
 
+  it('reassembles cursor pages from the signed ContextVM run-log result', async () => {
+    encryptedRequestsMock.requestEncryptedResult
+      .mockResolvedValueOnce({ result: { logs: { run_id: 'run-1', stdout: 'first', stderr: '' }, next_cursor: '5' } })
+      .mockResolvedValueOnce({ result: { logs: { run_id: 'run-1', stdout: ' second', stderr: 'error' } } });
+    const store = await import('../../src/lib/stores/deployment-run-logs.svelte.js');
+    await expect(store.loadDeploymentRunLogs('run-1')).resolves.toMatchObject({ stdout: 'first second', stderr: 'error' });
+    expect(encryptedRequestsMock.requestEncryptedResult).toHaveBeenCalledTimes(2);
+    expect(encryptedRequestsMock.requestEncryptedResult.mock.calls[1][0].payload).toEqual({ run_id: 'run-1', tail: 100, stream: 'merged', cursor: '5' });
+  });
+
   it('verifies artifact signatures through a signed request intent and scoped status data', async () => {
     const { artifacts } = await import('../../src/lib/stores/collections/deployments.svelte.js');
     const { services } = await import('../../src/lib/stores/collections/services.svelte.js');

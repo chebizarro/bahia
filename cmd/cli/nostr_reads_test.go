@@ -95,7 +95,7 @@ func filterHasTopic(filter nostr.Filter, ev *nostr.Event) bool {
 func installCLIReadPool(t *testing.T, pool *cliReadPool) {
 	t.Helper()
 	prior := newCLIReadPool
-	newCLIReadPool = func(context.Context, []string) (client.SubscriptionPool, func(), error) {
+	newCLIReadPool = func(context.Context, []string, nostr.Keyer) (client.SubscriptionPool, func(), error) {
 		return pool, func() {}, nil
 	}
 	t.Cleanup(func() { newCLIReadPool = prior })
@@ -145,6 +145,7 @@ func TestCLIReadNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_NOSTR_NSEC", "")
 	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	pub := nostr.GetPublicKey(sk).Hex()
 	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
 	service := domain.Service{ID: uuid.New(), Name: "api", ArtifactRepo: "ghcr.io/acme/api", RuntimeType: domain.RuntimeTypeCompose, RuntimeConfig: &domain.ServiceRuntimeConfig{Adopted: &domain.AdoptedRuntimeConfig{TargetName: "api", SourceRuntime: "compose", HostAlias: "node-1"}}, CreatedAt: now, UpdatedAt: now}
@@ -223,6 +224,7 @@ func TestCLIReadNostrGolden(t *testing.T) {
 func TestCLIReadCursorReuseAndStaleExit(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	pub := nostr.GetPublicKey(sk).Hex()
 	service := domain.Service{ID: uuid.New(), Name: "cached", ArtifactRepo: "repo", RuntimeType: domain.RuntimeTypeCompose}
 	stamp := nostr.Timestamp(time.Now().Unix())
@@ -275,6 +277,7 @@ func TestNostrServiceStorePathRejectsInvalidPubkey(t *testing.T) {
 func TestCLIEmptyServiceListNostr(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	pub := nostr.GetPublicKey(sk).Hex()
 	installCLIReadPool(t, &cliReadPool{})
 	base := []string{"--service-pubkey", pub, "--relay", "wss://fixture.invalid", "--output", "json"}
@@ -284,5 +287,15 @@ func TestCLIEmptyServiceListNostr(t *testing.T) {
 	}
 	if output != "null\n" {
 		t.Fatalf("empty service JSON = %q, want null", output)
+	}
+}
+
+func TestCLIFleetReadRequiresRelayAuthSigner(t *testing.T) {
+	t.Setenv("BAHIA_NOSTR_NSEC", "")
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", "")
+	t.Setenv("BAHIA_NOSTR_KEY_FILE", "")
+	_, _, err := runReadCLI(t, "--service-pubkey", nostr.Generate().Public().Hex(), "--relay", "wss://fixture.invalid", "services", "list")
+	if err == nil || !strings.Contains(err.Error(), "require --nostr-key-file or a NIP-46 bunker signer") {
+		t.Fatalf("missing relay AUTH signer error = %v", err)
 	}
 }

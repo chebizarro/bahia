@@ -105,14 +105,14 @@ export class EncryptedControlplaneTransport {
     // Bahia's relay stores at most STORED_EVENT_MAX_CONTENT_BYTES of content,
     // so a wrap too large to store is sent as an ephemeral 21059: relayed live
     // to the daemon (which answers in kind), never stored.
-    const wrapKind = ciphertext.length > relayLimits.cached(this.connectedRelays).maxContentBytes ? CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND : kind;
+    const wrapKind = ciphertext.length > (await relayLimits.resolve(this.connectedRelays)).maxContentBytes ? CONTEXTVM_EPHEMERAL_GIFT_WRAP_KIND : kind;
     return finalizeEvent({ kind: wrapKind, pubkey: wrapperPubkey, created_at, tags: [['p', this.servicePubkey]], content: ciphertext }, wrapperSecretKey);
   }
 
   async publishEncryptedRequest(event) {
     if (!event?.id) throw new Error('Cannot publish unsigned ContextVM request event');
     await this.connect();
-    assertRelayMessageFits(event, relayLimits.cached(this.connectedRelays).maxMessageBytes);
+    assertRelayMessageFits(event, (await relayLimits.resolve(this.connectedRelays)).maxMessageBytes);
     assertConnectedBahiaRelays(this.client);
     const results = await this.client.publish(event);
     const acceptedRelays = results.filter(publishAccepted);

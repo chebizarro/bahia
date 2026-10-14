@@ -31,7 +31,14 @@ func readCLIWorkerEvents(cmd *cobra.Command, extraAuthor string) ([]nostr.Event,
 	if err != nil {
 		return nil, nil, err
 	}
-	pool, closePool, err := newCLIReadPool(cmd.Context(), relays)
+	signer, closeSigner, err := newCLIReadSigner(cmd)
+	if err != nil {
+		return nil, nil, err
+	}
+	if closeSigner != nil {
+		defer func() { _ = closeSigner() }()
+	}
+	pool, closePool, err := newCLIReadPool(cmd.Context(), relays, signer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to relays: %w", err)
 	}

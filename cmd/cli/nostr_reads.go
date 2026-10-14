@@ -9,11 +9,9 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
-	nostrpool "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/pkg/client"
 	"github.com/spf13/cobra"
-	"go.uber.org/zap"
 )
 
 var cliEOSETimeout = client.DefaultEOSETimeout
@@ -57,11 +55,20 @@ func readCLIStateEvents(cmd *cobra.Command, domain string) ([]nostr.Event, error
 	if err != nil {
 		return nil, err
 	}
-	pool := nostrpool.NewRelayPool(relays, zap.NewNop())
-	pool.Connect(cmd.Context())
-	defer pool.Close()
+	signer, closeSigner, err := newCLIReadSigner(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if closeSigner != nil {
+		defer func() { _ = closeSigner() }()
+	}
+	pool, closePool, err := newCLIReadPool(cmd.Context(), relays, signer)
+	if err != nil {
+		return nil, fmt.Errorf("connect to relays: %w", err)
+	}
+	defer closePool()
 	nc, err := client.NewNostrClient(client.NostrClientConfig{
-		StorePath: storePath, ServicePubkey: pubkey, Pool: client.WrapRelayPool(pool), EOSETimeout: timeout,
+		StorePath: storePath, ServicePubkey: pubkey, Pool: pool, EOSETimeout: timeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Nostr client: %w", err)

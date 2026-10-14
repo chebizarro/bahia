@@ -107,3 +107,29 @@ func encodeForTest(t *testing.T, value any) []byte {
 	}
 	return encoded
 }
+
+func TestNIP44PlaintextLimitAndActionableOversizeReply(t *testing.T) {
+	for _, tc := range []struct {
+		size int
+		fits bool
+	}{{65534, true}, {65535, true}, {65536, false}} {
+		if got := nip44PlaintextFits([]byte(strings.Repeat("x", tc.size))); got != tc.fits {
+			t.Fatalf("%d-byte plaintext fits = %v, want %v", tc.size, got, tc.fits)
+		}
+	}
+	requesterPubkey := testNostrPubKeyHexFromPrivateKey(t, testRequesterKey)
+	publisher := &mockEncryptedPublisher{}
+	transport := NewEncryptedRequestTransport(nil, newResponder(t, publisher), []string{requesterPubkey}, zap.NewNop())
+	transport.RegisterContextVMHandler(ContextVMMethodDeploymentRunLogsGet, func(context.Context, ContextVMRequest) (any, error) {
+		return map[string]any{"item": strings.Repeat("x", 65536)}, nil
+	})
+	inner := makeContextVMEvent(t, testRequesterKey, `{"jsonrpc":"2.0","id":"large","method":"deployments/run-logs-get","params":{}}`)
+	transport.HandleEvent(context.Background(), wrapContextVMEvent(t, inner, KindContextVMGiftWrap))
+	if len(publisher.events) != 2 {
+		t.Fatalf("published %d events, want progress and typed error", len(publisher.events))
+	}
+	rpc := contextVMResponse(t, unwrapContextVMResponseEvent(t, publisher.events[1], testRequesterKey))
+	if rpc.Error == nil || rpc.Error.Code != ContextVMResponseTooLargeErrorCode || !strings.Contains(rpc.Error.Message, "smaller page") {
+		t.Fatalf("oversized item response = %+v", rpc)
+	}
+}

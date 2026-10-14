@@ -58,3 +58,15 @@ export async function uploadSBOMToBlossom(file, {
   }
   throw lastError || new Error('Blossom upload failed');
 }
+
+export async function sbomFileImportSource(file, { inlineLimit, useBlossom = false, upload = uploadSBOMToBlossom } = {}) {
+  if (!file) throw new Error('Choose an SPDX or CycloneDX JSON file to import.');
+  if (!Number.isSafeInteger(inlineLimit) || inlineLimit < 0) throw new Error('The inline SBOM limit is unavailable; choose Blossom upload.');
+  if (useBlossom || file.size > inlineLimit) return { location: await upload(file) };
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return { payloadBase64: btoa(binary) };
+}

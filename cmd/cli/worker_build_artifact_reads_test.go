@@ -16,6 +16,7 @@ import (
 func TestR3ReadNostrGolden(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	serviceSK := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", serviceSK.Hex())
 	workerSK := nostr.Generate()
 	servicePub := nostr.GetPublicKey(serviceSK).Hex()
 	workerPub := nostr.GetPublicKey(workerSK).Hex()
@@ -100,6 +101,7 @@ func TestR3ReadNostrGolden(t *testing.T) {
 func TestR3BuildCursorAndStaleExit(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	service := uuid.New()
 	build := domain.Build{ID: uuid.New(), ServiceID: service, Status: domain.BuildStatusQueued, CreatedAt: time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)}
 	stamp := nostr.Timestamp(time.Now().Unix())
@@ -126,6 +128,7 @@ func TestR3BuildCursorAndStaleExit(t *testing.T) {
 func TestR3ReadMissingAndInvalidIDs(t *testing.T) {
 	t.Setenv("BAHIA_DATA_DIR", t.TempDir())
 	sk := nostr.Generate()
+	t.Setenv("BAHIA_NOSTR_PRIVATE_KEY", sk.Hex())
 	pub := nostr.GetPublicKey(sk).Hex()
 	installCLIReadPool(t, &cliReadPool{})
 	base := []string{"--service-pubkey", pub, "--relay", "wss://fixture.invalid"}

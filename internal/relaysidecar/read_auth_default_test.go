@@ -46,6 +46,10 @@ func startDefaultReadAuthSidecar(t *testing.T) (serviceKey, adminKey, allowedKey
 		Tags: nostr.Tags{{"d", "service:web"}, {"t", kinds.CPStateTopicServiceState}}, Content: `{"ok":true}`}
 	require.NoError(t, serviceState.Sign(serviceKey))
 	require.NoError(t, server.store.Save(context.Background(), serviceState))
+	publicRef := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Now(),
+		Tags: nostr.Tags{{"d", "sbom:ref:test"}, {"t", kinds.SBOMReferenceTopic}}, Content: `{"digest":"sha256:test"}`}
+	require.NoError(t, publicRef.Sign(serviceKey))
+	require.NoError(t, server.store.Save(context.Background(), publicRef))
 	return serviceKey, adminKey, allowedKey, httpServer.URL, server
 }
 
@@ -116,7 +120,8 @@ func TestReadAuthDefaultEnforcesOverWebsocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	serviceKey, adminKey, allowedKey, relayURL, _ := startDefaultReadAuthSidecar(t)
-	public := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Tags: nostr.TagMap{"t": {kinds.CPStateTopicServiceState}}}
+	public := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Tags: nostr.TagMap{"t": {kinds.SBOMReferenceTopic}}}
+	fleet := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Tags: nostr.TagMap{"t": {kinds.CPStateTopicServiceState}}}
 
 	t.Run("unauthenticated REQ and COUNT are refused, public topics are served", func(t *testing.T) {
 		c := dialRawRelay(t, ctx, relayURL)
@@ -127,6 +132,9 @@ func TestReadAuthDefaultEnforcesOverWebsocket(t *testing.T) {
 
 		count, closed, _ := countOutcome(c, "anon-count", protectedFilter())
 		require.Zero(t, count)
+		require.True(t, strings.HasPrefix(closed, "auth-required:"), closed)
+		events, closed, _ = reqOutcome(c, "anon-fleet", fleet)
+		require.Zero(t, events)
 		require.True(t, strings.HasPrefix(closed, "auth-required:"), closed)
 
 		events, closed, _ = reqOutcome(c, "anon-public", public)
@@ -144,6 +152,9 @@ func TestReadAuthDefaultEnforcesOverWebsocket(t *testing.T) {
 			require.True(t, strings.HasPrefix(closed, "auth-required:"), closed)
 			authenticate(c, challenge, key)
 			events, closed, _ := reqOutcome(c, "admitted", protectedFilter())
+			require.Empty(t, closed)
+			require.Equal(t, 1, events)
+			events, closed, _ = reqOutcome(c, "admitted-fleet", fleet)
 			require.Empty(t, closed)
 			require.Equal(t, 1, events)
 			count, closed, _ := countOutcome(c, "admitted-count", protectedFilter())

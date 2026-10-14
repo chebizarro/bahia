@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	adapterruntime "github.com/openagentsinc/bahia/internal/adapters/runtime"
@@ -19,6 +21,7 @@ import (
 const (
 	ContextVMMethodServiceSecretsReveal = "services/secrets-reveal"
 	ContextVMMethodDeploymentRunLogsGet = "deployments/run-logs-get"
+	runLogPageBytes                     = 7000
 )
 
 type RunLogFetcher interface {
@@ -222,6 +225,7 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 		RunID  string `json:"run_id"`
 		Tail   int    `json:"tail,omitempty"`
 		Stream string `json:"stream,omitempty"`
+		Cursor string `json:"cursor,omitempty"`
 	}
 	if err := decodeEncryptedPayload(request, &payload); err != nil {
 		return nil, err
@@ -278,7 +282,54 @@ func (h *EncryptedRouteHandlers) GetRunLogs(ctx context.Context, request Encrypt
 	default:
 		return nil, fmt.Errorf("invalid stream parameter; use stdout, stderr, or merged")
 	}
-	return map[string]any{"logs": logs, "stream": stream}, nil
+	return pageRunLogs(logs, stream, payload.Cursor)
+}
+
+// pageRunLogs uses a byte cursor over the completed, redacted stdout followed
+// by stderr. The 7 KB page leaves room for JSON escaping, the signed inner
+// event and NIP-44's 65,535-byte plaintext ceiling even for control bytes.
+func pageRunLogs(logs *adapterruntime.RunLogs, stream, cursor string) (map[string]any, error) {
+	offset := 0
+	if cursor != "" {
+		var err error
+		offset, err = strconv.Atoi(cursor)
+		if err != nil || offset < 0 {
+			return nil, fmt.Errorf("invalid run-log cursor; restart without a cursor")
+		}
+	}
+	total := len(logs.Stdout) + len(logs.Stderr)
+	if offset > total {
+		return nil, fmt.Errorf("run-log cursor is beyond the available logs; restart without a cursor")
+	}
+	if offset < len(logs.Stdout) && !utf8.RuneStart(logs.Stdout[offset]) || offset > len(logs.Stdout) && offset < total && !utf8.RuneStart(logs.Stderr[offset-len(logs.Stdout)]) {
+		return nil, fmt.Errorf("invalid run-log cursor; restart without a cursor")
+	}
+	page := *logs
+	page.Stdout, page.Stderr = "", ""
+	remaining := runLogPageBytes
+	if offset < len(logs.Stdout) {
+		end := min(len(logs.Stdout), offset+remaining)
+		for end < len(logs.Stdout) && !utf8.RuneStart(logs.Stdout[end]) {
+			end--
+		}
+		page.Stdout = logs.Stdout[offset:end]
+		remaining -= end - offset
+		offset = end
+	}
+	if remaining > 0 && offset >= len(logs.Stdout) {
+		start := offset - len(logs.Stdout)
+		end := min(len(logs.Stderr), start+remaining)
+		for end < len(logs.Stderr) && !utf8.RuneStart(logs.Stderr[end]) {
+			end--
+		}
+		page.Stderr = logs.Stderr[start:end]
+		offset = len(logs.Stdout) + end
+	}
+	result := map[string]any{"logs": &page, "stream": stream}
+	if offset < total {
+		result["next_cursor"] = strconv.Itoa(offset)
+	}
+	return result, nil
 }
 
 func (h *EncryptedRouteHandlers) authorizeRunPermission(ctx context.Context, request EncryptedRequest, run *domain.DeploymentRun, permission domain.Permission) (*domain.DeploymentIntent, error) {

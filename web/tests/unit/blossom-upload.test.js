@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { blossomHashFromUrl, blossomLocation, uploadSBOMToBlossom } from '../../src/lib/nostr/blossom-upload.js';
+import { blossomHashFromUrl, blossomLocation, sbomFileImportSource, uploadSBOMToBlossom } from '../../src/lib/nostr/blossom-upload.js';
 
 vi.mock('$lib/stores/auth.js', () => ({ signWithAuth: vi.fn() }));
 vi.mock('$lib/stores/system.svelte.js', () => ({ currentSystemInfo: vi.fn(() => null) }));
@@ -31,5 +31,18 @@ describe('Blossom SBOM locations and uploads', () => {
     await expect(uploadSBOMToBlossom(file, { servers: ['https://blossom.example'], sign: vi.fn(async event => event),
       fetchImpl: vi.fn(async () => ({ ok: true, json: async () => ({ url: `https://blossom.example/${hash}`, sha256: hash, size: 4 }) }))
     })).rejects.toThrow('does not match');
+  });
+
+  it('selects inline, explicit upload, or automatic oversized upload without changing the import contract', async () => {
+    const location = { type: 'blossom', uri: `https://blossom.example/${hash}` };
+    const upload = vi.fn(async () => location);
+    const small = new File(['SBOM'], 'small.json');
+    expect(await sbomFileImportSource(small, { inlineLimit: 4, upload })).toEqual({ payloadBase64: 'U0JPTQ==' });
+    expect(upload).not.toHaveBeenCalled();
+    expect(await sbomFileImportSource(small, { inlineLimit: 4, useBlossom: true, upload })).toEqual({ location });
+    const large = new File(['SBOM!'], 'large.json');
+    expect(await sbomFileImportSource(large, { inlineLimit: 4, upload })).toEqual({ location });
+    expect(upload).toHaveBeenCalledTimes(2);
+    await expect(sbomFileImportSource(small, { inlineLimit: NaN, upload })).rejects.toThrow('inline SBOM limit is unavailable');
   });
 });
