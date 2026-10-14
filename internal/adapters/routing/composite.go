@@ -55,7 +55,7 @@ func (b *CompositeBackend) Withdraw(ctx context.Context, plan *domain.DesiredPub
 	withoutInternal := *plan
 	withoutInternal.InternalHTTPS = nil
 	if err := b.internal.Apply(ctx, &withoutInternal); err != nil {
-		return fmt.Errorf("remove internal HTTPS after DNS and tunnel: %w", err)
+		return fmt.Errorf("remove internal HTTPS after public route withdrawal: %w", err)
 	}
 	if phase != nil {
 		return phase(ctx, "internal_withdrawn")
@@ -82,7 +82,7 @@ func (b *CompositeBackend) ApplyWithCompensation(ctx context.Context, plan *doma
 	b.applyMu.Lock()
 	defer b.applyMu.Unlock()
 	// Re-check the local collision/certificate state immediately before the
-	// remote mutation so a known-local failure cannot change Cloudflare.
+	// remote mutation so a known-local failure cannot change the public edge.
 	if err := b.internal.Check(ctx, plan); err != nil {
 		return nil, fmt.Errorf("check internal route before public apply: %w", err)
 	}

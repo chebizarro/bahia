@@ -317,7 +317,15 @@ func (h *HostnameIntentHandler) publishRecord(ctx context.Context, family kinds.
 }
 
 func (h *HostnameIntentHandler) publishRecovery(ctx context.Context, intent *Intent, current *domain.HostnameReservation, phase string) error {
-	order := map[string]int{"prepared": 1, "dns_withdrawn": 2, "tunnel_withdrawn": 3, "internal_withdrawn": 4}
+	order := map[string]int{"prepared": 1, "internal_withdrawn": 4}
+	switch current.Plan.Provider {
+	case "cloudflare_tunnel":
+		order["dns_withdrawn"], order["tunnel_withdrawn"] = 2, 3
+	case "caddy":
+		order["route_withdrawn"], order["tls_withdrawn"] = 2, 3
+	default:
+		return fmt.Errorf("unknown hostname recovery provider")
+	}
 	if order[phase] == 0 {
 		return fmt.Errorf("unknown hostname recovery phase %q", phase)
 	}

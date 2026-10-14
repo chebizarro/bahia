@@ -137,7 +137,7 @@ func configWithSecretSentinels() Config {
 	return Config{
 		Mode:            "diagnostic-mode",
 		WorkerCleanup:   WorkerCleanupConfig{PaymentToken: s},
-		EdgeRouting:     EdgeRoutingConfig{Provider: "cloudflare", APITokenRef: s},
+		EdgeRouting:     EdgeRoutingConfig{Provider: "cloudflare", APITokenRef: s, CaddyCredentialRef: s},
 		InternalRouting: InternalRoutingConfig{Provider: "nginx", CommandEnv: []string{"TOKEN=" + s}},
 		DNS: DNSConfig{Backends: map[string]DNSBackendConfig{
 			"primary": {Type: "powerdns", PowerDNSAPIURL: "https://dns.internal", PowerDNSAPIKey: s},

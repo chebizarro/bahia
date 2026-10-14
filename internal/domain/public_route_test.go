@@ -85,6 +85,27 @@ func TestValidateDesiredPublicRouteRejectsCrossResourceMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateDesiredPublicRouteCaddyOwnership(t *testing.T) {
+	plan := validPublicRoutePlan()
+	plan.Provider = "caddy"
+	plan.DNS = DesiredPublicRouteDNS{}
+	plan.Tunnel = DesiredPublicRouteTunnel{}
+	plan.TLS.Provider = "caddy"
+	plan.Caddy = &DesiredPublicRouteCaddy{ServerID: "public", RouteID: PublicRouteCaddyID(plan.ServiceID, plan.EnvironmentID, plan.DeploymentUnitID)}
+	if err := ValidateDesiredPublicRoute(plan); err != nil {
+		t.Fatal(err)
+	}
+	plan.Caddy.RouteID = "bahia:foreign"
+	if err := ValidateDesiredPublicRoute(plan); err == nil {
+		t.Fatal("foreign route marker accepted")
+	}
+	plan.Caddy.RouteID = PublicRouteCaddyID(plan.ServiceID, plan.EnvironmentID, plan.DeploymentUnitID)
+	plan.DNS.Name = plan.Hostname
+	if err := ValidateDesiredPublicRoute(plan); err == nil {
+		t.Fatal("Caddy plan attempted provider DNS mutation")
+	}
+}
+
 func TestPublicRouteIsPartOfDesiredStateHash(t *testing.T) {
 	spec := &DesiredServiceSpec{SchemaVersion: DesiredStateSchemaVersion, ServiceID: uuid.New(), EnvironmentID: uuid.New()}
 	withoutRoute := spec.ComputeDesiredHash()

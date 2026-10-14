@@ -36,6 +36,12 @@ Supported zone visibility values are `internal`, `external`, `edge`, and `mesh`.
 
 Configure a backend that Bahia can actively apply: dnsmasq, dnsmasq agent, CoreDNS, PowerDNS, or FIPS. The filesystem renderer alone does not activate snapshots.
 
+Public-route providers are separate from DNS backends. `cloudflare_tunnel`
+manages its proxied CNAME during a public-route claim; `caddy` manages only
+public ingress and TLS through its admin API. For Caddy zones, configure a
+Bahia DNS backend and point the hostname at the Caddy public endpoint. Caddy
+does not create, change, or withdraw DNS records.
+
 For a remote dnsmasq host, the dnsmasq agent accepts signed requests from the configured Bahia identity, writes only Bahia-owned include files, applies a monotonic serial, and restores the prior file when validation or reload fails. Give every agent or bridge its own writable local event-store path.
 
 ## Drift and safety
@@ -55,7 +61,8 @@ For an end-to-end service hostname flow, see [Managed DNS and HTTPS Routes](../g
 A public hostname has a service-signed reservation separate from DNS zone and
 record state. The signed `hostname` `remove` intent checks the current
 reservation revision, re-reads the provider state, deletes only the
-Bahia-marked DNS record before removing the matching Tunnel ingress, then
-removes an owned internal HTTPS vhost when configured. Canonical recovery
-receipts expose the last completed phase after a restart. Foreign DNS records
-or a changed Tunnel origin stop withdrawal rather than being deleted.
+Bahia-marked Cloudflare DNS record before removing the matching Tunnel
+ingress, or deletes only the owned Caddy route and TLS policy. It then removes
+an owned internal HTTPS vhost when configured. Canonical recovery receipts
+expose the last completed phase after a restart. Foreign or changed provider
+objects stop withdrawal rather than being deleted.

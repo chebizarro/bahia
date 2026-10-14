@@ -6,7 +6,7 @@ This guide connects a Bahia-managed service to one hostname across runtime deplo
 
 - A service, immutable artifact, and environment with an explicit deployment unit.
 - A configured DNS backend and zone policy.
-- `edge_routing.enabled` with its provider credential stored as a secret reference.
+- `edge_routing.enabled` with provider credentials stored as secret references when required.
 - `internal_routing.enabled` when Bahia serves a LAN vhost.
 - A real application health endpoint.
 - A signer authorized for the service's organization and fleet-scoped DNS actions.
@@ -18,6 +18,20 @@ Map the environment or service to the managed zone. For a local dnsmasq process,
 For internal HTTPS, use absolute include and certificate paths. Bahia refuses to overwrite a foreign file at its managed vhost path.
 
 See [DNS](../features/dns.md) for backend choices and drift behavior.
+
+For Caddy public ingress, set `edge_routing.provider: caddy`,
+`caddy_backend_ref`, `caddy_admin_url`, and `caddy_server_id`. An example
+zone entry is `{name: example.com, provider: caddy, backend_ref: caddy-edge,
+allowed_org_ids: [<org-uuid>]}`; it has no Cloudflare `zone_id`. The admin
+URL must be HTTPS or loopback HTTP. If the admin endpoint requires a bearer
+token, set `caddy_credential_ref` to an opaque SecretStore UUID; never put a
+token in the URL or config. The Caddy server must already listen on 443 with
+automatic HTTPS enabled and a `routes` array; its TLS app must expose an
+`automation.policies` array. Bahia applies owned route and ACME policy objects through the admin
+API, with scoped conditional writes. DNS is managed separately by the
+configured Bahia DNS backend and must resolve to the Caddy public endpoint.
+Set `zones[].provider` per zone to mix Caddy and Cloudflare; unknown provider
+names and missing backend configuration fail at startup.
 
 ## 2. Create the service and environment
 

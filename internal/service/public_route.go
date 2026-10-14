@@ -19,6 +19,11 @@ import (
 type PublicRouteZone struct {
 	Name          string
 	BackendRef    string
+	Provider      string
+	ConfigHash    string
+	TunnelRef     string
+	DNSTarget     string
+	CaddyServerID string
 	AllowedOrgIDs []uuid.UUID
 	Protected     bool
 	TTL           int
@@ -43,6 +48,7 @@ type PublicRoutePlannerConfig struct {
 	Provider      string
 	TunnelRef     string
 	DNSTarget     string
+	CaddyServerID string
 	Zones         []PublicRouteZone
 	Origins       []PublicRouteOrigin
 	ConfigHash    string
@@ -64,8 +70,14 @@ type PublicRoutePlanner struct {
 }
 
 func NewPublicRoutePlanner(cfg PublicRoutePlannerConfig, backends routing.Resolver) (*PublicRoutePlanner, error) {
-	if cfg.Provider == "" || cfg.TunnelRef == "" || cfg.DNSTarget == "" || cfg.ConfigHash == "" || backends == nil {
-		return nil, fmt.Errorf("public routing provider, tunnel, DNS target, config hash, and backend resolver are required")
+	if (cfg.Provider != "cloudflare_tunnel" && cfg.Provider != "caddy") || cfg.ConfigHash == "" || backends == nil {
+		return nil, fmt.Errorf("known public routing provider, config hash, and backend resolver are required")
+	}
+	if cfg.Provider == "cloudflare_tunnel" && (cfg.TunnelRef == "" || cfg.DNSTarget == "") {
+		return nil, fmt.Errorf("cloudflare tunnel and DNS target are required")
+	}
+	if cfg.Provider == "caddy" && cfg.CaddyServerID == "" {
+		return nil, fmt.Errorf("caddy server ID is required")
 	}
 	if len(cfg.Zones) == 0 || len(cfg.Origins) == 0 {
 		return nil, fmt.Errorf("public routing zones and origins are required")
@@ -127,15 +139,23 @@ func (p *PublicRoutePlanner) PlanWithOptions(ctx context.Context, svc *domain.Se
 		return nil, false, fmt.Errorf("configured route origin is invalid: %w", err)
 	}
 	coordinate := domain.PublicRouteCoordinate(svc.ID, env.ID, *desired.DeploymentUnitID)
+	provider, configHash, tunnelRef, dnsTarget, caddyServerID := p.zoneProvider(zone)
 	plan := &domain.DesiredPublicRoutePlan{
 		SchemaVersion: domain.PublicRouteSchemaVersion, ServiceID: svc.ID, EnvironmentID: env.ID, DeploymentUnitID: *desired.DeploymentUnitID,
-		Hostname: req.Hostname, Zone: zone.Name, BackendRef: zone.BackendRef, Provider: p.cfg.Provider, ProviderConfigHash: p.cfg.ConfigHash,
-		DNS:        domain.DesiredPublicRouteDNS{Type: "CNAME", Name: req.Hostname, Value: p.cfg.DNSTarget, TTL: zone.TTL, Proxied: true, SourceCoordinate: coordinate},
-		Tunnel:     domain.DesiredPublicRouteTunnel{TunnelRef: p.cfg.TunnelRef, Hostname: req.Hostname, OriginURL: originURL},
-		Proxy:      domain.DesiredPublicRouteProxy{HostMatch: req.Hostname, UpstreamScheme: req.UpstreamScheme, UpstreamHost: originHost, UpstreamPort: req.UpstreamPort, HealthPath: req.HealthPath},
-		TLS:        domain.DesiredPublicRouteTLS{Mode: "managed", Provider: "cloudflare"},
-		Operations: []domain.DesiredPublicRouteChange{{Order: 1, Resource: "application", Action: "apply_and_verify", Summary: "apply the signed runtime state and verify container health"}, {Order: 2, Resource: "tunnel_proxy", Action: "upsert", Summary: "route " + req.Hostname + " to " + originURL}, {Order: 3, Resource: "dns", Action: "upsert", Summary: "publish proxied CNAME " + req.Hostname + " -> " + p.cfg.DNSTarget}, {Order: 4, Resource: "https", Action: "verify", Summary: "verify managed TLS and GET " + req.HealthPath}},
-		Rollback:   []domain.DesiredPublicRouteChange{{Order: 1, Resource: "dns", Action: "restore_or_withdraw", Summary: "restore the prior DNS record or withdraw the new hostname"}, {Order: 2, Resource: "tunnel_proxy", Action: "restore", Summary: "restore the prior remote tunnel ingress configuration"}, {Order: 3, Resource: "application", Action: "restore", Summary: "restore and observe the prior desired runtime state"}},
+		Hostname: req.Hostname, Zone: zone.Name, BackendRef: zone.BackendRef, Provider: provider, ProviderConfigHash: configHash,
+		Proxy: domain.DesiredPublicRouteProxy{HostMatch: req.Hostname, UpstreamScheme: req.UpstreamScheme, UpstreamHost: originHost, UpstreamPort: req.UpstreamPort, HealthPath: req.HealthPath},
+	}
+	if provider == "cloudflare_tunnel" {
+		plan.DNS = domain.DesiredPublicRouteDNS{Type: "CNAME", Name: req.Hostname, Value: dnsTarget, TTL: zone.TTL, Proxied: true, SourceCoordinate: coordinate}
+		plan.Tunnel = domain.DesiredPublicRouteTunnel{TunnelRef: tunnelRef, Hostname: req.Hostname, OriginURL: originURL}
+		plan.TLS = domain.DesiredPublicRouteTLS{Mode: "managed", Provider: "cloudflare"}
+		plan.Operations = []domain.DesiredPublicRouteChange{{Order: 1, Resource: "application", Action: "apply_and_verify", Summary: "apply the signed runtime state and verify container health"}, {Order: 2, Resource: "tunnel_proxy", Action: "upsert", Summary: "route " + req.Hostname + " to " + originURL}, {Order: 3, Resource: "dns", Action: "upsert", Summary: "publish proxied CNAME " + req.Hostname + " -> " + dnsTarget}, {Order: 4, Resource: "https", Action: "verify", Summary: "verify managed TLS and GET " + req.HealthPath}}
+		plan.Rollback = []domain.DesiredPublicRouteChange{{Order: 1, Resource: "dns", Action: "restore_or_withdraw", Summary: "restore the prior DNS record or withdraw the new hostname"}, {Order: 2, Resource: "tunnel_proxy", Action: "restore", Summary: "restore the prior remote tunnel ingress configuration"}, {Order: 3, Resource: "application", Action: "restore", Summary: "restore and observe the prior desired runtime state"}}
+	} else {
+		plan.Caddy = &domain.DesiredPublicRouteCaddy{ServerID: caddyServerID, RouteID: domain.PublicRouteCaddyID(svc.ID, env.ID, *desired.DeploymentUnitID)}
+		plan.TLS = domain.DesiredPublicRouteTLS{Mode: "managed", Provider: "caddy"}
+		plan.Operations = []domain.DesiredPublicRouteChange{{Order: 1, Resource: "application", Action: "apply_and_verify", Summary: "apply the signed runtime state and verify container health"}, {Order: 2, Resource: "caddy_route", Action: "upsert", Summary: "route " + req.Hostname + " to " + originURL}, {Order: 3, Resource: "caddy_tls", Action: "verify", Summary: "verify managed TLS for " + req.Hostname}}
+		plan.Rollback = []domain.DesiredPublicRouteChange{{Order: 1, Resource: "caddy_route", Action: "restore_or_withdraw", Summary: "restore the prior owned Caddy route"}, {Order: 2, Resource: "application", Action: "restore", Summary: "restore and observe the prior desired runtime state"}}
 	}
 	if p.internalHTTPSAllowed(req.Hostname, options.Internal) {
 		internal := p.cfg.InternalHTTPS
@@ -215,11 +235,12 @@ func (p *PublicRoutePlanner) CheckClaim(ctx context.Context, plan *domain.Desire
 		return err
 	}
 	zone, ok := p.resolveZone(plan.Hostname)
-	if !ok || zone.Name != plan.Zone || zone.BackendRef != plan.BackendRef || zone.TTL != plan.DNS.TTL || !uuidAllowed(orgID, zone.AllowedOrgIDs) || (zone.Protected && !environmentProtected) {
+	if !ok || zone.Name != plan.Zone || zone.BackendRef != plan.BackendRef || (plan.Provider == "cloudflare_tunnel" && zone.TTL != plan.DNS.TTL) || !uuidAllowed(orgID, zone.AllowedOrgIDs) || (zone.Protected && !environmentProtected) {
 		return fmt.Errorf("hostname zone is not configured for organization")
 	}
 	origin, ok := p.resolveOrigin(plan.DeploymentUnitID)
-	if !ok || !intAllowed(plan.Proxy.UpstreamPort, origin.AllowedPorts) || strings.Trim(strings.TrimSpace(origin.Host), "[]") != plan.Proxy.UpstreamHost || plan.DNS.Value != p.cfg.DNSTarget || plan.Tunnel.TunnelRef != p.cfg.TunnelRef || plan.Provider != p.cfg.Provider {
+	provider, _, tunnelRef, dnsTarget, caddyServerID := p.zoneProvider(zone)
+	if !ok || !intAllowed(plan.Proxy.UpstreamPort, origin.AllowedPorts) || strings.Trim(strings.TrimSpace(origin.Host), "[]") != plan.Proxy.UpstreamHost || plan.Provider != provider || (provider == "cloudflare_tunnel" && (plan.DNS.Value != dnsTarget || plan.Tunnel.TunnelRef != tunnelRef)) || (provider == "caddy" && (plan.Caddy == nil || plan.Caddy.ServerID != caddyServerID)) {
 		return fmt.Errorf("hostname route does not match configured origin or provider")
 	}
 	return p.Check(ctx, plan)
@@ -318,7 +339,12 @@ func (p *PublicRoutePlanner) resolveValidatedBackend(plan *domain.DesiredPublicR
 	if p == nil || plan == nil {
 		return nil, fmt.Errorf("public route plan is required")
 	}
-	if plan.ProviderConfigHash != p.cfg.ConfigHash {
+	zone, ok := p.resolveZone(plan.Hostname)
+	if !ok || zone.Name != plan.Zone || zone.BackendRef != plan.BackendRef {
+		return nil, fmt.Errorf("public route zone or backend changed after review")
+	}
+	provider, hash, _, _, _ := p.zoneProvider(zone)
+	if plan.Provider != provider || plan.ProviderConfigHash != hash {
 		return nil, fmt.Errorf("public route provider configuration changed after review")
 	}
 	if plan.InternalHTTPS != nil && (p.cfg.InternalHTTPS == nil || plan.InternalHTTPS.ConfigHash != p.cfg.InternalHTTPS.ConfigHash) {
@@ -329,6 +355,26 @@ func (p *PublicRoutePlanner) resolveValidatedBackend(plan *domain.DesiredPublicR
 		return nil, fmt.Errorf("public route backend %q is not configured", plan.BackendRef)
 	}
 	return backend, nil
+}
+
+func (p *PublicRoutePlanner) zoneProvider(zone PublicRouteZone) (provider, hash, tunnelRef, dnsTarget, caddyServerID string) {
+	provider, hash, tunnelRef, dnsTarget, caddyServerID = zone.Provider, zone.ConfigHash, zone.TunnelRef, zone.DNSTarget, zone.CaddyServerID
+	if provider == "" {
+		provider = p.cfg.Provider
+	}
+	if hash == "" {
+		hash = p.cfg.ConfigHash
+	}
+	if tunnelRef == "" {
+		tunnelRef = p.cfg.TunnelRef
+	}
+	if dnsTarget == "" {
+		dnsTarget = p.cfg.DNSTarget
+	}
+	if caddyServerID == "" {
+		caddyServerID = p.cfg.CaddyServerID
+	}
+	return
 }
 
 func (p *PublicRoutePlanner) resolveZone(host string) (PublicRouteZone, bool) {

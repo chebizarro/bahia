@@ -63,6 +63,8 @@ type healthcheckSummary struct {
 
 type publicRouteSummary struct {
 	Hostname        string `json:"hostname"`
+	Provider        string `json:"provider"`
+	BackendRef      string `json:"backend_ref"`
 	DNSName         string `json:"dns_name"`
 	DNSValue        string `json:"dns_value"`
 	DNSType         string `json:"dns_type"`
@@ -70,6 +72,8 @@ type publicRouteSummary struct {
 	Proxied         bool   `json:"proxied"`
 	TLSMode         string `json:"tls_mode"`
 	TunnelOriginURL string `json:"tunnel_origin_url"`
+	CaddyServerID   string `json:"caddy_server_id,omitempty"`
+	CaddyRouteID    string `json:"caddy_route_id,omitempty"`
 	ProxyUpstream   string `json:"proxy_upstream"`
 	ProxyHealthPath string `json:"proxy_health_path"`
 	OperationsCount int    `json:"operations_count"`
@@ -170,6 +174,8 @@ func buildDesiredStateSummary(state *domain.DesiredServiceSpec) *desiredStateSum
 		}
 		summary.PublicRoute = &publicRouteSummary{
 			Hostname:        r.Hostname,
+			Provider:        r.Provider,
+			BackendRef:      r.BackendRef,
 			DNSName:         r.DNS.Name,
 			DNSValue:        r.DNS.Value,
 			DNSType:         r.DNS.Type,
@@ -181,6 +187,10 @@ func buildDesiredStateSummary(state *domain.DesiredServiceSpec) *desiredStateSum
 			ProxyHealthPath: r.Proxy.HealthPath,
 			OperationsCount: len(r.Operations),
 			RollbackCount:   len(r.Rollback),
+		}
+		if r.Caddy != nil {
+			summary.PublicRoute.CaddyServerID = r.Caddy.ServerID
+			summary.PublicRoute.CaddyRouteID = r.Caddy.RouteID
 		}
 		if r.InternalHTTPS != nil {
 			summary.InternalHTTPS = &internalHTTPSSummary{
