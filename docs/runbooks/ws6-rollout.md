@@ -10,6 +10,7 @@ interface.
 | Target | Internal endpoint | Metrics | Required |
 |---|---|---|---|
 | Bahia control plane | `bahia:8080/metrics` | Fleet health, drift, workers, relays, audit, authorization, runtime operations | Yes |
+| Bahia relay sidecar | `bahia:3334/metrics` | Subscription overflow closes and sidecar queue pressure | Yes; unauthenticated endpoint, private monitoring network only |
 | External LLM gateway | deployment-specific `/metrics` | Requests, spend, wallet, routing | Only when the selected gateway exposes a verified authenticated endpoint |
 | Loom | deployment-specific `/metrics` | Job lifecycle | When an authenticated internal endpoint exists |
 
@@ -87,4 +88,3 @@ Stop the monitoring containers and restore the previous Compose/configuration
 bundle. Monitoring rollback must not restart Bahia or mutate its desired state.
 Preserve Prometheus and Alertmanager volumes until acceptance evidence and any
 failed-delivery investigation are complete.
-

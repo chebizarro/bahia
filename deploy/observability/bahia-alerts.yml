@@ -129,6 +129,8 @@ groups:
         annotations:
           summary: "OpenClaw provisioning run {{ $labels.run_id }} has resource correlation mismatches"
           runbook_url: "/docs/runbooks/openclaw-provisioning-operations.md#incident-and-alert-response"
+      # The sidecar /metrics endpoint is unauthenticated; scrape it only on
+      # the private monitoring network (see the runbook).
       - alert: BahiaSidecarSubscriptionOverflow
         expr: increase(bahia_relay_sidecar_subscription_overflow_closes_total[5m]) > 0
         for: 1m

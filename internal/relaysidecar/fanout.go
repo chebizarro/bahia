@@ -251,8 +251,18 @@ func (f *liveFanout) beginRequest(ctx context.Context, filter nostr.Filter) {
 		return // not a REQ (e.g. NIP-77 negentropy)
 	}
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.connection(ws).pending[id] = &pendingListener{ctx: ctx, filter: filter}
+	pending := &pendingListener{ctx: ctx, filter: filter}
+	f.connection(ws).pending[id] = pending
+	f.mu.Unlock()
+	// A CLOSE during QueryStored now prevents khatru from registering a
+	// listener, so OnListenerAdded will not consume this pending entry.
+	context.AfterFunc(ctx, func() {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if conn := f.conns[ws]; conn != nil && conn.pending[id] == pending {
+			delete(conn.pending, id)
+		}
+	})
 }
 
 // trackStored records the ids a REQ's stored query emits, so that events

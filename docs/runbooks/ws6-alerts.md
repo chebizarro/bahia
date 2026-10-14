@@ -29,6 +29,7 @@ these source fixtures.
 | `BahiaAuthorizationRejectionSpike` | More than ten bounded authorization rejections occur within five minutes | Security operator | Tier 2 | Inspect identity, policy, replay, and signature reason counts; do not loosen policy |
 | `BahiaTierRejectionSpike` | More than five insufficient-tier rejections occur within five minutes | Bahia operator | Tier 1 | Compare requested and active tier and restore the failed dependency instead of bypassing the gate |
 | `BahiaSoulFactoryRelayReadRejected` | A fail-closed SoulFactory relay read keeps ending without EOSE from enough relays (rejected partial reads for ten minutes) | SoulFactory operator | Tier 1, Tier 2 if lifecycle or fleet work is blocked | Identify the silent or CLOSED relays for the named caller and restore them; do not relax the read policy |
+| `BahiaSidecarSubscriptionOverflow` | The sidecar closes one or more subscriptions after a live-delivery queue overflows | Relay operator | Tier 1 | Check client backpressure and cursor-based resubscription; keep the sidecar metrics scrape private |
 | `NodeExporterDown` | An expected-up node scrape fails for five minutes | Host owner | Tier 1 | Check the exporter service and monitoring-interface route; do not infer host failure from exporter failure alone |
 | `HostMemoryPressure` | Available host memory remains below 10% for ten minutes | Host owner | Tier 1 | Inspect workload pressure and preserve continuity capacity before evicting work |
 | `HostFilesystemPressure` | A writable filesystem remains below 10% free for ten minutes | Host owner | Tier 1 | Identify reclaimable data and use approved cleanup policy; do not delete manually |
@@ -150,6 +151,17 @@ find the relays that did not answer, then restore or remove them from
 partial-read policy to clear the alert: the policy table in
 `internal/soulfactory/relay_read_policy.go` records why each caller fails
 closed.
+
+## BahiaSidecarSubscriptionOverflow
+
+The `bahia-relay-sidecar` scrape job reads `bahia:3334/metrics` on the private
+monitoring network. This endpoint is **unauthenticated**: do not expose it on a
+public interface; restrict the scrape route to Prometheus. An increase in
+`bahia_relay_sidecar_subscription_overflow_closes_total` means the sidecar
+closed a slow subscriber rather than silently dropping live events. Check the
+sidecar target is UP, inspect the subscriber's cursor/resubscription behavior,
+and investigate sustained client backpressure. Do not disable the overflow
+bound to clear this alert.
 
 ## NodeExporterDown
 
