@@ -1,5 +1,6 @@
 import { mintEntityId } from '../entity-id.js';
 import { validateForIngestion } from './ingestion.js';
+import { INTENT_TOPIC } from './intent-envelope.js';
 
 function goString(value) {
   return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, char => ({
@@ -60,7 +61,7 @@ export function buildIntentEvent({ domain, op = 'update', coordinate, orgId, con
     created_at: createdAt,
     tags: [
       ['d', coordinate], ['domain', domain], ['schema', schema || `bahia.intent.${domain}.v1`],
-      ['t', 'bahia-intent'], ['t', domain.replaceAll('_', '-')], ['op', op],
+      ['t', INTENT_TOPIC], ['t', domain.replaceAll('_', '-')], ['op', op],
       ['org', orgId], ['intent_id', intentId]
     ],
     content: canonicalJson(desired)

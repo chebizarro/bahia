@@ -9,6 +9,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -162,7 +163,7 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 	// Ordinarily the d-tag is bounded to one status per requester and entity.
 	// Confidential refusals use request correlation instead of the target.
 	privateStatus := intent.Domain == "secret" || (status == "rejected" || status == "conflict") && confidentialTenantStatusDomain(intent.Domain)
-	dTag := fmt.Sprintf("intent-status:%s:%s", intent.Actor, intent.Coordinate)
+	dTag := kinds.IntentStatusCoordinate(intent.Actor, intent.Coordinate)
 	if privateStatus {
 		// The target coordinate can identify confidential resources.
 		correlation := intent.IntentID
@@ -172,7 +173,7 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 		if correlation == "" {
 			return nostr.Event{}, fmt.Errorf("confidential status requires request correlation")
 		}
-		dTag = fmt.Sprintf("intent-status:%s:%s:%s", intent.Actor, intent.Domain, correlation)
+		dTag = kinds.IntentPrivateStatusCoordinate(intent.Actor, intent.Domain, correlation)
 	}
 	if intent.Domain == "secret" {
 		if status == "conflict" {
@@ -235,7 +236,7 @@ func (p *IntentStatusPublisher) buildStatusEventWithExpiryAt(ctx context.Context
 			{"d", dTag},
 			{"domain", "intent"},
 			{"status", status},
-			{"t", "intent-status"},
+			{"t", kinds.IntentStatusTopic},
 			{"p", intent.Actor},
 			{"intent_id", intent.IntentID},
 		},

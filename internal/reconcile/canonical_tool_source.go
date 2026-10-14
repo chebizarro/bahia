@@ -164,7 +164,7 @@ func (s *ToolCanonicalSource) acceptedIntent(ctx context.Context, request *contr
 	if s.Outbox == nil || s.DeliveryTarget == "" {
 		return fmt.Errorf("bahia-4f10q.2.1: request acceptance proof store is unavailable")
 	}
-	d := "intent-status:" + request.Actor + ":" + request.Coordinate
+	d := kinds.IntentStatusCoordinate(request.Actor, request.Coordinate)
 	filter := nostr.Filter{Kinds: []nostr.Kind{30315}, Authors: []nostr.PubKey{s.Base.Runtime.author},
 		Tags: nostr.TagMap{"d": {d}, "status": {"accepted"}}}
 	for event := range s.Base.Runtime.store.QueryEvents(filter) {

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
 import { finalizeEvent, getPublicKey } from 'nostr-tools';
 import { createIntentClient } from '../../src/lib/nostr/intent-client.svelte.js';
+import { intentPrivateStatusCoordinate } from '../../src/lib/nostr/intent-envelope.js';
 
 const serviceSecret = new Uint8Array(32).fill(9);
 const requesterSecret = new Uint8Array(32).fill(8);
@@ -36,9 +37,9 @@ function fixture() {
   return { client, store, poolSubscriptions, poolUnsubscribed, rows };
 }
 
-function status(intent, state, reason = '', extra = {}) {
+function status(intent, state, reason = '', extra = {}, coordinate = `intent-status:${requesterPubkey}:${intent.coordinate}`) {
   return finalizeEvent({ kind: 30315, created_at: Math.floor(Date.now() / 1000),
-    tags: [['d', `intent-status:${requesterPubkey}:${intent.coordinate}`], ['p', requesterPubkey],
+    tags: [['d', coordinate], ['p', requesterPubkey],
       ['t', 'intent-status'], ['intent_id', intent.intentId], ['status', state]],
     content: JSON.stringify({ reason, ...extra }) }, serviceSecret);
 }
@@ -64,6 +65,22 @@ describe('intent client wiring', () => {
     const resolved = untilPending(client, rows => rows.every(row => row.coordinate !== 'service-one'));
     store.ingest(status(intent, 'accepted'));
     await resolved;
+    client.close();
+  });
+
+  it('subscribes to and resolves confidential rejection by request-correlated d tag', async () => {
+    const { client, store, poolSubscriptions } = fixture(); await client.open();
+    const submitted = await client.submit({ domain: 'backup', op: 'run', coordinate: 'backup-run:one',
+      orgId, content: { id: 'one' } });
+    const privateCoordinate = intentPrivateStatusCoordinate(requesterPubkey, 'backup', submitted.intentId);
+    expect(poolSubscriptions[0].filters[0]['#d']).toEqual([privateCoordinate,
+      `intent-status:${requesterPubkey}:backup-run:one`]);
+    const waiting = client.waitForStatus(submitted);
+    store.ingest(status(submitted, 'rejected', 'access_denied', {}, privateCoordinate));
+    await expect(waiting).rejects.toThrow('access_denied');
+    expect(client.pending.query()[0]).toMatchObject({ status: 'rejected', reason: 'access_denied' });
+    await client.pending.handleStatus(status(submitted, 'accepted'));
+    expect(client.pending.query()).toEqual([]);
     client.close();
   });
 

@@ -8,6 +8,7 @@ import (
 	"fiatjaf.com/nostr"
 	nostrAdapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -150,7 +151,7 @@ func (s *IntentSubscriber) runLoop(ctx context.Context) error {
 func (s *IntentSubscriber) buildFilter() nostr.Filter {
 	filter := nostr.Filter{
 		Kinds: []nostr.Kind{30900},
-		Tags:  nostr.TagMap{"t": {"bahia-intent"}},
+		Tags:  nostr.TagMap{"t": {kinds.IntentTopic}},
 	}
 
 	// Author-scoped subscription (anti-amplification).

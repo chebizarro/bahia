@@ -1,5 +1,20 @@
 package kinds
 
+const (
+	IntentTopic       = "bahia-intent"
+	IntentStatusTopic = "intent-status"
+)
+
+// IntentStatusCoordinate is the bounded NIP-38 status coordinate for an entity.
+func IntentStatusCoordinate(actor, coordinate string) string {
+	return "intent-status:" + actor + ":" + coordinate
+}
+
+// IntentPrivateStatusCoordinate omits the confidential entity coordinate.
+func IntentPrivateStatusCoordinate(actor, domain, correlation string) string {
+	return "intent-status:" + actor + ":" + domain + ":" + correlation
+}
+
 // CASControlStateTag* are the shared tag keys for canonical control-state
 // projection producers and their relay subscription consumers. They live
 // outside kinds.go because that file is a numeric event-kind catalog audited

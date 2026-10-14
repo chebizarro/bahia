@@ -374,7 +374,7 @@ func (h *HostnameIntentHandler) winningIntent(ctx context.Context, intent *Inten
 			authors = append(authors, author)
 		}
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: authors, Tags: nostr.TagMap{"d": {intent.Coordinate}, "t": {"bahia-intent"}}}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: authors, Tags: nostr.TagMap{"d": {intent.Coordinate}, "t": {kinds.IntentTopic}}}
 	for candidate := range h.events.QueryEvents(filter) {
 		if !candidate.CheckID() || !candidate.VerifySignature() || !h.trust.HasPermission(ctx, intent.OrgID, candidate.PubKey.Hex(), domain.PermWriteDeployments) {
 			continue
