@@ -576,20 +576,23 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	var publicRoutePlanner *service.PublicRoutePlanner
 	var internalRouteBackend *routingAdapter.NginxBackend
-	// Edge-route convergence calls the routing provider's API with the
-	// token edge_routing.api_token_ref names. The token is a secret value:
-	// it lives in the secret store and is resolved on the first provider
-	// call. Without a store convergence stays suspended; the desired route
-	// plan, canary probing and route state are canonical and keep running.
-	edgeRoutingConvergence := cfg.EdgeRouting.Enabled && secretValues != nil
+	// Provider credentials are resolved from the secret store at first use.
+	// A loopback Caddy admin endpoint may have no bearer credential.
+	edgeNeedsSecret := false
+	for _, zone := range cfg.EdgeRouting.Zones {
+		if zone.Provider == "cloudflare_tunnel" || (zone.Provider == "caddy" && cfg.EdgeRouting.CaddyCredentialRef != "") {
+			edgeNeedsSecret = true
+		}
+	}
+	edgeRoutingConvergence := cfg.EdgeRouting.Enabled && len(cfg.EdgeRouting.Zones) > 0 && (!edgeNeedsSecret || secretValues != nil)
 	if edgeRoutingConvergence {
 		publicRoutePlanner, internalRouteBackend, err = buildPublicRoutePlanner(ctx, cfg.EdgeRouting, cfg.InternalRouting, secretText, logger)
 		if err != nil {
 			return nil, fmt.Errorf("configuring edge routing: %w", err)
 		}
-		logger.Info("managed edge routing enabled", zap.String("provider", cfg.EdgeRouting.Provider), zap.String("backend_ref", cfg.EdgeRouting.BackendRef), zap.Bool("internal_https", internalRouteBackend != nil))
+		logger.Info("managed edge routing enabled", zap.String("default_provider", cfg.EdgeRouting.Provider), zap.Bool("internal_https", internalRouteBackend != nil))
 	} else if cfg.EdgeRouting.Enabled {
-		logger.Warn("edge routing convergence is suspended: the provider API token is a secret value and no secret store is configured (secret_store.backend); desired routes are not converged, route canary observation of them continues",
+		logger.Warn("edge routing convergence is suspended: provider configuration or credential store is unavailable; desired routes are not converged, route canary observation of them continues",
 			zap.String("reason", "edge_routing_secret_store_unavailable"))
 	}
 
@@ -4491,16 +4494,49 @@ func (a dnsRepositoryPersistenceAdapter) ExpireOverride(ctx context.Context, id 
 }
 
 func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, internalCfg config.InternalRoutingConfig, secrets *secretstore.TextResolver, logger *zap.Logger) (*service.PublicRoutePlanner, *routingAdapter.NginxBackend, error) {
-	apiToken := newHeldSecret(secrets, cfg.APITokenRef, "edge routing API token (edge_routing.api_token_ref)")
-	token := func(ctx context.Context) (string, error) {
-		payload, err := apiToken.get(ctx)
-		if err != nil {
-			return "", err
-		}
-		return cloudflareAPIToken(payload)
-	}
 	zoneIDs := make(map[string]string, len(cfg.Zones))
 	zones := make([]service.PublicRouteZone, 0, len(cfg.Zones))
+	needCloudflare, needCaddy := false, false
+	for _, zone := range cfg.Zones {
+		if zone.Provider == "cloudflare_tunnel" {
+			needCloudflare = true
+		}
+		if zone.Provider == "caddy" {
+			needCaddy = true
+		}
+	}
+	sanitized, _ := json.Marshal(struct {
+		Provider, APIBaseURL, AccountID, TunnelID, BackendRef string
+		Zones                                                 []config.EdgeRoutingZoneConfig
+		Origins                                               []config.EdgeRoutingOriginConfig
+	}{cfg.Provider, cfg.APIBaseURL, cfg.AccountID, cfg.TunnelID, cfg.BackendRef, cfg.Zones, cfg.Origins})
+	if needCloudflare && !needCaddy {
+		// Keep the historical Cloudflare hash stable when no Caddy zone is
+		// configured, so already-signed plans remain executable.
+		type legacyZone struct {
+			Name          string
+			ZoneID        string
+			AllowedOrgIDs []string
+			Protected     bool
+			TTL           int
+		}
+		legacyZones := make([]legacyZone, 0, len(cfg.Zones))
+		for _, zone := range cfg.Zones {
+			legacyZones = append(legacyZones, legacyZone{zone.Name, zone.ZoneID, zone.AllowedOrgIDs, zone.Protected, zone.TTL})
+		}
+		sanitized, _ = json.Marshal(struct {
+			Provider, APIBaseURL, AccountID, TunnelID, BackendRef string
+			Zones                                                 []legacyZone
+			Origins                                               []config.EdgeRoutingOriginConfig
+		}{cfg.Provider, cfg.APIBaseURL, cfg.AccountID, cfg.TunnelID, cfg.BackendRef, legacyZones, cfg.Origins})
+	}
+	cloudflareHash := domain.PublicRouteProviderConfigHash(string(sanitized))
+	caddyInput, _ := json.Marshal(struct {
+		AdminURL, ServerID, BackendRef, CredentialRef string
+		Zones                                         []config.EdgeRoutingZoneConfig
+		Origins                                       []config.EdgeRoutingOriginConfig
+	}{cfg.CaddyAdminURL, cfg.CaddyServerID, cfg.CaddyBackendRef, cfg.CaddyCredentialRef, cfg.Zones, cfg.Origins})
+	caddyHash := domain.PublicRouteProviderConfigHash(string(caddyInput))
 	for _, z := range cfg.Zones {
 		allowed := make([]uuid.UUID, 0, len(z.AllowedOrgIDs))
 		for _, raw := range z.AllowedOrgIDs {
@@ -4510,8 +4546,17 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 			}
 			allowed = append(allowed, id)
 		}
-		zoneIDs[z.Name] = z.ZoneID
-		zones = append(zones, service.PublicRouteZone{Name: z.Name, BackendRef: cfg.BackendRef, AllowedOrgIDs: allowed, Protected: z.Protected, TTL: z.TTL})
+		zone := service.PublicRouteZone{Name: z.Name, BackendRef: z.BackendRef, Provider: z.Provider, AllowedOrgIDs: allowed, Protected: z.Protected, TTL: z.TTL}
+		switch z.Provider {
+		case "cloudflare_tunnel":
+			zoneIDs[z.Name] = z.ZoneID
+			zone.ConfigHash, zone.TunnelRef, zone.DNSTarget = cloudflareHash, cfg.TunnelID, cfg.TunnelID+".cfargotunnel.com"
+		case "caddy":
+			zone.ConfigHash, zone.CaddyServerID = caddyHash, cfg.CaddyServerID
+		default:
+			return nil, nil, fmt.Errorf("unknown public route provider")
+		}
+		zones = append(zones, zone)
 	}
 	origins := make([]service.PublicRouteOrigin, 0, len(cfg.Origins))
 	for _, o := range cfg.Origins {
@@ -4521,20 +4566,45 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		}
 		origins = append(origins, service.PublicRouteOrigin{DeploymentUnitID: id, Host: o.Host, AllowedPorts: append([]int(nil), o.AllowedPorts...)})
 	}
-	cloudflare, err := routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout, VerifyResolverAddr: cfg.VerifyResolver}, nil)
-	if err != nil {
-		return nil, nil, err
+	backends := routingAdapter.StaticResolver{}
+	var cloudflare *routingAdapter.CloudflareBackend
+	var caddy *routingAdapter.CaddyBackend
+	var err error
+	if needCloudflare {
+		apiToken := newHeldSecret(secrets, cfg.APITokenRef, "edge routing API token (edge_routing.api_token_ref)")
+		token := func(ctx context.Context) (string, error) {
+			payload, err := apiToken.get(ctx)
+			if err != nil {
+				return "", err
+			}
+			return cloudflareAPIToken(payload)
+		}
+		cloudflare, err = routingAdapter.NewCloudflareBackend(routingAdapter.CloudflareConfig{APIBaseURL: cfg.APIBaseURL, APIToken: token, AccountID: cfg.AccountID, TunnelID: cfg.TunnelID, ZoneIDs: zoneIDs, VerifyTimeout: cfg.VerifyTimeout, VerifyResolverAddr: cfg.VerifyResolver}, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		backends[cfg.BackendRef] = cloudflare
 	}
-	sanitized, _ := json.Marshal(struct {
-		Provider, APIBaseURL, AccountID, TunnelID, BackendRef string
-		Zones                                                 []config.EdgeRoutingZoneConfig
-		Origins                                               []config.EdgeRoutingOriginConfig
-	}{cfg.Provider, cfg.APIBaseURL, cfg.AccountID, cfg.TunnelID, cfg.BackendRef, cfg.Zones, cfg.Origins})
+	if needCaddy {
+		var credential func(context.Context) (string, error)
+		if cfg.CaddyCredentialRef != "" {
+			held := newHeldSecret(secrets, cfg.CaddyCredentialRef, "Caddy admin credential (edge_routing.caddy_credential_ref)")
+			credential = held.get
+		}
+		caddy, err = routingAdapter.NewCaddyBackend(routingAdapter.CaddyConfig{AdminURL: cfg.CaddyAdminURL, ServerID: cfg.CaddyServerID, Credential: credential}, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		backends[cfg.CaddyBackendRef] = caddy
+	}
+	defaultHash := cloudflareHash
+	if cfg.Provider == "caddy" {
+		defaultHash = caddyHash
+	}
 	plannerConfig := service.PublicRoutePlannerConfig{
-		Provider: cfg.Provider, TunnelRef: cfg.TunnelID, DNSTarget: cfg.TunnelID + ".cfargotunnel.com",
-		Zones: zones, Origins: origins, ConfigHash: domain.PublicRouteProviderConfigHash(string(sanitized)),
+		Provider: cfg.Provider, TunnelRef: cfg.TunnelID, DNSTarget: cfg.TunnelID + ".cfargotunnel.com", CaddyServerID: cfg.CaddyServerID,
+		Zones: zones, Origins: origins, ConfigHash: defaultHash,
 	}
-	var backend routingAdapter.Backend = cloudflare
 	var nginx *routingAdapter.NginxBackend
 	if internalCfg.Enabled {
 		internalHash := internalRoutingConfigHash(internalCfg)
@@ -4546,16 +4616,23 @@ func buildPublicRoutePlanner(ctx context.Context, cfg config.EdgeRoutingConfig, 
 		if err != nil {
 			return nil, nil, err
 		}
-		backend, err = routingAdapter.NewCompositeBackend(cloudflare, nginx)
-		if err != nil {
-			return nil, nil, err
+		for ref, public := range backends {
+			compensating, ok := public.(routingAdapter.CompensatingBackend)
+			if !ok {
+				return nil, nil, fmt.Errorf("public route backend %q cannot compensate", ref)
+			}
+			composite, err := routingAdapter.NewCompositeBackend(compensating, nginx)
+			if err != nil {
+				return nil, nil, err
+			}
+			backends[ref] = composite
 		}
 		plannerConfig.InternalHTTPS = &service.InternalHTTPSPlannerConfig{
 			Provider: internalCfg.Provider, Listen: "443 ssl", CertFile: internalCfg.CertFile,
 			KeyFile: internalCfg.KeyFile, ConfigHash: internalHash, Zones: append([]string(nil), internalCfg.Zones...),
 		}
 	}
-	planner, err := service.NewPublicRoutePlanner(plannerConfig, routingAdapter.StaticResolver{cfg.BackendRef: backend})
+	planner, err := service.NewPublicRoutePlanner(plannerConfig, backends)
 	if err != nil {
 		return nil, nil, err
 	}

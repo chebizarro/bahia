@@ -73,6 +73,33 @@ func TestPublicRoutePlannerPlansExactProtectedRoute(t *testing.T) {
 	}
 }
 
+func TestPublicRoutePlannerSelectsCaddyByZone(t *testing.T) {
+	planner, _, svc, env, desired := publicRouteFixture(t)
+	caddy := &routeBackendStub{}
+	planner.cfg.Zones[0].Provider = "caddy"
+	planner.cfg.Zones[0].BackendRef = "caddy-edge"
+	planner.cfg.Zones[0].ConfigHash = "sha256:caddy-config"
+	planner.cfg.Zones[0].CaddyServerID = "public"
+	planner.backends = routing.StaticResolver{"caddy-edge": caddy}
+	plan, _, err := planner.Plan(context.Background(), svc, env, desired, routeRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Provider != "caddy" || plan.ProviderConfigHash != "sha256:caddy-config" || plan.Caddy == nil ||
+		plan.Caddy.RouteID != domain.PublicRouteCaddyID(svc.ID, env.ID, *desired.DeploymentUnitID) ||
+		plan.DNS != (domain.DesiredPublicRouteDNS{}) || plan.Tunnel != (domain.DesiredPublicRouteTunnel{}) ||
+		plan.TLS.Provider != "caddy" || caddy.checked != plan {
+		t.Fatalf("Caddy route plan was not exact or selected: %#v", plan)
+	}
+	if err := planner.CheckClaim(context.Background(), plan, svc.OrgID, true); err != nil {
+		t.Fatal(err)
+	}
+	plan.ProviderConfigHash = "sha256:stale"
+	if err := planner.Check(context.Background(), plan); err == nil || !strings.Contains(err.Error(), "changed after review") {
+		t.Fatalf("stale Caddy configuration accepted: %v", err)
+	}
+}
+
 func TestPublicRoutePlannerCanonicalizesOriginAuthority(t *testing.T) {
 	tests := []struct {
 		name     string

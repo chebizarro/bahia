@@ -36,8 +36,10 @@ bahia logs run <run-id> --tail 100
 
 Public HTTPS requires a separate signed hostname `set` intent for the exact
 reviewed plan before route attachment or deployment. `preserve` keeps the
-canonical reservation unchanged; `remove` withdraws the owned DNS record
-first, then Tunnel ingress and managed internal HTTPS, and signs a tombstone.
+canonical reservation unchanged. With Cloudflare, `remove` withdraws the
+owned DNS record first, then Tunnel ingress. With Caddy, it withdraws the
+owned Caddy route and then its TLS automation policy. Both paths remove
+managed internal HTTPS after the public provider and sign a tombstone.
 A later `service/deploy` or `service/deploy-preview` request defaults to
 `route_mutation=preserve` when `public_route` is absent: it carries the current
 claimed route into the new desired-state hash. `route_mutation=set` requires a
@@ -48,6 +50,13 @@ the tombstone's `updated_at` as `expected_updated_at`. See
 [Nostr integration](../nostr-integration.md#public-hostname-mutation). Direct
 route auto-apply remains guarded where the revision-fenced runtime effect
 adapter is unavailable; a reservation is ownership, not proof of deployment.
+
+`edge_routing.zones[].provider` selects `cloudflare_tunnel` or `caddy` for
+each managed hostname zone. The signed plan records the selected provider,
+backend reference, configuration hash, and exact public-route object. The
+Caddy admin API manages the public reverse proxy and TLS policy; Bahia's DNS
+backends remain responsible for DNS records. A Caddy zone therefore needs
+public DNS pointed at that Caddy endpoint before HTTPS verification can pass.
 
 ## MCP
 

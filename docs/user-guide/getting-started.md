@@ -85,6 +85,16 @@ Everything a client can read or change goes through the relays, so the two value
 
 For managed routes, `route_canaries.overrides.<hostname>` tunes per-route probe expectations, thresholds, catch-all policy, and post-deploy gate timing without changing signed route state. See [Route Canaries](features/route-canaries.md#configuration) for the keys, defaults, and unmatched-hostname warning.
 
+`edge_routing.provider` selects the default public route provider
+(`cloudflare_tunnel` or `caddy`); `edge_routing.zones[].provider` can
+override it per zone. Cloudflare requires `backend_ref`, `api_token_ref`,
+`account_id`, `tunnel_id`, and each selected zone's `zone_id`. Caddy
+requires `caddy_backend_ref`, `caddy_admin_url`, and `caddy_server_id`;
+`caddy_credential_ref` is an optional SecretStore bearer credential UUID.
+Its admin URL must use HTTPS or loopback HTTP. Caddy owns the public route
+and TLS policy, not DNS; configure a Bahia DNS backend separately. See
+[Managed DNS and HTTPS Routes](guides/managed-dns-and-https-routes.md).
+
 Secret values belong in Signet's secret store. Point the daemon at it with a dedicated requester key (never the service key) and the Signet agent that owns Bahia's credentials; see [Secret store](../architecture/secret-store.md) and the [runbook](../runbooks/signet-secret-store.md):
 
 ```yaml

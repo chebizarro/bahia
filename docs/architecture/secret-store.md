@@ -378,6 +378,7 @@ string and zeroizes the store's buffer.
   beyond; every resolve writes an audit row. A failed apply scrubs its error
   with the values it injected instead of resolving them again.
 - **Process-held configuration credentials.** `edge_routing.api_token_ref`,
+  optional `edge_routing.caddy_credential_ref`,
   `nostr.relay_administration.administrator_private_key_ref` and package
   backend `auth_secret_ref`/`tls_secret_ref`/`secret_refs` name service
   secrets. They resolve on the feature's first use, not at startup, so the

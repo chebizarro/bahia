@@ -41,3 +41,17 @@ func TestBuildDesiredStateSummaryProxyUpstreamMatchesOriginURL(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildDesiredStateSummaryCaddyRoute(t *testing.T) {
+	state := &domain.DesiredServiceSpec{PublicRoute: &domain.DesiredPublicRoutePlan{
+		Hostname: "api.example.com", Provider: "caddy", BackendRef: "caddy-edge",
+		Caddy: &domain.DesiredPublicRouteCaddy{ServerID: "public", RouteID: "bahia:route"},
+		Proxy: domain.DesiredPublicRouteProxy{UpstreamScheme: "http", UpstreamHost: "edge.internal", UpstreamPort: 8080},
+	}}
+	summary := buildDesiredStateSummary(state).PublicRoute
+	if summary.Provider != "caddy" || summary.BackendRef != "caddy-edge" ||
+		summary.CaddyServerID != "public" || summary.CaddyRouteID != "bahia:route" ||
+		summary.DNSName != "" || summary.TunnelOriginURL != "" {
+		t.Fatalf("Caddy route summary is misleading: %#v", summary)
+	}
+}

@@ -52,8 +52,12 @@ type hostnameTestRoutes struct {
 func (*hostnameTestRoutes) CommitClaim(ctx context.Context, _ *domain.DesiredPublicRoutePlan, _ uuid.UUID, _ bool, publish func(context.Context) error) error {
 	return publish(ctx)
 }
-func (r *hostnameTestRoutes) Withdraw(ctx context.Context, _ *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error, finalize func(context.Context) error) error {
-	for _, step := range []string{"dns_withdrawn", "tunnel_withdrawn"} {
+func (r *hostnameTestRoutes) Withdraw(ctx context.Context, plan *domain.DesiredPublicRoutePlan, phase func(context.Context, string) error, finalize func(context.Context) error) error {
+	steps := []string{"dns_withdrawn", "tunnel_withdrawn"}
+	if plan.Provider == "caddy" {
+		steps = []string{"route_withdrawn", "tls_withdrawn"}
+	}
+	for _, step := range steps {
 		r.mu.Lock()
 		r.phases = append(r.phases, step)
 		fail := r.failPhase == step
@@ -136,7 +140,13 @@ func (h *hostnameHarness) intent(t *testing.T, op string, expected *time.Time, o
 	if op == "set" {
 		cp := *h.plan
 		cp.ServiceID = owner
-		cp.DNS.SourceCoordinate = domain.PublicRouteCoordinate(owner, h.environmentID, h.unitID)
+		if cp.Provider == "caddy" {
+			caddy := *cp.Caddy
+			caddy.RouteID = domain.PublicRouteCaddyID(owner, h.environmentID, h.unitID)
+			cp.Caddy = &caddy
+		} else {
+			cp.DNS.SourceCoordinate = domain.PublicRouteCoordinate(owner, h.environmentID, h.unitID)
+		}
 		payload.Plan = &cp
 	}
 	if expected != nil {
@@ -219,6 +229,30 @@ func TestHostnameReleaseReclaimAndRestartRecovery(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, reclaimed.Deleted)
 	require.Equal(t, []string{"dns_withdrawn", "dns_withdrawn", "tunnel_withdrawn"}, resumed.routes.phases)
+}
+
+func TestHostnameCaddyClaimAndPhasedRecovery(t *testing.T) {
+	h := newHostnameHarness(t, filepath.Join(t.TempDir(), "events.db"), nil)
+	h.plan.Provider = "caddy"
+	h.plan.DNS = domain.DesiredPublicRouteDNS{}
+	h.plan.Tunnel = domain.DesiredPublicRouteTunnel{}
+	h.plan.Caddy = &domain.DesiredPublicRouteCaddy{ServerID: "public", RouteID: domain.PublicRouteCaddyID(h.serviceID, h.environmentID, h.unitID)}
+	h.plan.TLS.Provider = "caddy"
+	require.NoError(t, h.processor.ProcessRelayIntent(t.Context(), h.intent(t, "set", nil, h.serviceID)))
+	require.NoError(t, h.handler.RequireClaim(t.Context(), h.plan))
+	current, err := h.handler.Current(t.Context(), h.plan.Hostname)
+	require.NoError(t, err)
+	release := h.intent(t, "remove", &current.UpdatedAt, h.serviceID)
+	h.routes.failPhase = "route_withdrawn"
+	require.ErrorContains(t, h.processor.ProcessRelayIntent(t.Context(), release), "interrupted after route_withdrawn")
+	receipt, err := h.handler.latest(kinds.HostnameRecoveryDTag(h.plan.Hostname), kinds.CPStateFamilyHostnameRecovery, kinds.CPStateTopicHostnameRecovery)
+	require.NoError(t, err)
+	require.Contains(t, receipt.Content, "route_withdrawn")
+	require.NoError(t, h.processor.ProcessRelayIntent(t.Context(), release))
+	tombstone, err := h.handler.Current(t.Context(), h.plan.Hostname)
+	require.NoError(t, err)
+	require.True(t, tombstone.Deleted)
+	require.Equal(t, []string{"route_withdrawn", "route_withdrawn", "tls_withdrawn"}, h.routes.phases)
 }
 
 func TestHostnameObservedIntentWinnerLatestThenLowestID(t *testing.T) {

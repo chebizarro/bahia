@@ -42,6 +42,7 @@ type DesiredPublicRoutePlan struct {
 	ProviderConfigHash string                     `json:"provider_config_hash"`
 	DNS                DesiredPublicRouteDNS      `json:"dns"`
 	Tunnel             DesiredPublicRouteTunnel   `json:"tunnel"`
+	Caddy              *DesiredPublicRouteCaddy   `json:"caddy,omitempty"`
 	Proxy              DesiredPublicRouteProxy    `json:"proxy"`
 	TLS                DesiredPublicRouteTLS      `json:"tls"`
 	InternalHTTPS      *DesiredInternalHTTPSPlan  `json:"internal_https,omitempty"`
@@ -62,6 +63,17 @@ type DesiredPublicRouteTunnel struct {
 	TunnelRef string `json:"tunnel_ref"`
 	Hostname  string `json:"hostname"`
 	OriginURL string `json:"origin_url"`
+}
+
+// DesiredPublicRouteCaddy identifies the exact Caddy server and owned route.
+type DesiredPublicRouteCaddy struct {
+	ServerID string `json:"server_id,omitempty"`
+	RouteID  string `json:"route_id,omitempty"`
+}
+
+func PublicRouteCaddyID(serviceID, environmentID, unitID uuid.UUID) string {
+	sum := sha256.Sum256([]byte(PublicRouteCoordinate(serviceID, environmentID, unitID)))
+	return "bahia:" + hex.EncodeToString(sum[:])
 }
 
 type DesiredPublicRouteProxy struct {
@@ -173,18 +185,30 @@ func ValidateDesiredPublicRoute(plan *DesiredPublicRoutePlan) error {
 	if req.Hostname != plan.Hostname || !HostnameWithinZone(plan.Hostname, plan.Zone) {
 		return fmt.Errorf("public route hostname is not canonical or outside its zone")
 	}
-	if plan.BackendRef == "" || plan.Provider == "" || plan.ProviderConfigHash == "" || plan.Tunnel.TunnelRef == "" || plan.Tunnel.OriginURL == "" {
-		return fmt.Errorf("public route backend, provider, tunnel, origin, and config hash are required")
+	if plan.BackendRef == "" || plan.ProviderConfigHash == "" || plan.Proxy.HostMatch != plan.Hostname {
+		return fmt.Errorf("public route backend, config hash, and matching proxy host are required")
 	}
-	if plan.DNS.Name != plan.Hostname || plan.DNS.Value == "" || plan.DNS.Type != "CNAME" || !plan.DNS.Proxied || plan.DNS.SourceCoordinate == "" || plan.TLS.Provider == "" {
-		return fmt.Errorf("public route requires owned proxied CNAME DNS and a TLS provider")
-	}
-	if plan.Tunnel.Hostname != plan.Hostname || plan.Proxy.HostMatch != plan.Hostname {
-		return fmt.Errorf("public route hostname must match DNS, tunnel, and proxy resources")
-	}
-	origin, err := url.Parse(plan.Tunnel.OriginURL)
-	if err != nil || origin.Scheme != plan.Proxy.UpstreamScheme || origin.Hostname() != plan.Proxy.UpstreamHost || origin.Port() != fmt.Sprintf("%d", plan.Proxy.UpstreamPort) || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
-		return fmt.Errorf("public route tunnel origin must match the proxy upstream")
+	switch plan.Provider {
+	case "cloudflare_tunnel":
+		if plan.DNS.Name != plan.Hostname || plan.DNS.Value == "" || plan.DNS.Type != "CNAME" || !plan.DNS.Proxied || plan.DNS.SourceCoordinate == "" || plan.TLS.Provider != "cloudflare" {
+			return fmt.Errorf("public route requires owned proxied CNAME DNS and a TLS provider")
+		}
+		if plan.Tunnel.Hostname != plan.Hostname {
+			return fmt.Errorf("public route hostname must match DNS, tunnel, and proxy resources")
+		}
+		if plan.Tunnel.TunnelRef == "" || plan.Tunnel.OriginURL == "" || plan.Caddy != nil {
+			return fmt.Errorf("public route requires owned Cloudflare tunnel")
+		}
+		origin, err := url.Parse(plan.Tunnel.OriginURL)
+		if err != nil || origin.Scheme != plan.Proxy.UpstreamScheme || origin.Hostname() != plan.Proxy.UpstreamHost || origin.Port() != fmt.Sprintf("%d", plan.Proxy.UpstreamPort) || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || origin.User != nil {
+			return fmt.Errorf("public route tunnel origin must match the proxy upstream")
+		}
+	case "caddy":
+		if plan.Caddy == nil || plan.Caddy.ServerID == "" || plan.Caddy.RouteID != PublicRouteCaddyID(plan.ServiceID, plan.EnvironmentID, plan.DeploymentUnitID) || plan.TLS.Provider != "caddy" || plan.Tunnel != (DesiredPublicRouteTunnel{}) || plan.DNS != (DesiredPublicRouteDNS{}) {
+			return fmt.Errorf("public route requires exact Caddy ownership and no tunnel or provider DNS mutation")
+		}
+	default:
+		return fmt.Errorf("unknown public route provider")
 	}
 	if plan.InternalHTTPS != nil {
 		internal := plan.InternalHTTPS

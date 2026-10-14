@@ -95,3 +95,52 @@ func TestValidateEdgeRoutingFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateEdgeRoutingCaddyAndPerZoneSelection(t *testing.T) {
+	cfg := validEdgeRoutingConfig()
+	cfg.EdgeRouting.Provider = "caddy"
+	cfg.EdgeRouting.BackendRef = "cloudflare-edge"
+	cfg.EdgeRouting.CaddyBackendRef = "caddy-edge"
+	cfg.EdgeRouting.CaddyAdminURL = "http://127.0.0.1:2019"
+	cfg.EdgeRouting.CaddyServerID = "public"
+	cfg.EdgeRouting.Zones[0].ZoneID = ""
+	cfg.EdgeRouting.Zones = append(cfg.EdgeRouting.Zones, EdgeRoutingZoneConfig{
+		Name: "other.example.com", Provider: "cloudflare_tunnel", ZoneID: "other-zone",
+		AllowedOrgIDs: []string{uuid.NewString()},
+	})
+	if err := cfg.validateEdgeRouting(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EdgeRouting.Zones[0].Provider != "caddy" || cfg.EdgeRouting.Zones[0].BackendRef != "caddy-edge" ||
+		cfg.EdgeRouting.Zones[1].Provider != "cloudflare_tunnel" || cfg.EdgeRouting.Zones[1].BackendRef != "cloudflare-edge" {
+		t.Fatalf("zone providers not resolved: %#v", cfg.EdgeRouting.Zones)
+	}
+}
+
+func TestValidateEdgeRoutingCaddyFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*Config)
+	}{
+		{"unknown provider", func(c *Config) { c.EdgeRouting.Zones[0].Provider = "unknown" }},
+		{"missing admin URL", func(c *Config) { c.EdgeRouting.CaddyAdminURL = "" }},
+		{"remote HTTP", func(c *Config) { c.EdgeRouting.CaddyAdminURL = "http://caddy.example.com:2019" }},
+		{"remote HTTP in dev mode", func(c *Config) { c.DevMode = true; c.EdgeRouting.CaddyAdminURL = "http://caddy.example.com:2019" }},
+		{"inline credential", func(c *Config) { c.EdgeRouting.CaddyCredentialRef = "plaintext" }},
+		{"wrong backend ref", func(c *Config) { c.EdgeRouting.Zones[0].BackendRef = "foreign" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validEdgeRoutingConfig()
+			cfg.EdgeRouting.Provider = "caddy"
+			cfg.EdgeRouting.CaddyBackendRef = "caddy-edge"
+			cfg.EdgeRouting.CaddyAdminURL = "http://127.0.0.1:2019"
+			cfg.EdgeRouting.CaddyServerID = "public"
+			cfg.EdgeRouting.Zones[0].ZoneID = ""
+			tt.edit(&cfg)
+			if err := cfg.validateEdgeRouting(); err == nil {
+				t.Fatal("invalid Caddy configuration accepted")
+			}
+		})
+	}
+}

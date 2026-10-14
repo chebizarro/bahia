@@ -139,21 +139,27 @@ type FIPSConfig struct {
 
 // EdgeRoutingConfig controls signed public hostname provisioning through a managed provider.
 type EdgeRoutingConfig struct {
-	Enabled        bool                      `koanf:"enabled" yaml:"enabled" secret:"false"`
-	Provider       string                    `koanf:"provider" yaml:"provider" secret:"false"`
-	BackendRef     string                    `koanf:"backend_ref" yaml:"backend_ref" secret:"false"`
-	APIBaseURL     string                    `koanf:"api_base_url" yaml:"api_base_url" secret:"false"`
-	APITokenRef    string                    `koanf:"api_token_ref" yaml:"api_token_ref" secret:"true"`
-	AccountID      string                    `koanf:"account_id" yaml:"account_id" secret:"false"`
-	TunnelID       string                    `koanf:"tunnel_id" yaml:"tunnel_id" secret:"false"`
-	VerifyTimeout  time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout" secret:"false"`
-	VerifyResolver string                    `koanf:"verify_resolver" yaml:"verify_resolver" secret:"false"`
-	Zones          []EdgeRoutingZoneConfig   `koanf:"zones" yaml:"zones"`
-	Origins        []EdgeRoutingOriginConfig `koanf:"origins" yaml:"origins"`
+	Enabled            bool                      `koanf:"enabled" yaml:"enabled" secret:"false"`
+	Provider           string                    `koanf:"provider" yaml:"provider" secret:"false"`
+	BackendRef         string                    `koanf:"backend_ref" yaml:"backend_ref" secret:"false"`
+	APIBaseURL         string                    `koanf:"api_base_url" yaml:"api_base_url" secret:"false"`
+	APITokenRef        string                    `koanf:"api_token_ref" yaml:"api_token_ref" secret:"true"`
+	AccountID          string                    `koanf:"account_id" yaml:"account_id" secret:"false"`
+	TunnelID           string                    `koanf:"tunnel_id" yaml:"tunnel_id" secret:"false"`
+	CaddyAdminURL      string                    `koanf:"caddy_admin_url" yaml:"caddy_admin_url" secret:"false"`
+	CaddyCredentialRef string                    `koanf:"caddy_credential_ref" yaml:"caddy_credential_ref" secret:"true"`
+	CaddyServerID      string                    `koanf:"caddy_server_id" yaml:"caddy_server_id" secret:"false"`
+	CaddyBackendRef    string                    `koanf:"caddy_backend_ref" yaml:"caddy_backend_ref" secret:"false"`
+	VerifyTimeout      time.Duration             `koanf:"verify_timeout" yaml:"verify_timeout" secret:"false"`
+	VerifyResolver     string                    `koanf:"verify_resolver" yaml:"verify_resolver" secret:"false"`
+	Zones              []EdgeRoutingZoneConfig   `koanf:"zones" yaml:"zones"`
+	Origins            []EdgeRoutingOriginConfig `koanf:"origins" yaml:"origins"`
 }
 
 type EdgeRoutingZoneConfig struct {
 	Name          string   `koanf:"name" yaml:"name" secret:"false"`
+	Provider      string   `koanf:"provider" yaml:"provider" secret:"false"`
+	BackendRef    string   `koanf:"backend_ref" yaml:"backend_ref" secret:"false"`
 	ZoneID        string   `koanf:"zone_id" yaml:"zone_id" secret:"false"`
 	AllowedOrgIDs []string `koanf:"allowed_org_ids" yaml:"allowed_org_ids" secret:"false"`
 	Protected     bool     `koanf:"protected" yaml:"protected" secret:"false"`
@@ -3680,6 +3686,10 @@ func (c *Config) validateEdgeRouting() error {
 	r.APITokenRef = strings.TrimSpace(r.APITokenRef)
 	r.AccountID = strings.TrimSpace(r.AccountID)
 	r.TunnelID = strings.TrimSpace(r.TunnelID)
+	r.CaddyAdminURL = strings.TrimRight(strings.TrimSpace(r.CaddyAdminURL), "/")
+	r.CaddyCredentialRef = strings.TrimSpace(r.CaddyCredentialRef)
+	r.CaddyServerID = strings.TrimSpace(r.CaddyServerID)
+	r.CaddyBackendRef = strings.TrimSpace(r.CaddyBackendRef)
 	r.VerifyResolver = strings.TrimSpace(r.VerifyResolver)
 	if r.VerifyResolver == "" {
 		r.VerifyResolver = "1.1.1.1:53"
@@ -3695,14 +3705,8 @@ func (c *Config) validateEdgeRouting() error {
 			return fmt.Errorf("config validation failed: edge_routing.verify_resolver must be system or host:port with a numeric port")
 		}
 	}
-	if r.Provider != "cloudflare_tunnel" {
-		return fmt.Errorf("config validation failed: edge_routing.provider must be cloudflare_tunnel")
-	}
-	if r.BackendRef == "" || r.APITokenRef == "" || r.AccountID == "" || r.TunnelID == "" {
-		return fmt.Errorf("config validation failed: edge_routing backend_ref, api_token_ref, account_id, and tunnel_id are required")
-	}
-	if _, err := uuid.Parse(r.APITokenRef); err != nil {
-		return fmt.Errorf("config validation failed: edge_routing.api_token_ref must be an opaque secret UUID")
+	if r.Provider != "cloudflare_tunnel" && r.Provider != "caddy" {
+		return fmt.Errorf("config validation failed: edge_routing.provider must be cloudflare_tunnel or caddy")
 	}
 	if r.APIBaseURL != "" {
 		parsed, err := url.Parse(r.APIBaseURL)
@@ -3717,6 +3721,7 @@ func (c *Config) validateEdgeRouting() error {
 		return fmt.Errorf("config validation failed: edge_routing zones and origins are required")
 	}
 	seenZones := map[string]struct{}{}
+	selected := map[string]bool{}
 	for i := range r.Zones {
 		z := &r.Zones[i]
 		var err error
@@ -3725,8 +3730,30 @@ func (c *Config) validateEdgeRouting() error {
 			return fmt.Errorf("config validation failed: edge_routing.zones[%d].name: %w", i, err)
 		}
 		z.ZoneID = strings.TrimSpace(z.ZoneID)
-		if z.ZoneID == "" || len(z.AllowedOrgIDs) == 0 {
-			return fmt.Errorf("config validation failed: edge_routing.zones[%d] requires zone_id and allowed_org_ids", i)
+		z.Provider = strings.ToLower(strings.TrimSpace(z.Provider))
+		if z.Provider == "" {
+			z.Provider = r.Provider
+		}
+		if z.Provider != "cloudflare_tunnel" && z.Provider != "caddy" {
+			return fmt.Errorf("config validation failed: edge_routing.zones[%d] has unknown provider", i)
+		}
+		selected[z.Provider] = true
+		z.BackendRef = strings.TrimSpace(z.BackendRef)
+		if z.BackendRef == "" {
+			if z.Provider == "caddy" {
+				z.BackendRef = r.CaddyBackendRef
+			} else {
+				z.BackendRef = r.BackendRef
+			}
+		}
+		if z.BackendRef == "" || len(z.AllowedOrgIDs) == 0 || (z.Provider == "cloudflare_tunnel" && z.ZoneID == "") {
+			return fmt.Errorf("config validation failed: edge_routing.zones[%d] requires backend_ref, allowed_org_ids, and Cloudflare zone_id when selected", i)
+		}
+		if (z.Provider == "caddy" && z.BackendRef != r.CaddyBackendRef) || (z.Provider == "cloudflare_tunnel" && z.BackendRef != r.BackendRef) {
+			return fmt.Errorf("config validation failed: edge_routing.zones[%d].backend_ref does not match its provider", i)
+		}
+		if z.Provider == "caddy" && z.ZoneID != "" {
+			return fmt.Errorf("config validation failed: edge_routing.zones[%d].zone_id is Cloudflare-only", i)
 		}
 		if _, exists := seenZones[z.Name]; exists {
 			return fmt.Errorf("config validation failed: duplicate edge routing zone %s", z.Name)
@@ -3739,6 +3766,52 @@ func (c *Config) validateEdgeRouting() error {
 		}
 		if z.TTL <= 0 {
 			z.TTL = 1
+		}
+	}
+	if !selected[r.Provider] {
+		return fmt.Errorf("config validation failed: edge_routing.provider must be selected by a managed zone")
+	}
+	if selected["cloudflare_tunnel"] {
+		if r.BackendRef == "" || r.APITokenRef == "" || r.AccountID == "" || r.TunnelID == "" {
+			return fmt.Errorf("config validation failed: edge_routing backend_ref, api_token_ref, account_id, and tunnel_id are required for Cloudflare")
+		}
+		if _, err := uuid.Parse(r.APITokenRef); err != nil {
+			return fmt.Errorf("config validation failed: edge_routing.api_token_ref must be an opaque secret UUID")
+		}
+	}
+	if selected["caddy"] {
+		if r.CaddyBackendRef == "" || r.CaddyAdminURL == "" || r.CaddyServerID == "" {
+			return fmt.Errorf("config validation failed: edge_routing caddy_backend_ref, caddy_admin_url, and caddy_server_id are required")
+		}
+		parsed, err := url.Parse(r.CaddyAdminURL)
+		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+			return fmt.Errorf("config validation failed: edge_routing.caddy_admin_url requires HTTPS or loopback HTTP")
+		}
+		loopback := parsed.Hostname() == "localhost"
+		if ip := net.ParseIP(parsed.Hostname()); ip != nil && ip.IsLoopback() {
+			loopback = true
+		}
+		switch parsed.Scheme {
+		case "https":
+		case "http":
+			if !loopback {
+				return fmt.Errorf("config validation failed: edge_routing.caddy_admin_url requires HTTPS or loopback HTTP")
+			}
+		default:
+			return fmt.Errorf("config validation failed: edge_routing.caddy_admin_url requires HTTPS or loopback HTTP")
+		}
+		if r.CaddyServerID == "." || r.CaddyServerID == ".." || strings.IndexFunc(r.CaddyServerID, func(ch rune) bool {
+			return !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.", ch)
+		}) >= 0 {
+			return fmt.Errorf("config validation failed: edge_routing.caddy_server_id must be one safe path segment")
+		}
+		if r.CaddyCredentialRef != "" {
+			if _, err := uuid.Parse(r.CaddyCredentialRef); err != nil {
+				return fmt.Errorf("config validation failed: edge_routing.caddy_credential_ref must be an opaque secret UUID")
+			}
+		}
+		if selected["cloudflare_tunnel"] && r.CaddyBackendRef == r.BackendRef {
+			return fmt.Errorf("config validation failed: Caddy and Cloudflare backend refs must differ")
 		}
 	}
 	seenUnits := map[string]struct{}{}

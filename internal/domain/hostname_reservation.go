@@ -55,7 +55,7 @@ func (r HostnameReservation) Validate() error {
 		if err := ValidateDesiredPublicRoute(r.Plan); err != nil {
 			return err
 		}
-		if r.Plan.Hostname != r.Hostname || r.Plan.ServiceID != r.ServiceID || r.Plan.EnvironmentID != r.EnvironmentID || r.Plan.DeploymentUnitID != r.DeploymentUnitID || r.Plan.DNS.SourceCoordinate != PublicRouteCoordinate(r.ServiceID, r.EnvironmentID, r.DeploymentUnitID) {
+		if r.Plan.Hostname != r.Hostname || r.Plan.ServiceID != r.ServiceID || r.Plan.EnvironmentID != r.EnvironmentID || r.Plan.DeploymentUnitID != r.DeploymentUnitID || !r.planOwnerMatches(r.Plan) {
 			return fmt.Errorf("reservation owner and route plan differ")
 		}
 	}
@@ -63,5 +63,26 @@ func (r HostnameReservation) Validate() error {
 }
 
 func (r HostnameReservation) Owns(plan *DesiredPublicRoutePlan) bool {
-	return !r.Deleted && plan != nil && r.Plan != nil && r.Hostname == plan.Hostname && r.ServiceID == plan.ServiceID && r.EnvironmentID == plan.EnvironmentID && r.DeploymentUnitID == plan.DeploymentUnitID && r.Plan.DNS.SourceCoordinate == plan.DNS.SourceCoordinate
+	if r.Deleted || plan == nil || r.Plan == nil || r.Hostname != plan.Hostname || r.ServiceID != plan.ServiceID || r.EnvironmentID != plan.EnvironmentID || r.DeploymentUnitID != plan.DeploymentUnitID || r.Plan.Provider != plan.Provider || !r.planOwnerMatches(plan) {
+		return false
+	}
+	switch plan.Provider {
+	case "cloudflare_tunnel":
+		return r.Plan.DNS.SourceCoordinate == plan.DNS.SourceCoordinate
+	case "caddy":
+		return r.Plan.Caddy != nil && plan.Caddy != nil && r.Plan.Caddy.RouteID == plan.Caddy.RouteID && r.Plan.Caddy.ServerID == plan.Caddy.ServerID
+	default:
+		return false
+	}
+}
+
+func (r HostnameReservation) planOwnerMatches(plan *DesiredPublicRoutePlan) bool {
+	switch plan.Provider {
+	case "cloudflare_tunnel":
+		return plan.DNS.SourceCoordinate == PublicRouteCoordinate(r.ServiceID, r.EnvironmentID, r.DeploymentUnitID)
+	case "caddy":
+		return plan.Caddy != nil && plan.Caddy.RouteID == PublicRouteCaddyID(r.ServiceID, r.EnvironmentID, r.DeploymentUnitID)
+	default:
+		return false
+	}
 }
