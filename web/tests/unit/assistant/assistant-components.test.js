@@ -741,6 +741,18 @@ describe('assistant panel: controls come only from eligible v2 state', () => {
     expect(target.querySelector('[data-session-id="s1"] small')?.textContent).toBe('outcome unknown');
   });
 
+  it('shows a finished clean run as completed without an unknown-outcome warning', () => {
+    const session = batchSession({ phase: 'completed', pendingApprovals: [], proposal: null,
+      submittedEffects: 0, uncertainEffects: 0, abandonedEffects: 0 });
+    assistantStoreMock.assistantSessions.push(session);
+    const target = renderPanel(session);
+    const summary = target.querySelector('[aria-label="Current assistant execution"]');
+    expect(summary.textContent).toContain('completed');
+    expect(summary.textContent).not.toContain('outcome unknown');
+    expect(target.querySelector('.abandoned-effects')).toBeNull();
+    expect(target.querySelector('[data-session-id="s1"] small')?.textContent).not.toBe('outcome unknown');
+  });
+
   it('shows the unknown outcome from a cached projection without enabling controls', () => {
     const target = renderPanel(batchSession({ authoritative: false, phase: 'failed',
       abandonedEffects: 1, pendingApprovals: [] }));
