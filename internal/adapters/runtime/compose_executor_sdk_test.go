@@ -2,12 +2,15 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/compose/v5/pkg/api"
+	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/config"
 	"go.uber.org/zap"
 )
@@ -17,8 +20,26 @@ import (
 // and Up.
 type fakeComposeService struct {
 	api.Compose
-	real    api.Compose // delegate for LoadProject
-	upCalls []fakeUpCall
+	real        api.Compose // delegate for LoadProject
+	upCalls     []fakeUpCall
+	psCalls     []fakePsCall
+	psResults   []api.ContainerSummary
+	psErr       error
+	pullCalls   []*types.Project
+	pullErr     error
+	removeCalls []fakeRemoveCall
+	upErr       error
+	removeErr   error
+}
+
+type fakePsCall struct {
+	project string
+	options api.PsOptions
+}
+
+type fakeRemoveCall struct {
+	project string
+	options api.RemoveOptions
 }
 
 type fakeUpCall struct {
@@ -32,7 +53,22 @@ func (f *fakeComposeService) LoadProject(ctx context.Context, options api.Projec
 
 func (f *fakeComposeService) Up(ctx context.Context, project *types.Project, options api.UpOptions) error {
 	f.upCalls = append(f.upCalls, fakeUpCall{project: project, options: options})
-	return nil
+	return f.upErr
+}
+
+func (f *fakeComposeService) Ps(_ context.Context, project string, options api.PsOptions) ([]api.ContainerSummary, error) {
+	f.psCalls = append(f.psCalls, fakePsCall{project: project, options: options})
+	return f.psResults, f.psErr
+}
+
+func (f *fakeComposeService) Pull(_ context.Context, project *types.Project, _ api.PullOptions) error {
+	f.pullCalls = append(f.pullCalls, project)
+	return f.pullErr
+}
+
+func (f *fakeComposeService) Remove(_ context.Context, project string, options api.RemoveOptions) error {
+	f.removeCalls = append(f.removeCalls, fakeRemoveCall{project: project, options: options})
+	return f.removeErr
 }
 
 // newFakeSDKExecutor returns an executor whose SDK service records Up calls
@@ -45,6 +81,7 @@ func newFakeSDKExecutor(t *testing.T, dir string) (*SDKComposeExecutor, *fakeCom
 	if err != nil {
 		t.Fatalf("building real SDK service: %v", err)
 	}
+	t.Cleanup(func() { _ = real.Close() })
 	fake := &fakeComposeService{real: realSvc}
 	e := NewSDKComposeExecutor(rt, zap.NewNop())
 	e.newService = func() (api.Compose, error) { return fake, nil }
@@ -69,6 +106,95 @@ services:
     depends_on:
       - api
 `
+
+func TestComposeRuntimeSDKLegacyOperations(t *testing.T) {
+	dir := t.TempDir()
+	writeSDKTestFile(t, dir, composeFileName, `name: sdk-exec-test
+services:
+  api:
+    image: nginx:alpine
+  worker:
+    image: ${WORKER_IMAGE:-redis:alpine}
+    depends_on:
+      - api
+`)
+	createBahiaMarker(t, dir)
+	executor, fake := newFakeSDKExecutor(t, dir)
+	r := &ComposeRuntime{projectDir: dir, executionMode: ExecutionModeSDK, sdkExecutor: executor, logger: zap.NewNop()}
+	if err := r.Deploy(context.Background(), "worker", "redis:7", DeployOptions{Environment: map[string]string{"WORKER_IMAGE": "redis:old"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.pullCalls) != 1 || len(fake.upCalls) != 1 {
+		t.Fatalf("pull/up calls = %d/%d", len(fake.pullCalls), len(fake.upCalls))
+	}
+	up := fake.upCalls[0]
+	if len(up.project.Services) != 1 || up.project.Services["worker"].Image != "redis:7" || up.options.Create.Recreate != api.RecreateForce || !up.options.Create.IgnoreOrphans || len(up.options.Create.Services) != 1 || up.options.Create.Services[0] != "worker" {
+		t.Fatalf("SDK service up = %#v, project services = %#v", up.options, up.project.Services)
+	}
+	if err := r.Undeploy(context.Background(), "worker"); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.removeCalls) != 1 || fake.removeCalls[0].project != "sdk-exec-test" || !fake.removeCalls[0].options.Stop || !fake.removeCalls[0].options.Force || len(fake.removeCalls[0].options.Services) != 1 || fake.removeCalls[0].options.Services[0] != "worker" {
+		t.Fatalf("SDK remove = %#v", fake.removeCalls)
+	}
+}
+
+func TestComposeRuntimeSDKDeployRejectsUnsupportedOptions(t *testing.T) {
+	dir := t.TempDir()
+	createBahiaMarker(t, dir)
+	executor, fake := newFakeSDKExecutor(t, dir)
+	r := &ComposeRuntime{projectDir: dir, executionMode: ExecutionModeSDK, sdkExecutor: executor, logger: zap.NewNop()}
+	for _, opts := range []DeployOptions{{Ports: []string{"8080:80"}}, {Labels: map[string]string{"k": "v"}}, {PullAlways: true}} {
+		err := r.Deploy(context.Background(), "worker", "redis:7", opts)
+		var unsupported *ComposeSDKUnsupportedOptionError
+		if !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "execution_mode: cli") {
+			t.Fatalf("Deploy(%#v) error = %v", opts, err)
+		}
+	}
+	if len(fake.pullCalls) != 0 || len(fake.upCalls) != 0 {
+		t.Fatalf("rejected deploy performed SDK mutation")
+	}
+}
+
+func TestComposeRuntimeSDKTransportErrorsDoNotFallBackToCLI(t *testing.T) {
+	dir := t.TempDir()
+	writeSDKTestFile(t, dir, composeFileName, sdkTestComposeYAML)
+	createBahiaMarker(t, dir)
+	executor, fake := newFakeSDKExecutor(t, dir)
+	r := &ComposeRuntime{projectDir: dir, executionMode: ExecutionModeSDK, sdkExecutor: executor, logger: zap.NewNop()}
+	fake.psErr = errors.New("SDK ps failure")
+	if _, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "worker"); err == nil || !strings.Contains(err.Error(), "SDK ps failure") {
+		t.Fatalf("Observe error = %v", err)
+	}
+	fake.upErr = errors.New("SDK up failure")
+	if err := r.Deploy(context.Background(), "worker", "", DeployOptions{}); err == nil || !strings.Contains(err.Error(), "SDK up failure") {
+		t.Fatalf("Deploy error = %v", err)
+	}
+	fake.removeErr = errors.New("SDK remove failure")
+	if err := r.Undeploy(context.Background(), "worker"); err == nil || !strings.Contains(err.Error(), "SDK remove failure") {
+		t.Fatalf("Undeploy error = %v", err)
+	}
+}
+
+func TestComposeRuntimeSDKRetireClosesExecutor(t *testing.T) {
+	dir := t.TempDir()
+	r := &ComposeRuntime{projectDir: dir, executionMode: ExecutionModeSDK, logger: zap.NewNop()}
+	applier := NewComposeDesiredStateApplier(r, zap.NewNop())
+	executor, ok := applier.executor.(*SDKComposeExecutor)
+	if !ok || r.sdkExecutor != executor {
+		t.Fatal("desired-state applier must share the runtime-owned SDK executor")
+	}
+	executor.newService = func() (api.Compose, error) { return &fakeComposeService{}, nil }
+	if _, err := executor.service(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if executor.svc != nil || r.sdkExecutor != nil {
+		t.Fatal("SDK executor was not closed on runtime retirement")
+	}
+}
 
 func TestSDKComposeExecutor_ExecutionMode(t *testing.T) {
 	e := NewSDKComposeExecutor(NewComposeRuntime(t.TempDir(), zap.NewNop()), zap.NewNop())

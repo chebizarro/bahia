@@ -47,6 +47,12 @@ Podman targets accept `runtime.default.podman_host` (environment variable
 `unix:///run/podman/podman.sock`; an explicit `endpoint_ref` instead uses that
 endpoint's `docker_host`.
 
+Compose runtime targets require an explicit `execution_mode`: `sdk` uses the
+embedded Compose SDK for project apply, observation, deployment, and removal
+without a Compose binary; `cli` uses the Compose CLI. SDK mode accepts endpoint
+TLS certificate paths directly. Legacy deploy options other than image and
+environment overrides require CLI mode.
+
 ```yaml
 server:
   host: "127.0.0.1"          # default

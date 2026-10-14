@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +48,23 @@ func NewConfigRuntimeResolver(cfg config.RuntimeConfig, logger *zap.Logger, regi
 		registryAuth: registryAuth,
 		cache:        make(map[string]Runtime),
 	}
+}
+
+// Close retires every cached runtime target and its owned transports.
+func (r *ConfigRuntimeResolver) Close() error {
+	r.mu.Lock()
+	cache := r.cache
+	r.cache = make(map[string]Runtime)
+	r.mu.Unlock()
+	var result error
+	for key, rt := range cache {
+		if closer, ok := rt.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				result = errors.Join(result, fmt.Errorf("close runtime target %q: %w", key, err))
+			}
+		}
+	}
+	return result
 }
 
 // Resolve returns a runtime instance for the supplied service and environment.

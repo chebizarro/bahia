@@ -75,7 +75,7 @@ func NewComposeDesiredStateApplier(rt *ComposeRuntime, logger *zap.Logger) *Comp
 // execution_mode=sdk, the CLI compatibility path otherwise.
 func newComposeExecutor(rt *ComposeRuntime, runner CommandRunner, logger *zap.Logger) ComposeExecutor {
 	if rt != nil && rt.ExecutionMode() == ExecutionModeSDK {
-		return NewSDKComposeExecutor(rt, logger)
+		return rt.composeSDK()
 	}
 	return NewCLIComposeExecutor(rt, runner, logger)
 }

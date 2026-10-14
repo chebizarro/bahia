@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/docker/compose/v5/pkg/api"
 	dockerclient "github.com/docker/docker/client"
 
 	"github.com/google/uuid"
@@ -156,6 +157,23 @@ printf '%s|%s\n' "$MY_SERVICE_IMAGE" "$*" >> "$COMPOSE_CALL_LOG"
 	}
 }
 
+func TestComposeRuntimeUndeployCLIUsesRmStopForce(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "compose-calls.log")
+	bin := writeFakeComposeBinary(t, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMPOSE_CALL_LOG\"\n")
+	t.Setenv("COMPOSE_CALL_LOG", logPath)
+	r := &ComposeRuntime{projectDir: t.TempDir(), binary: bin, logger: zap.NewNop()}
+	if err := r.Undeploy(context.Background(), "worker"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "rm -s -f worker") {
+		t.Fatalf("CLI undeploy args = %q", raw)
+	}
+}
+
 func TestComposeRuntimeObserveResolvesImageDigestFromRunningContainer(t *testing.T) {
 	composeBin := writeFakeComposeBinary(t, `#!/bin/sh
 printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up"}'
@@ -237,19 +255,17 @@ printf '%s' '{"ID":"running-id","Image":"registry.example/app:v2","State":"runni
 	}
 }
 
-func TestComposeRuntimeObserveSDKUsesDockerAPIWithoutComposeCLI(t *testing.T) {
+func TestComposeRuntimeObserveSDKUsesPsWithoutComposeCLI(t *testing.T) {
+	dir := t.TempDir()
+	writeSDKTestFile(t, dir, composeFileName, "name: sdk-exec-test\nservices:\n  app:\n    image: registry.example/app:v2\n")
+	executor, fake := newFakeSDKExecutor(t, dir)
+	fake.psResults = []api.ContainerSummary{{ID: "running-id", Service: "app", Image: "registry.example/app:v2", State: "running", Health: "healthy"}}
 	dockerMock := newMockDockerAPI(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/_ping":
 			w.Header().Set("API-Version", "1.44")
 			w.Header().Set("OSType", "linux")
-		case "/v1.44/containers/json":
-			if !strings.Contains(r.URL.Query().Get("filters"), "com.docker.compose.service=app") ||
-				!strings.Contains(r.URL.Query().Get("filters"), "com.docker.compose.project.working_dir=/srv/bahia/compose/managed") {
-				t.Errorf("container list filters = %q, want service and project directory", r.URL.Query().Get("filters"))
-			}
-			_, _ = fmt.Fprint(w, `[{"Id":"running-id","Image":"registry.example/app:v2","State":"running","Status":"Up","Labels":{"com.docker.compose.service":"app","com.docker.compose.project.working_dir":"/srv/bahia/compose/managed"}}]`)
 		case "/v1.44/containers/running-id/json":
 			_, _ = fmt.Fprint(w, `{"Id":"running-id","Image":"sha256:runningimage","State":{"Status":"running","Health":{"Status":"healthy"}},"Config":{"Image":"registry.example/app:v2","Labels":{"bahia.desired_hash":"sha256:reviewed"}}}`)
 		case "/v1.44/images/sha256:runningimage/json":
@@ -265,10 +281,11 @@ func TestComposeRuntimeObserveSDKUsesDockerAPIWithoutComposeCLI(t *testing.T) {
 	}
 	t.Cleanup(func() { checkTestError(t, cli.Close()) })
 	r := &ComposeRuntime{
-		projectDir:    "/srv/bahia/compose/managed",
+		projectDir:    dir,
 		executionMode: ExecutionModeSDK,
 		logger:        zap.NewNop(),
 		dockerClient:  cli,
+		sdkExecutor:   executor,
 	}
 
 	obs, err := r.Observe(context.Background(), uuid.New(), uuid.New(), "app")
@@ -283,6 +300,9 @@ func TestComposeRuntimeObserveSDKUsesDockerAPIWithoutComposeCLI(t *testing.T) {
 	}
 	if obs.NormalizedHash != "sha256:reviewed" {
 		t.Fatalf("SDK desired hash = %q, want reviewed hash", obs.NormalizedHash)
+	}
+	if len(fake.psCalls) != 1 || fake.psCalls[0].project != "sdk-exec-test" || fake.psCalls[0].options.All || len(fake.psCalls[0].options.Services) != 1 || fake.psCalls[0].options.Services[0] != "app" {
+		t.Fatalf("SDK Ps call = %#v", fake.psCalls)
 	}
 }
 
