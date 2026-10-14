@@ -98,7 +98,7 @@ func TestSignAttestationSignsExactStatementAsAuditEvent(t *testing.T) {
 	want := [][]string{
 		{"domain", "sbom"},
 		{"type", "attestation"},
-		{"schema", InTotoStatementType},
+		{"schema", attestationAuditSchema},
 		{"subject", "sha256:" + testSHA256A},
 		{"sbom", "sha256:" + testSHA256B},
 	}
@@ -143,6 +143,31 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func TestVerifyAttestationSignatureAcceptsLegacySchema(t *testing.T) {
+	secret, signer := testAttestationSigner(t)
+	att := testSignableAttestation()
+	if err := SignAttestation(context.Background(), att, signer); err != nil {
+		t.Fatal(err)
+	}
+	att.Event.Tags[2][1] = InTotoStatementType
+	resign(t, att, secret)
+	if err := VerifyAttestationSignature(att, secret.Public().Hex()); err != nil {
+		t.Fatalf("legacy schema verification: %v", err)
+	}
+	data, err := SerializeAttestation(att)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseAttestation(data); err != nil {
+		t.Fatalf("legacy schema parse: %v", err)
+	}
+	att.Event.Tags[2][1] = "bahia.audit.unknown.v1"
+	resign(t, att, secret)
+	if err := VerifyAttestationSignature(att, secret.Public().Hex()); err == nil || !strings.Contains(err.Error(), "tags do not match") {
+		t.Fatalf("unknown schema verification = %v", err)
+	}
 }
 
 func TestEventSignedAttestationRejectsTampering(t *testing.T) {

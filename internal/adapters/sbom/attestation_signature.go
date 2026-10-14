@@ -27,6 +27,7 @@ const DSSEPayloadTypeInToto = "application/vnd.in-toto+json"
 const (
 	attestationAuditDomain = "sbom"
 	attestationAuditType   = "attestation"
+	attestationAuditSchema = "bahia.audit.sbom.v1"
 	tagAttestationSubject  = "subject"
 	tagAttestationSBOM     = "sbom"
 )
@@ -143,8 +144,15 @@ func verifyAttestationEvent(att *domain.SBOMAttestation, statement []byte, trust
 	if err != nil {
 		return err
 	}
-	if !slices.EqualFunc(expected, signed.Tags, func(want nostr.Tag, got []string) bool { return slices.Equal(want, got) }) {
-		return fmt.Errorf("SBOM attestation event tags do not match the visible attestation statement")
+	matchingTags := func() bool {
+		return slices.EqualFunc(expected, signed.Tags, func(want nostr.Tag, got []string) bool { return slices.Equal(want, got) })
+	}
+	if !matchingTags() {
+		// Legacy events are regenerated under bahia-4f10q.3.3 after key rotation.
+		expected[2][1] = InTotoStatementType
+		if !matchingTags() {
+			return fmt.Errorf("SBOM attestation event tags do not match the visible attestation statement")
+		}
 	}
 	return nil
 }
@@ -157,7 +165,7 @@ func attestationEventTags(att *domain.SBOMAttestation) (nostr.Tags, error) {
 	tags := nostr.Tags{
 		{cascadia.TagDomain, attestationAuditDomain},
 		{cascadia.TagType, attestationAuditType},
-		{cascadia.TagSchema, InTotoStatementType},
+		{cascadia.TagSchema, attestationAuditSchema},
 	}
 	subjects := 0
 	for _, subject := range att.Subject {

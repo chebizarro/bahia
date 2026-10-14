@@ -559,11 +559,12 @@ events durably unless `nostr.sidecar.event_retention` is set.
   Signet's standard NIP-46 `sign_event`): content is the exact canonical
   in-toto statement JSON (`_type`, `subject`, `predicateType`, `predicate`);
   tags, in order, are `domain=sbom`, `type=attestation`,
-  `schema=https://in-toto.io/Statement/v1`, one `subject=<alg>:<digest>` per
+  `schema=bahia.audit.sbom.v1`, one `subject=<alg>:<digest>` per
   subject digest, then one `sbom=<alg>:<digest>` per SBOM payload digest
   (algorithms sorted). A verifier requires a valid NIP-01 id and signature,
   the trusted service pubkey, content byte-identical to the visible
-  statement, and exactly these tags.
+  statement, and exactly these tags. Existing signed events with the legacy
+  `schema=https://in-toto.io/Statement/v1` tag remain readable.
 - **SBOM availability** (`30004`): `domain=sbom`,
   `schema=bahia.sbom.available-list.v1`,
   `d=sbom:available:<subject-type>:<subject-key>`; replaced as a complete set
