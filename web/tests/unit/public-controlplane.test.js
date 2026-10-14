@@ -297,6 +297,20 @@ describe('public controlplane command helpers', () => {
     expect(request.content.idempotencyKey).toBe(request.intentId);
   });
 
+  it('uploads a selected SBOM file to Blossom before publishing the existing signed import intent', async () => {
+    const { sbomFileImportSource } = await import('../../src/lib/nostr/blossom-upload.js');
+    const file = new File(['small SBOM'], 'sbom.spdx.json', { type: 'application/json' });
+    const location = { type: 'blossom', uri: `https://blossom.example/${'d'.repeat(64)}`, mediaType: 'application/json' };
+    const upload = vi.fn(async () => location);
+    const source = await sbomFileImportSource(file, { inlineLimit: 360 * 1024, useBlossom: true, upload });
+    await api.importArtifactSBOM({ id: 'artifact-1', digest: 'sha256:abc123' }, { format: 'spdx', ...source });
+    expect(upload).toHaveBeenCalledExactlyOnceWith(file);
+    expect(publishIntentMock).toHaveBeenCalledOnce();
+    expect(publishIntentMock.mock.calls[0][0]).toMatchObject({ domain: 'sbom', op: 'import', content: { location } });
+    expect(publishIntentMock.mock.calls[0][0].content).not.toHaveProperty('payloadBase64');
+    expect(publishEncryptedRequestMock).not.toHaveBeenCalled();
+  });
+
   it('rejects artifact SBOM generation without an immutable digest', () => {
     expect(() => api.generateArtifactSBOM({ id: 'artifact-1', image_repo: 'registry.example.com/acme/api' })).toThrow('artifact digest is required');
     expect(requestEncryptedResultMock).not.toHaveBeenCalled();

@@ -36,6 +36,8 @@ MCP provides `bahia_list_artifacts`, `bahia_get_artifact`, and `bahia_register_a
 
 Bahia accepts SPDX and CycloneDX JSON. Use `bahia_ingest_sbom` for inline documents up to 360 KiB, or the authenticated HTTP import when a database-backed artifact repository is configured:
 
+On an artifact's SBOM tab, choose a JSON file to import inline, select **Upload file to Blossom before importing**, or enter an existing Blossom location. Files above the relay's inline limit upload to Blossom automatically. The web publishes the same signed `sbom/import` intent for each path; the location URL must end with the blob's SHA-256 hash.
+
 ```bash
 curl -X POST https://bahia.example/api/v1/artifacts/<artifact-id>/sbom \
   -H 'Authorization: Nostr <nip98-event>' \

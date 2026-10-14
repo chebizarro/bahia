@@ -20,7 +20,7 @@ import Table from '$lib/components/Table.svelte';
   import { artifactVersionLabel, userFacingSBOMError, userFacingVerifyError } from './presentation.js';
   import IntentGate from '$lib/components/IntentGate.svelte';
   import { generateArtifactSBOM, importArtifactSBOM, resolveInlineSBOMLimitBytes, MAX_INLINE_SBOM_BYTES } from '$lib/stores/public-controlplane.svelte.js';
-  import { blossomLocation, uploadSBOMToBlossom } from '$lib/nostr/blossom-upload.js';
+  import { blossomLocation, sbomFileImportSource } from '$lib/nostr/blossom-upload.js';
   import { getTagValue, parseJsonContent } from '$lib/nostr/client.js';
   import { BAHIA_SBOM_AVAILABLE_LIST_SCHEMA, BAHIA_SBOM_REFERENCE_SCHEMA, SBOM_AVAILABILITY_LIST, SBOM_REFERENCE, SBOM_REFERENCE_TOPIC, SBOM_AVAILABILITY_TOPIC } from '$lib/nostr/kinds.gen.js';
   import {
@@ -52,6 +52,7 @@ import Table from '$lib/components/Table.svelte';
   let sbomLocationHash = $state('');
   let sbomInlineLimit = $state(MAX_INLINE_SBOM_BYTES);
   let sbomUploading = $state(false);
+  let sbomUploadToBlossom = $state(false);
   let sbomImportFormat = $state('spdx');
   let sbomRequestEventId = $state(null);
   let sbomGenerationStatus = $state('idle');
@@ -318,10 +319,6 @@ import Table from '$lib/components/Table.svelte';
     }
   }
 
-  function isSBOMImportFileOversized(file) {
-    return Number(file?.size || 0) > sbomInlineLimit;
-  }
-
   function detectSBOMImportFormat(file) {
     const name = String(file?.name || '').toLowerCase();
     if (name.includes('cyclonedx') || name.includes('cdx')) return 'cyclonedx';
@@ -335,16 +332,6 @@ import Table from '$lib/components/Table.svelte';
     sbomImportError = null;
     if (!file) return;
     sbomImportFormat = detectSBOMImportFormat(file);
-  }
-
-  async function fileToBase64(file) {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    let binary = '';
-    const chunkSize = 0x8000;
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-    }
-    return btoa(binary);
   }
 
   async function handleImportSBOM(fromLocation = false) {
@@ -377,11 +364,11 @@ import Table from '$lib/components/Table.svelte';
       sbomInlineLimit = await resolveInlineSBOMLimitBytes();
       let source;
       if (fromLocation) source = { location: blossomLocation(sbomLocationURL, sbomLocationHash) };
-      else if (isSBOMImportFileOversized(sbomImportFile)) {
-        sbomUploading = true;
-        source = { location: await uploadSBOMToBlossom(sbomImportFile) };
+      else {
+        sbomUploading = sbomUploadToBlossom || sbomImportFile.size > sbomInlineLimit;
+        source = await sbomFileImportSource(sbomImportFile, { inlineLimit: sbomInlineLimit, useBlossom: sbomUploadToBlossom });
         sbomUploading = false;
-      } else source = { payloadBase64: await fileToBase64(sbomImportFile) };
+      }
       const event = await importArtifactSBOM(artifact, { format: sbomImportFormat, ...source, generator: { id: 'web-import' } });
       sbomRequestEventId = event?.event?.id || null;
       if (sbomGenerationStatus !== 'completed') sbomGenerationStatus = 'waiting';
@@ -706,7 +693,7 @@ import Table from '$lib/components/Table.svelte';
           <form class="sbom-import-panel" onsubmit={(event) => { event.preventDefault(); void handleImportSBOM(); }}>
             <div>
               <h3 class="import-title">Import SBOM</h3>
-              <p class="section-subtitle">Files up to {Math.floor(sbomInlineLimit / 1024)} KiB can be imported directly. Larger files are uploaded to the configured storage server first.</p>
+              <p class="section-subtitle">Files up to {Math.floor(sbomInlineLimit / 1024)} KiB can be imported directly. Larger files are uploaded to Blossom automatically.</p>
             </div>
             <div class="import-controls">
               <label class="import-field">
@@ -725,6 +712,7 @@ import Table from '$lib/components/Table.svelte';
                   <option value="cyclonedx">CycloneDX JSON</option>
                 </select>
               </label>
+              <label class="import-field"><input type="checkbox" bind:checked={sbomUploadToBlossom} disabled={sbomImporting} /> Upload file to Blossom before importing</label>
               <LoadingButton
                 variant="secondary"
                 loading={sbomImporting}
