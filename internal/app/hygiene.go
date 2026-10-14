@@ -10,8 +10,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 )
 
-// loadHygienePolicy reads and validates a versioned hygiene policy document
-// (schemas/hygiene_policy.json describes the format).
+// loadHygienePolicy reads and validates a versioned hygiene policy document.
 func loadHygienePolicy(path string) (domain.HygienePolicy, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {

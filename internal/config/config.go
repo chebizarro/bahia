@@ -88,8 +88,7 @@ type SBOMCdxgenConfig struct {
 
 // WorkerPressureConfig controls Bahia-owned worker pressure and dynamic admission thresholds.
 // HygieneConfig controls the fleet hygiene (Swabbie) reconciler (fp-jan).
-// The policy document itself is a versioned JSON file validated against
-// schemas/hygiene_policy.json.
+// The policy document is a versioned JSON file validated by loadHygienePolicy.
 type HygieneConfig struct {
 	Enabled    bool          `koanf:"enabled" yaml:"enabled" secret:"false"`
 	PolicyPath string        `koanf:"policy_path" yaml:"policy_path" secret:"false"`
