@@ -156,7 +156,12 @@ Docker, Compose, Kubernetes and Podman runtimes are selected from the service
 and environment desired state. Bahia-owned Compose projects render under the
 configured `compose_dir`; generated environment files can contain resolved
 secrets and must inherit the same storage protection as the daemon's secret
-inputs. Remote Docker endpoints should use mutual TLS. For Podman, set
+inputs. Remote Docker endpoints should use mutual TLS. Set
+`execution_mode: sdk` on a Compose target to validate, apply, observe, deploy,
+and remove services through the embedded Compose SDK without a Compose binary.
+`execution_mode: cli` retains the Compose CLI compatibility path. SDK deploy
+accepts image and environment interpolation overrides; other legacy deploy
+options are rejected with an error rather than silently ignored. For Podman, set
 `runtime.default.podman_host` (or an environment's `podman_host`) to a custom
 socket such as `unix:///run/podman/podman.sock`; otherwise Bahia uses the
 daemon user's rootless socket. A Podman target with `endpoint_ref` uses the

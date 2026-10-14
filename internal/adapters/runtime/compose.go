@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,8 +15,6 @@ import (
 	"time"
 	"unicode"
 
-	containertypes "github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 	dockerclient "github.com/docker/docker/client"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/google/uuid"
@@ -24,8 +23,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// ComposeRuntime implements Runtime using Docker Compose. Mutating apply
-// executes either through the Compose CLI compatibility path
+// ComposeRuntime implements Runtime using Docker Compose. Compose operations
+// execute either through the Compose CLI compatibility path
 // (execution_mode: cli) or in-process through the embedded Compose v5 Go SDK
 // (execution_mode: sdk).
 type ComposeRuntime struct {
@@ -40,6 +39,7 @@ type ComposeRuntime struct {
 
 	mu           sync.Mutex
 	dockerClient *dockerclient.Client
+	sdkExecutor  *SDKComposeExecutor
 }
 
 // ExecutionMode reports how this runtime executes mutating Compose
@@ -80,15 +80,14 @@ func NewComposeRuntimeWithEndpoint(projectDir string, endpoint config.RuntimeEnd
 // SDK path consumes the endpoint's certificate file paths directly, so only
 // coherence of the TLS material is validated.
 func newComposeRuntimeWithEndpointForMode(projectDir string, endpoint config.RuntimeEndpointConfig, mode RuntimeExecutionMode, logger *zap.Logger) (*ComposeRuntime, error) {
-	r := NewComposeRuntimeWithDockerHost(projectDir, strings.TrimSpace(endpoint.DockerHost), logger)
-	r.endpoint = endpoint
-	r.executionMode = mode
+	r := &ComposeRuntime{projectDir: projectDir, dockerHost: strings.TrimSpace(endpoint.DockerHost), endpoint: endpoint, executionMode: mode, logger: logger}
 	if mode == ExecutionModeSDK {
 		if err := validateEndpointTLSMaterial(endpoint); err != nil {
 			return nil, err
 		}
 		return r, nil
 	}
+	r.binary = detectComposeBinary()
 	tlsEnv, err := composeDockerTLSEnv(endpoint)
 	if err != nil {
 		return nil, err
@@ -158,16 +157,31 @@ func (r *ComposeRuntime) getDockerClient() (*dockerclient.Client, error) {
 	return c, nil
 }
 
-// Close releases the cached Docker Engine API client, if any.
+// Close releases the runtime-owned SDK executor and Docker Engine API client.
 func (r *ComposeRuntime) Close() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.dockerClient == nil {
-		return nil
-	}
-	err := r.dockerClient.Close()
+	executor := r.sdkExecutor
+	r.sdkExecutor = nil
+	client := r.dockerClient
 	r.dockerClient = nil
+	r.mu.Unlock()
+	var err error
+	if executor != nil {
+		err = executor.Close()
+	}
+	if client != nil {
+		err = errors.Join(err, client.Close())
+	}
 	return err
+}
+
+func (r *ComposeRuntime) composeSDK() *SDKComposeExecutor {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.sdkExecutor == nil {
+		r.sdkExecutor = NewSDKComposeExecutor(r, r.logger)
+	}
+	return r.sdkExecutor
 }
 
 // detectComposeBinary checks if "docker compose" (v2) or "docker-compose" (v1) is available.
@@ -187,30 +201,34 @@ func (r *ComposeRuntime) Type() domain.RuntimeType {
 	return domain.RuntimeTypeCompose
 }
 
-// Observe uses "docker compose ps" to query service state.
+// Observe queries service state through the selected Compose transport.
 func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
 	serviceName, err := validateComposeServiceName(serviceName)
 	if err != nil {
 		return nil, err
 	}
+	var entries []composePSEntry
 	if r.ExecutionMode() == ExecutionModeSDK {
-		return r.observeWithDockerAPI(ctx, serviceID, envID, serviceName)
-	}
-	args := r.composeArgs("ps", "--format", "json", "--", serviceName)
-	output, stderr, err := r.runCommandStdout(ctx, nil, args...)
-	if err != nil {
-		if strings.TrimSpace(stderr) != "" {
-			return nil, fmt.Errorf("compose ps: %w: %s", err, strings.TrimSpace(stderr))
+		entries, err = r.composeSDK().Ps(ctx, r.projectDir, serviceName)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("compose ps: %w", err)
-	}
-
-	entries, err := parseComposePSOutput(output)
-	if err != nil {
-		if strings.TrimSpace(stderr) != "" {
-			return nil, fmt.Errorf("parse compose ps output: %w: %s", err, strings.TrimSpace(stderr))
+	} else {
+		args := r.composeArgs("ps", "--format", "json", "--", serviceName)
+		output, stderr, runErr := r.runCommandStdout(ctx, nil, args...)
+		if runErr != nil {
+			if strings.TrimSpace(stderr) != "" {
+				return nil, fmt.Errorf("compose ps: %w: %s", runErr, strings.TrimSpace(stderr))
+			}
+			return nil, fmt.Errorf("compose ps: %w", runErr)
 		}
-		return nil, fmt.Errorf("parse compose ps output: %w", err)
+		entries, err = parseComposePSOutput(output)
+		if err != nil {
+			if strings.TrimSpace(stderr) != "" {
+				return nil, fmt.Errorf("parse compose ps output: %w: %s", err, strings.TrimSpace(stderr))
+			}
+			return nil, fmt.Errorf("parse compose ps output: %w", err)
+		}
 	}
 
 	health := domain.HealthStatusStopped
@@ -221,14 +239,14 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	if len(entries) > 0 {
 		representative := entries[0]
 		for _, entry := range entries {
-			if mapDockerState(entry.State) == domain.HealthStatusHealthy {
+			if composeEntryHealth(entry) == domain.HealthStatusHealthy {
 				representative = entry
 				health = domain.HealthStatusHealthy
 				break
 			}
 		}
 		if health != domain.HealthStatusHealthy {
-			health = mapDockerState(representative.State)
+			health = composeEntryHealth(representative)
 		}
 		containerID = representative.ID
 		image = representative.Image
@@ -253,83 +271,18 @@ func (r *ComposeRuntime) Observe(ctx context.Context, serviceID, envID uuid.UUID
 	}, nil
 }
 
-// observeWithDockerAPI observes an SDK-managed Compose service without
-// requiring a Docker Compose CLI in the Bahia runtime image. SDK mutation and
-// observation must use the same Docker endpoint; otherwise a successful SDK
-// apply is followed by an impossible CLI health check in minimal images.
-func (r *ComposeRuntime) observeWithDockerAPI(ctx context.Context, serviceID, envID uuid.UUID, serviceName string) (*domain.RuntimeObservation, error) {
-	dockerCli, err := r.getDockerClient()
-	if err != nil {
-		return nil, fmt.Errorf("create docker client for compose observation: %w", err)
-	}
-	filterArgs := filters.NewArgs(filters.Arg("label", "com.docker.compose.service="+serviceName))
-	if projectDir := strings.TrimSpace(r.projectDir); projectDir != "" {
-		filterArgs.Add("label", "com.docker.compose.project.working_dir="+projectDir)
-	}
-	containers, err := dockerCli.ContainerList(ctx, containertypes.ListOptions{All: true, Filters: filterArgs})
-	if err != nil {
-		return nil, fmt.Errorf("list compose containers through docker API: %w", err)
-	}
-
-	obs := &domain.RuntimeObservation{
-		ServiceID:     serviceID,
-		EnvironmentID: envID,
-		HealthStatus:  domain.HealthStatusStopped,
-		Source:        "compose",
-		ObservedAt:    time.Now().UTC(),
-	}
-	if len(containers) == 0 {
-		return obs, nil
-	}
-
-	selected := containers[0]
-	selectedHealth := mapDockerState(selected.State)
-	for _, candidate := range containers {
-		health := mapDockerState(candidate.State)
-		if health == domain.HealthStatusHealthy || (selectedHealth != domain.HealthStatusHealthy && strings.EqualFold(candidate.State, "running")) {
-			selected = candidate
-			selectedHealth = health
-			if health == domain.HealthStatusHealthy {
-				break
-			}
-		}
-	}
-
-	inspected, err := dockerCli.ContainerInspect(ctx, selected.ID)
-	if err != nil {
-		return nil, fmt.Errorf("inspect compose container through docker API: %w", err)
-	}
-	health := mapDockerState(string(inspected.State.Status))
-	if inspected.State.Health != nil {
-		switch strings.ToLower(string(inspected.State.Health.Status)) {
+func composeEntryHealth(entry composePSEntry) domain.HealthStatus {
+	if entry.Health != "" && strings.EqualFold(entry.State, "running") {
+		switch strings.ToLower(entry.Health) {
 		case "healthy":
-			health = domain.HealthStatusHealthy
+			return domain.HealthStatusHealthy
 		case "unhealthy":
-			health = domain.HealthStatusUnhealthy
+			return domain.HealthStatusUnhealthy
 		case "starting":
-			health = domain.HealthStatusStarting
+			return domain.HealthStatusStarting
 		}
 	}
-	configuredImage := ""
-	desiredHash := ""
-	if inspected.Config != nil {
-		configuredImage = strings.TrimSpace(inspected.Config.Image)
-		desiredHash = strings.TrimSpace(inspected.Config.Labels["bahia.desired_hash"])
-	}
-	imageRepo, imageDigest := r.inspectDockerImage(ctx, firstNonNilLogger(r.logger), inspected.Image, configuredImage)
-	obs.ObservedContainerID = selected.ID
-	obs.ObservedImageRepo = imageRepo
-	obs.ObservedImageDigest = imageDigest
-	obs.HealthStatus = health
-	obs.NormalizedHash = desiredHash
-	return obs, nil
-}
-
-func firstNonNilLogger(logger *zap.Logger) *zap.Logger {
-	if logger == nil {
-		return zap.NewNop()
-	}
-	return logger
+	return mapDockerState(entry.State)
 }
 
 // ObserveInstance resolves the concrete container ID with compose ps and reuses Docker's exact-container inspect path.
@@ -393,14 +346,22 @@ func (r *ComposeRuntime) composeContainerID(ctx context.Context, serviceName str
 	if err != nil {
 		return "", err
 	}
-	args := r.composeArgs("ps", "--format", "json", "--", serviceName)
-	stdout, stderr, err := r.runCommandStdout(ctx, nil, args...)
-	if err != nil {
-		return "", fmt.Errorf("compose ps: %w: %s", err, domain.SanitizeEvidence(stderr))
-	}
-	entries, err := parseComposePSOutput(stdout)
-	if err != nil {
-		return "", fmt.Errorf("parse compose ps output: %w", err)
+	var entries []composePSEntry
+	if r.ExecutionMode() == ExecutionModeSDK {
+		entries, err = r.composeSDK().Ps(ctx, r.projectDir, serviceName)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		args := r.composeArgs("ps", "--format", "json", "--", serviceName)
+		stdout, stderr, runErr := r.runCommandStdout(ctx, nil, args...)
+		if runErr != nil {
+			return "", fmt.Errorf("compose ps: %w: %s", runErr, domain.SanitizeEvidence(stderr))
+		}
+		entries, err = parseComposePSOutput(stdout)
+		if err != nil {
+			return "", fmt.Errorf("parse compose ps output: %w", err)
+		}
 	}
 	if len(entries) == 0 {
 		return "", nil
@@ -467,6 +428,9 @@ func (r *ComposeRuntime) Deploy(ctx context.Context, serviceName, image string, 
 	if err := r.ValidateOwnership(ComposeOwnershipConfig{}); err != nil {
 		return fmt.Errorf("compose deploy blocked: %w", err)
 	}
+	if r.ExecutionMode() == ExecutionModeSDK {
+		return r.composeSDK().DeployService(ctx, r.projectDir, serviceName, image, opts)
+	}
 
 	// Set environment variables for the image override.
 	envVars := make([]string, 0, len(opts.Environment)+1)
@@ -498,6 +462,9 @@ func (r *ComposeRuntime) Deploy(ctx context.Context, serviceName, image string, 
 
 // Undeploy stops and removes a Compose service.
 func (r *ComposeRuntime) Undeploy(ctx context.Context, serviceName string) error {
+	if r.ExecutionMode() == ExecutionModeSDK {
+		return r.composeSDK().RemoveService(ctx, r.projectDir, serviceName)
+	}
 	args := r.composeArgs("rm", "-s", "-f", serviceName)
 	if _, err := r.runCommand(ctx, nil, args...); err != nil {
 		return fmt.Errorf("compose rm: %w", err)
@@ -781,6 +748,7 @@ type composePSEntry struct {
 	Image   string `json:"Image"`
 	State   string `json:"State"`
 	Status  string `json:"Status"`
+	Health  string `json:"-"`
 }
 
 func parseComposePSOutput(output string) ([]composePSEntry, error) {

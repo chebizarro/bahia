@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,6 +12,26 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"go.uber.org/zap"
 )
+
+func TestNewRuntime_ComposeSDKSkipsBinaryDetection(t *testing.T) {
+	binDir := t.TempDir()
+	marker := filepath.Join(binDir, "called")
+	docker := filepath.Join(binDir, "docker")
+	if err := os.WriteFile(docker, []byte("#!/bin/sh\necho called > '"+marker+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rt, err := NewRuntime(RuntimeConfig{Type: "compose", ComposeDir: t.TempDir(), ExecutionMode: "sdk"}, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.(*ComposeRuntime).binary != "" {
+		t.Fatalf("sdk mode selected compose binary %q", rt.(*ComposeRuntime).binary)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("sdk mode ran compose binary probe: %v", err)
+	}
+}
 
 func TestNewRuntime_Docker(t *testing.T) {
 	logger := zap.NewNop()

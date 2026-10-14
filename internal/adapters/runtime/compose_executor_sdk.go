@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 
+	"github.com/compose-spec/compose-go/v2/cli"
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/docker/cli/cli/command"
 	"github.com/docker/cli/cli/flags"
@@ -27,6 +29,9 @@ import (
 //   - Up                  ≙ docker compose up -d --remove-orphans [--pull <policy>]
 //   - ValidateWithFragment ≙ docker compose -f <main> -f <fragment> config -q
 //   - UpService           ≙ docker compose -f <main> -f <fragment> up -d --no-deps [--pull <policy>] <svc>
+//   - Ps                  ≙ docker compose ps --format json <svc>
+//   - DeployService       ≙ docker compose pull <svc>; docker compose up -d --force-recreate --no-deps <svc>
+//   - RemoveService       ≙ docker compose rm -s -f <svc>
 //
 // The SDK returns rich Go errors instead of process stdout/stderr, so the
 // stdout/stderr return values are always empty strings.
@@ -169,15 +174,142 @@ func (e *SDKComposeExecutor) Close() error {
 // mode is always set: Bahia renders its own project files and must never
 // resolve remote (OCI) includes during apply.
 func (e *SDKComposeExecutor) loadProject(ctx context.Context, workingDir string, configPaths []string) (*types.Project, error) {
+	return e.loadProjectWithEnv(ctx, workingDir, configPaths, nil)
+}
+
+func (e *SDKComposeExecutor) loadProjectWithEnv(ctx context.Context, workingDir string, configPaths []string, env []string) (*types.Project, error) {
 	svc, err := e.service()
 	if err != nil {
 		return nil, err
 	}
-	return svc.LoadProject(ctx, api.ProjectLoadOptions{
+	opts := api.ProjectLoadOptions{
 		WorkingDir:  workingDir,
 		ConfigPaths: configPaths,
 		Offline:     true,
-	})
+	}
+	if len(env) > 0 {
+		opts.ProjectOptionsFns = []cli.ProjectOptionsFn{cli.WithEnv(env)}
+	}
+	return svc.LoadProject(ctx, opts)
+}
+
+// Ps uses the same project discovery and endpoint as SDK apply.
+func (e *SDKComposeExecutor) Ps(ctx context.Context, composeDir, serviceName string) ([]composePSEntry, error) {
+	svc, err := e.service()
+	if err != nil {
+		return nil, fmt.Errorf("compose sdk ps: %w", err)
+	}
+	project, err := e.loadProject(ctx, composeDir, nil)
+	if err != nil {
+		return nil, fmt.Errorf("compose sdk ps: load project: %w", err)
+	}
+	containers, err := svc.Ps(ctx, project.Name, api.PsOptions{Project: project, Services: []string{serviceName}})
+	if err != nil {
+		return nil, fmt.Errorf("compose sdk ps: %w", err)
+	}
+	entries := make([]composePSEntry, 0, len(containers))
+	for _, container := range containers {
+		if container.Service != serviceName {
+			continue
+		}
+		entries = append(entries, composePSEntry{ID: container.ID, Service: container.Service, Image: container.Image, State: string(container.State), Status: container.Status, Health: string(container.Health)})
+	}
+	return entries, nil
+}
+
+// ComposeSDKUnsupportedOptionError identifies a legacy deploy option which
+// SDK mode cannot faithfully apply. Operators must remove it or select CLI mode.
+type ComposeSDKUnsupportedOptionError struct{ Option string }
+
+func (e *ComposeSDKUnsupportedOptionError) Error() string {
+	return fmt.Sprintf("compose sdk deploy does not support option %s; remove it or configure execution_mode: cli", e.Option)
+}
+
+func unsupportedSDKDeployOption(opts DeployOptions) string {
+	switch {
+	case len(opts.Labels) != 0:
+		return "labels"
+	case len(opts.Ports) != 0:
+		return "ports"
+	case len(opts.Volumes) != 0:
+		return "volumes"
+	case opts.Restart != "":
+		return "restart"
+	case len(opts.Command) != 0:
+		return "command"
+	case len(opts.Entrypoint) != 0:
+		return "entrypoint"
+	case opts.WorkingDir != "":
+		return "working_dir"
+	case opts.NetworkMode != "":
+		return "network_mode"
+	case opts.PullAlways:
+		return "pull_always"
+	default:
+		return ""
+	}
+}
+
+// DeployService mirrors legacy pull followed by forced service-scoped up.
+func (e *SDKComposeExecutor) DeployService(ctx context.Context, composeDir, serviceName, image string, opts DeployOptions) error {
+	if option := unsupportedSDKDeployOption(opts); option != "" {
+		return &ComposeSDKUnsupportedOptionError{Option: option}
+	}
+	serviceName, err := validateComposeServiceName(serviceName)
+	if err != nil {
+		return err
+	}
+	var env []string
+	for key, value := range opts.Environment {
+		env = append(env, key+"="+value)
+	}
+	if image = strings.TrimSpace(image); image != "" {
+		env = append(env, composeImageEnvKey(serviceName)+"="+image)
+	}
+	svc, err := e.service()
+	if err != nil {
+		return fmt.Errorf("compose sdk deploy: %w", err)
+	}
+	project, err := e.loadProjectWithEnv(ctx, composeDir, nil, append(os.Environ(), env...))
+	if err != nil {
+		return fmt.Errorf("compose sdk deploy: load project: %w", err)
+	}
+	project, err = project.WithSelectedServices([]string{serviceName}, types.IgnoreDependencies)
+	if err != nil {
+		return fmt.Errorf("compose sdk deploy: select service %q: %w", serviceName, err)
+	}
+	if err := svc.Pull(ctx, project, api.PullOptions{}); err != nil {
+		e.logger.Warn("compose sdk pull failed, continuing", zap.Error(err))
+	}
+	if err := svc.Up(ctx, project, api.UpOptions{Create: api.CreateOptions{
+		Services: []string{serviceName}, Recreate: api.RecreateForce, IgnoreOrphans: true,
+	}}); err != nil {
+		return fmt.Errorf("compose sdk up: %w", err)
+	}
+	return nil
+}
+
+// RemoveService mirrors compose rm -s -f for one configured service.
+func (e *SDKComposeExecutor) RemoveService(ctx context.Context, composeDir, serviceName string) error {
+	serviceName, err := validateComposeServiceName(serviceName)
+	if err != nil {
+		return err
+	}
+	svc, err := e.service()
+	if err != nil {
+		return fmt.Errorf("compose sdk rm: %w", err)
+	}
+	project, err := e.loadProject(ctx, composeDir, nil)
+	if err != nil {
+		return fmt.Errorf("compose sdk rm: load project: %w", err)
+	}
+	if _, ok := project.Services[serviceName]; !ok {
+		return fmt.Errorf("compose sdk rm: service %q is not in project %q", serviceName, project.Name)
+	}
+	if err := svc.Remove(ctx, project.Name, api.RemoveOptions{Project: project, Stop: true, Force: true, Services: []string{serviceName}}); err != nil {
+		return fmt.Errorf("compose sdk rm: %w", err)
+	}
+	return nil
 }
 
 // Validate loads the staged project through the SDK, the in-process

@@ -49,6 +49,26 @@ func TestConfigRuntimeResolver_Precedence(t *testing.T) {
 	}
 }
 
+func TestConfigRuntimeResolverCloseRetiresSDKTarget(t *testing.T) {
+	dir := t.TempDir()
+	executor, _ := newFakeSDKExecutor(t, dir)
+	if _, err := executor.service(); err != nil {
+		t.Fatal(err)
+	}
+	rt := &ComposeRuntime{projectDir: dir, executionMode: ExecutionModeSDK, sdkExecutor: executor, logger: zap.NewNop()}
+	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{}, zap.NewNop(), nil)
+	resolver.cache["sdk-target"] = rt
+	if err := resolver.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if executor.svc != nil || len(resolver.cache) != 0 {
+		t.Fatal("retiring resolver did not close SDK executor and clear target cache")
+	}
+	if err := resolver.Close(); err != nil {
+		t.Fatalf("repeated close: %v", err)
+	}
+}
+
 func TestConfigRuntimeResolver_ServiceRuntimeTypeBeatsDefaultType(t *testing.T) {
 	resolver := NewConfigRuntimeResolver(config.RuntimeConfig{
 		Default: config.RuntimeTargetConfig{Type: "docker", ComposeDir: "/srv/default", ExecutionMode: "cli"},

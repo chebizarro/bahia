@@ -104,6 +104,7 @@ type App struct {
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
 	localOutbox               *localstore.Outbox
+	runtimeResolver           *runtime.ConfigRuntimeResolver
 	reloadMu                  sync.Mutex
 
 	// Intent framework.
@@ -540,6 +541,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// Runtime resolver — selects Docker, Compose, or Kubernetes per service/environment.
 	runtimeRegistryAuth := runtimeRegistryAuth(cfg)
 	runtimeResolver := runtime.NewConfigRuntimeResolver(cfg.Runtime, logger, runtimeRegistryAuth)
+	runtimeResolverOwned := false
+	defer func() {
+		if !runtimeResolverOwned {
+			if err := runtimeResolver.Close(); err != nil {
+				logger.Warn("runtime resolver close failed during startup", zap.Error(err))
+			}
+		}
+	}()
 	logger.Info("runtime resolver initialized", zap.String("default_type", cfg.Runtime.Type))
 
 	// External secret store (docs/architecture/secret-store.md). Secret values
@@ -3346,6 +3355,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
 		localOutbox:               localOutbox,
+		runtimeResolver:           runtimeResolver,
 		secretStore:               secretStore,
 		systemKeys:                systemKeys,
 	}
@@ -3354,6 +3364,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	serviceKeyerOwned = true
 	configFabricSignerOwned = true
 	secretStoreOwned = true
+	runtimeResolverOwned = true
 	return application, nil
 }
 
@@ -4144,6 +4155,11 @@ func (a *App) RunContext(ctx context.Context) error {
 
 	// Wait for background runners to finish (they should stop when ctx is cancelled).
 	a.Background.Wait()
+	if a.runtimeResolver != nil {
+		if err := a.runtimeResolver.Close(); err != nil {
+			a.Logger.Warn("runtime resolver close failed", zap.Error(err))
+		}
+	}
 
 	if a.soulFactoryCloser != nil {
 		if err := a.soulFactoryCloser(); err != nil {
