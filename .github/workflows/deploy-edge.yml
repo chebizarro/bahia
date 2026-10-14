@@ -36,7 +36,8 @@ jobs:
     env:
       CONTROLPLANE_ROOT: /srv/data/bahia-controlplane
       COMPOSE_FILE: /srv/data/bahia-controlplane/docker-compose.yml
-      COMPOSE_OVERRIDE: /srv/data/bahia-controlplane/docker-compose.deploy-override.yml
+      LEGACY_COMPOSE_OVERRIDE: /srv/data/bahia-controlplane/docker-compose.deploy-override.yml
+      APPLIED_PROJECT_RECEIPT: /srv/data/bahia-controlplane/compose-applied-project.json
       RELEASE_ROOT: /srv/data/bahia-controlplane/releases
       EDGE_HEALTH_HOST: 172.17.0.1
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${{ vars.PUBLIC_BAHIA_BOOTSTRAP_RELAYS }}
@@ -120,18 +121,17 @@ jobs:
           command -v npm >/dev/null
           command -v curl >/dev/null
           docker version >/dev/null
-          docker compose version >/dev/null
+          command -v go >/dev/null
 
           test -f Dockerfile
           test -f web/Dockerfile
           test -d docs
-          test -f scripts/deploy_edge_compose_override.py
+          test -f cmd/bahia-deploy-edge/main.go
           test -f scripts/edge_image_admission.py
           test -f deploy/edge/image-admission-policy.json
           test -f scripts/relay_policy_rollout_gate.py
           test -f scripts/soul_gallery_rollout_gate.mjs
           test -f "$COMPOSE_FILE"
-          test -f scripts/check_web_bootstrap_compose.py
           test -w "$CONTROLPLANE_ROOT"
           mkdir -p "$RELEASE_ROOT" "$CONTROLPLANE_ROOT/backups"
           test -w "$RELEASE_ROOT"
@@ -144,14 +144,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          preflight_override="$RUNNER_TEMP/bahia-web-seed-preflight.yml"
-          docker compose -f "$COMPOSE_FILE" config --format json |
-            python3 scripts/deploy_edge_compose_override.py \
-              --base-file "$COMPOSE_FILE" \
-              --override-file "$preflight_override" \
-              --seed-only
-          docker compose -f "$COMPOSE_FILE" -f "$preflight_override" config --format json \
-            | python3 scripts/check_web_bootstrap_compose.py
+          go build -o "$RUNNER_TEMP/bahia-deploy-edge" ./cmd/bahia-deploy-edge
+          echo "EDGE_DEPLOY_BIN=$RUNNER_TEMP/bahia-deploy-edge" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/bahia-deploy-edge" preflight --base-file "$COMPOSE_FILE"
 
       - name: Build local Bahia image
         run: |
@@ -198,31 +193,26 @@ jobs:
           tag="github-${RELEASE_REVISION::7}"
           release_dir="$RELEASE_ROOT/$tag"
           timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-          backup="$CONTROLPLANE_ROOT/backups/compose-override-${tag}-${timestamp}.yml"
-          rollback="$CONTROLPLANE_ROOT/backups/compose-override-${tag}-${timestamp}.rollback-safe.yml"
+          backup="$CONTROLPLANE_ROOT/backups/compose-project-${tag}-${timestamp}.json"
+          rollback_receipt="$CONTROLPLANE_ROOT/backups/compose-project-${tag}-${timestamp}.rollback-safe.json"
           baseline="$CONTROLPLANE_ROOT/backups/relay-policy-${tag}-${timestamp}.json"
           ready_url="http://${EDGE_HEALTH_HOST}:8080/ready"
 
-          # Capture only public signed provenance when a policy head exists.
-          # A fresh Nostr installation with no matching event remains deployable.
+          # Capture signed provenance before changing the stack. A fresh Nostr
+          # installation without a policy head remains deployable.
           python3 scripts/relay_policy_rollout_gate.py capture --url "$ready_url" --baseline "$baseline"
-          if [[ -f "$COMPOSE_OVERRIDE" ]]; then
-            cp "$COMPOSE_OVERRIDE" "$backup"
+          if [[ -f "$APPLIED_PROJECT_RECEIPT" ]]; then
+            cp "$APPLIED_PROJECT_RECEIPT" "$backup"
+          elif [[ -f "$LEGACY_COMPOSE_OVERRIDE" ]]; then
+            "$EDGE_DEPLOY_BIN" snapshot --base-file "$COMPOSE_FILE" \
+              --legacy-override "$LEGACY_COMPOSE_OVERRIDE" --receipt "$backup"
           else
-            # First override rollout: retain base web/docs and forward any
-            # missing bootstrap env while pinning Bahia to the safe image.
-            docker compose -f "$COMPOSE_FILE" config --format json |
-              python3 scripts/deploy_edge_compose_override.py \
-                --base-file "$COMPOSE_FILE" \
-                --override-file "$backup" \
-                --seed-only \
-                --rollback-backend-image "$SAFE_ROLLBACK_BAHIA_IMAGE"
+            "$EDGE_DEPLOY_BIN" snapshot --base-file "$COMPOSE_FILE" --receipt "$backup"
           fi
-          python3 scripts/edge_image_admission.py sanitize-rollback \
-            --repo . \
-            --source "$backup" \
-            --output "$rollback" \
-            --safe-bahia-image "$SAFE_ROLLBACK_BAHIA_IMAGE"
+          python3 scripts/edge_image_admission.py verify-image \
+            --repo . --image "$SAFE_ROLLBACK_BAHIA_IMAGE"
+          "$EDGE_DEPLOY_BIN" snapshot --source-receipt "$backup" \
+            --receipt "$rollback_receipt" --safe-backend-image "$SAFE_ROLLBACK_BAHIA_IMAGE"
 
           backend_id="$(docker image inspect --format '{{.Id}}' "local/bahia-controlplane-bahia:$tag")"
           web_id="$(docker image inspect --format '{{.Id}}' "local/bahia-controlplane-web:$tag")"
@@ -235,17 +225,10 @@ jobs:
           rollback() {
             status=$?
             if [[ "$rollback_armed" == "1" ]]; then
-              echo "Rollout health gate failed; restoring previous digest-pinned Compose override" >&2
-              if ! cp "$rollback" "$COMPOSE_OVERRIDE"; then
-                echo "::error::Rollback restore failed: Compose override backup copy" >&2
-                status=1
-              fi
-              if ! docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" config --quiet; then
-                echo "::error::Rollback restore failed: Compose config validation" >&2
-                status=1
-              fi
-              if ! docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" up -d --wait bahia web; then
-                echo "::error::Rollback restore failed: Bahia/web Compose restart" >&2
+              echo "Rollout health gate failed; re-applying previous typed Compose project" >&2
+              if ! "$EDGE_DEPLOY_BIN" rollback --receipt "$rollback_receipt" \
+                --current-receipt "$APPLIED_PROJECT_RECEIPT"; then
+                echo "::error::Rollback restore failed: typed Compose project apply" >&2
                 status=1
               fi
               if ! curl --retry 360 --retry-delay 5 --retry-all-errors --retry-connrefused -fsS "$ready_url" >/dev/null; then
@@ -271,16 +254,10 @@ jobs:
           }
           trap rollback EXIT
 
-          docker compose -f "$COMPOSE_FILE" config --format json |
-            python3 scripts/deploy_edge_compose_override.py \
-              --base-file "$COMPOSE_FILE" \
-              --override-file "$COMPOSE_OVERRIDE" \
-              --tag "$tag" \
-              --release-dir "$release_dir" \
-              --backend-image "$backend_image" \
-              --web-image "$web_image"
-          docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" config --quiet
-          docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" up -d --wait bahia web
+          "$EDGE_DEPLOY_BIN" apply --base-file "$COMPOSE_FILE" \
+            --receipt "$APPLIED_PROJECT_RECEIPT" \
+            --tag "$tag" --release-dir "$release_dir" \
+            --backend-image "$backend_image" --web-image "$web_image"
 
           # Tier-0 migration/bootstrap may take several minutes. If a relay-policy
           # head existed before rollout, reject its loss, regression, or hash change.
@@ -320,17 +297,17 @@ jobs:
           prune_dir() {
             local dir="$1" label="$2"
             [ -d "$dir" ] || return 0
-            # Never prune the release referenced by the live override.
+            # Never prune the release referenced by the applied receipt.
             local live=""
-            if [ -f "$COMPOSE_OVERRIDE" ]; then
-              live="$(grep -oE "${RELEASE_ROOT}/github-[0-9a-f]{7}" "$COMPOSE_OVERRIDE" | head -1 || true)"
+            if [ -f "$APPLIED_PROJECT_RECEIPT" ]; then
+              live="$(grep -oE "${RELEASE_ROOT}/github-[0-9a-f]{7}" "$APPLIED_PROJECT_RECEIPT" | head -1 || true)"
             fi
             local n=0
             while IFS= read -r entry; do
               n=$((n + 1))
               if (( n <= keep )); then continue; fi
               if [ -n "$live" ] && [ "$entry" = "$live" ]; then
-                echo "keeping $label $entry (referenced by live compose file)"
+                echo "keeping $label $entry (referenced by applied project receipt)"
                 continue
               fi
               echo "pruning $label $entry"

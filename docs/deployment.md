@@ -202,12 +202,11 @@ The workflow:
 2. validates the runner, Compose file, runtime bootstrap seed and image policy;
 3. builds SHA-tagged daemon and web images locally;
 4. stages the release tree under `/srv/data/bahia-controlplane/releases`;
-5. generates a digest-pinned Compose override through `scripts/deploy_edge_compose_override.py`, leaving the host base Compose file unchanged;
-6. applies the stack with `docker compose -f <base> -f <override> up -d --wait` under the relay-policy gate;
-7. verifies the daemon readiness URL;
-8. restores the saved, admission-sanitized override if the gated apply fails;
-9. prunes only release trees, backups and Bahia-tagged images outside the
-   configured retention windows.
+5. resolves the host base Compose file through compose-go, applies immutable image pins, the read-only release docs mount and missing web bootstrap values as typed project mutations;
+6. writes a private canonical JSON applied-project receipt and converges Bahia/web through the Compose v5 SDK with wait semantics;
+7. verifies daemon readiness, relay-policy continuity, relay HTTP and web HTTP;
+8. re-applies an admission-sanitized prior project receipt through the same SDK on failure;
+9. prunes only release trees, receipts and Bahia-tagged images outside the configured retention windows.
 
 The workflow never runs a blanket `docker image prune -a`. Operational detail
 and Hive-CI artifact publication are in

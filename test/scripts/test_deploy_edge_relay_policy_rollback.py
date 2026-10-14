@@ -16,23 +16,13 @@ class RelayPolicyRollbackTrapTests(unittest.TestCase):
     def run_trap(self, failure: str, original_status: int = 0) -> subprocess.CompletedProcess[str]:
         script = """set -euo pipefail
 rollback_armed=1
-rollback=/tmp/rollback.yml
-COMPOSE_FILE=/tmp/compose.yml
-COMPOSE_OVERRIDE=/tmp/compose-override.yml
+rollback_receipt=/tmp/rollback.json
+APPLIED_PROJECT_RECEIPT=/tmp/applied.json
+EDGE_DEPLOY_BIN=/tmp/bahia-deploy-edge
 ready_url=http://edge.example:8080/ready
 EDGE_HEALTH_HOST=edge.example
 baseline=/tmp/baseline.json
-cp() {
-  [[ "$2" == "$COMPOSE_OVERRIDE" ]] && [[ "$FAIL" != copy ]]
-}
-docker() {
-  [[ "$*" == *"-f $COMPOSE_FILE -f $COMPOSE_OVERRIDE"* ]] || return 1
-  case " $* " in
-    *" config "*) [[ "$FAIL" != compose-config ]];;
-    *" up "*) [[ "$FAIL" != compose-up ]];;
-    *) return 1;;
-  esac
-}
+/tmp/bahia-deploy-edge() { [[ "$FAIL" != sdk-apply ]]; }
 curl() {
   case "$*" in
     *:8080/ready*) [[ "$FAIL" != readiness ]];;
@@ -50,29 +40,27 @@ python3() { [[ "$FAIL" != policy-gate ]]; }
 
     def test_each_failed_rollback_check_is_loud_and_nonzero(self):
         checks = {
-            "copy": "Compose override backup copy",
-            "compose-config": "Compose config validation",
-            "compose-up": "Compose restart",
+            "sdk-apply": "typed Compose project apply",
             "readiness": "Bahia readiness",
             "policy-gate": "relay-policy invariant",
             "relay": "relay HTTP endpoint",
             "web": "web HTTP endpoint",
         }
         self.assertNotIn("|| true", rollback_function())
-        self.assertIn('docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" up -d --wait', rollback_function())
+        self.assertIn('"$EDGE_DEPLOY_BIN" rollback --receipt "$rollback_receipt"', rollback_function())
         for failure, message in checks.items():
             with self.subTest(failure=failure):
                 result = self.run_trap(failure)
                 self.assertNotEqual(result.returncode, 0, result.stderr)
                 self.assertIn(message, result.stderr)
 
-    def test_deploy_never_writes_the_base_compose_file(self):
+    def test_deploy_never_writes_base_or_uses_compose_cli(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertNotIn('cp "$rollback" "$COMPOSE_FILE"', workflow)
-        self.assertNotIn('cp "$COMPOSE_FILE" "$backup"', workflow)
-        self.assertIn('cp "$COMPOSE_OVERRIDE" "$backup"', workflow)
-        self.assertIn('--override-file "$COMPOSE_OVERRIDE"', workflow)
-        self.assertIn('docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" up -d --wait', workflow)
+        self.assertNotIn("docker compose -f", workflow)
+        self.assertIn('"$EDGE_DEPLOY_BIN" apply --base-file "$COMPOSE_FILE"', workflow)
+        self.assertIn('"$EDGE_DEPLOY_BIN" snapshot --source-receipt "$backup"', workflow)
+        self.assertIn('"$EDGE_DEPLOY_BIN" rollback --receipt "$rollback_receipt"', workflow)
 
     def test_successful_rollback_preserves_original_rollout_failure(self):
         result = self.run_trap("none", original_status=23)
