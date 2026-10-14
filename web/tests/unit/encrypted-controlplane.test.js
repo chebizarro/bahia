@@ -352,6 +352,21 @@ describe('encrypted controlplane transport', () => {
     expect(client.publish).not.toHaveBeenCalled();
   });
 
+  it('honors a relay-declared limit larger than the local fallback before publishing', async () => {
+    global.fetch.mockResolvedValue({ ok: true, json: async () => ({ limitation: { max_message_length: 700000, max_content_length: 100000 } }) });
+    client.getConnectedRelays.mockReturnValue(['wss://large.example']);
+    const transport = new module.EncryptedControlplaneTransport({ client, relays: ['wss://large.example'], servicePubkey: SERVICE_PUBKEY });
+    const { relayMessageBytes } = await import('../../src/lib/nostr/encrypted-controlplane-utils.js');
+    const base = { id: 'e'.repeat(64), pubkey: 'a'.repeat(64), sig: 'f'.repeat(128), kind: module.CONTEXTVM_MESSAGE_KIND, created_at: 1, tags: [], content: '' };
+    const event = { ...base, content: 'x'.repeat(600000 - relayMessageBytes(base)) };
+    expect(relayMessageBytes(event)).toBe(600000);
+    await expect(transport.publishEncryptedRequest(event)).resolves.toMatchObject({ requestEventId: event.id });
+    expect(client.publish).toHaveBeenCalledWith(event);
+    const wrapped = await transport.buildEncryptedRequestEvent({ operation: 'secrets.set', payload: { value: 'x'.repeat(45000) } });
+    expect(wrapped.content.length).toBeGreaterThan(65535);
+    expect(wrapped.kind).toBe(module.CONTEXTVM_GIFT_WRAP_KIND);
+  });
+
   it('connects without waiting for a stalled NIP-11 fetch', async () => {
     global.fetch.mockImplementation(() => new Promise(() => {}));
     client.getConnectedRelays.mockReturnValue(['wss://stalled.example']);

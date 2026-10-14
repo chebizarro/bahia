@@ -21,6 +21,15 @@ describe('NIP-11 relay limits', () => {
     expect(inlineSBOMLimitBytes(limitsFromMetadata(null))).toBe(360 * 1024);
   });
 
+  it('uses a larger declared limit, but the conservative fallback for an unknown relay in a mixed set', async () => {
+    const resolver = createRelayLimitResolver(async relay => relay.includes('large')
+      ? { metadata: { limitation: { max_message_length: 700000, max_content_length: 100000 } } }
+      : { metadata: null });
+    expect(await resolver.resolve(['wss://large.example.test'])).toEqual({ maxMessageBytes: 700000, maxContentBytes: 100000 });
+    expect(await resolver.resolve(['wss://large.example.test', 'wss://unknown.example.test']))
+      .toEqual({ maxMessageBytes: 512000, maxContentBytes: 65535 });
+  });
+
   it('uses fallback limits when fetch fails or returns malformed JSON', async () => {
     const failed = createRelayLimitResolver(relay => fetchRelayMetadata(relay, vi.fn().mockRejectedValue(new Error('offline'))));
     expect(await failed.resolve(['ws://offline.example.test'])).toEqual({ maxMessageBytes: 512000, maxContentBytes: 65535 });

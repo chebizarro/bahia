@@ -72,6 +72,12 @@ from decrypted membership records (see [confidential state](confidential-state.m
 they gate mutation affordances, not rendering. An unauthenticated or
 non-member user sees relay-public state.
 
+ContextVM publishing reads each connected relay's cached NIP-11
+`limitation.max_message_length` and `max_content_length` before choosing a
+gift-wrap kind or sending an EVENT frame. Missing or invalid limits use the
+conservative local defaults; a valid larger limit is honored instead of being
+silently capped by those defaults.
+
 ## Derived views
 
 Each collection is a derived query over the store, routed by the `t` topic tag
