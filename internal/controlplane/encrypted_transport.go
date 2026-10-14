@@ -71,7 +71,9 @@ const (
 	// 40,960 bytes to 49,152 or more, whose base64 exceeds it, so a stored
 	// 1059 wrap of such a message would be refused. Those travel as ephemeral
 	// 21059 wraps instead: relayed live to the waiting peer, never stored.
-	maxStoredGiftWrapContentBytes = 65535
+	maxStoredGiftWrapContentBytes      = 65535
+	maxNIP44PlaintextBytes             = 65535
+	ContextVMResponseTooLargeErrorCode = -32013
 )
 
 // EncryptedRequestSubscriber is the relay subscription contract used by the
@@ -1081,6 +1083,13 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, o
 	if err != nil {
 		return nil, fmt.Errorf("marshal ContextVM inner response event: %w", err)
 	}
+	if !nip44PlaintextFits(innerJSON) {
+		if rpc, ok := payload.(ContextVMJSONRPCResponse); ok && rpc.Error == nil {
+			return t.wrapContextVMResponse(ctx, outer, request, cascontextvm.NewErrorResponse(rpc.ID, ContextVMResponseTooLargeErrorCode,
+				"ContextVM response item exceeds the 65535-byte NIP-44 plaintext limit; request a smaller page or use a Blossom reference"))
+		}
+		return nil, fmt.Errorf("ContextVM response exceeds the 65535-byte NIP-44 plaintext limit; request a smaller page or use a Blossom reference")
+	}
 	wrapperPrivateKey := nostr.Generate()
 	wrapperPubkey := wrapperPrivateKey.Public()
 	conversationKey, err := nip44.GenerateConversationKey(request.PubKey, wrapperPrivateKey)
@@ -1101,6 +1110,10 @@ func (t *EncryptedRequestTransport) wrapContextVMResponse(ctx context.Context, o
 		return nil, fmt.Errorf("sign ContextVM gift wrap response: %w", err)
 	}
 	return wrapped, nil
+}
+
+func nip44PlaintextFits(plaintext []byte) bool {
+	return len(plaintext) <= maxNIP44PlaintextBytes
 }
 
 func contextVMIdempotencyKey(params json.RawMessage) (string, error) {

@@ -375,6 +375,45 @@ func TestEncryptedRouteHandlers_GetRunLogsSuccessAndInProgressError(t *testing.T
 	}
 }
 
+func TestRunLogPagesPreserveBytesAndRejectInvalidCursor(t *testing.T) {
+	stdout := strings.Repeat("α\n", 6000)
+	stderr := strings.Repeat("\u0001", 9000)
+	logs := &adapterruntime.RunLogs{RunID: uuid.New(), Stdout: stdout, Stderr: stderr}
+	var gotOut, gotErr, cursor string
+	for {
+		page, err := pageRunLogs(logs, "merged", cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(page)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(body) > 60000 {
+			t.Fatalf("page JSON too large: %d", len(body))
+		}
+		part := page["logs"].(*adapterruntime.RunLogs)
+		gotOut += part.Stdout
+		gotErr += part.Stderr
+		next, ok := page["next_cursor"].(string)
+		if !ok {
+			break
+		}
+		if next == cursor {
+			t.Fatal("page cursor did not advance")
+		}
+		cursor = next
+	}
+	if gotOut != stdout || gotErr != stderr {
+		t.Fatal("paginated logs did not reassemble")
+	}
+	for _, cursor := range []string{"-1", "oops", "999999999", "1"} {
+		if _, err := pageRunLogs(logs, "merged", cursor); err == nil {
+			t.Fatalf("accepted invalid cursor %q", cursor)
+		}
+	}
+}
+
 // runLogSecrets is a store-backed secret (canonical record revision 1), its
 // record and the resolver run-log redaction uses.
 func runLogSecrets(serviceID, secretID uuid.UUID, value string, updatedAt time.Time) (*memCanonicalSecrets, *resolvingSecretStore, *secretstore.Resolver) {

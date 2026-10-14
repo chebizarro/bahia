@@ -25,7 +25,7 @@ function unwrapEncryptedResult(response, fallback = {}) {
   if (envelope?.status === 'error') {
     throw new Error(envelope?.error?.message || 'Encrypted deployment run log request failed');
   }
-  return envelope?.payload ?? fallback;
+  return envelope?.payload ?? envelope ?? fallback;
 }
 
 function setRunState(mapName, runId, value) {
@@ -43,13 +43,23 @@ export async function loadDeploymentRunLogs(runId, { tail = 100, stream = 'merge
   setRunState('errorByRun', id, null);
   try {
     await ensureEncryptedRunLogRequests();
-    const response = await requestEncryptedResult({
-      operation: DEPLOYMENT_RUN_LOG_ENCRYPTED_OPERATIONS.get,
-      payload: { run_id: id, tail: Number(tail) || 100, stream },
-      tags: [['domain', 'deployment-run-logs']]
-    });
-    const payload = unwrapEncryptedResult(response);
-    const logs = payload?.logs ?? payload;
+    let cursor = null;
+    let logs = null;
+    do {
+      const response = await requestEncryptedResult({
+        operation: DEPLOYMENT_RUN_LOG_ENCRYPTED_OPERATIONS.get,
+        payload: { run_id: id, tail: Number(tail) || 100, stream, ...(cursor ? { cursor } : {}) },
+        tags: [['domain', 'deployment-run-logs']]
+      });
+      const payload = unwrapEncryptedResult(response);
+      const page = payload?.logs ?? payload;
+      logs = logs ? { ...logs, stdout: (logs.stdout || '') + (page?.stdout || ''), stderr: (logs.stderr || '') + (page?.stderr || '') } : page;
+      const next = payload?.next_cursor;
+      if (next != null && (!/^\d+$/.test(String(next)) || Number(next) <= Number(cursor || 0))) {
+        throw new Error('Encrypted run-log reply has an invalid page cursor');
+      }
+      cursor = next == null ? null : String(next);
+    } while (cursor);
     setRunState('logsByRun', id, logs || null);
     return logs || null;
   } catch (error) {
