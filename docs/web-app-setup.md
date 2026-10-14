@@ -43,10 +43,11 @@ also proxies `/relay` to the sidecar (`web/nginx.conf`).
 
 The image contains no relay URLs or trust roots. At container start
 `docker-entrypoint.d/40-bahia-bootstrap-env.sh` validates the runtime
-environment and writes `/bahia-bootstrap.js`
-(`window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1", relay_urls,
-service_pubkeys, widget_pubkeys}`), served with `no-store` and loaded before
-the app. Startup fails if a value is missing or malformed, so a bad restart
+environment and renders `/bahia-bootstrap.js` with an explicit `envsubst`
+allowlist into a same-directory temporary file, then atomically renames
+that file. The result (`window.__BAHIA_BOOTSTRAP__ =
+{schema:"bahia.bootstrap.v1", relay_urls, service_pubkeys, widget_pubkeys}`)
+is served with `no-store` and loaded before the app. Startup fails if a value is missing or malformed, so a bad restart
 never leaves a partial seed. Rotating a trust root is a container restart,
 not a rebuild.
 

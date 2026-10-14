@@ -34,6 +34,9 @@ LABEL org.opencontainers.image.source="https://github.com/openagentsinc/bahia" \
       org.opencontainers.image.revision="${PUBLIC_BAHIA_GIT_COMMIT}" \
       org.opencontainers.image.version="${PUBLIC_BAHIA_WEB_VERSION}"
 
+# Runtime bootstrap seed is rendered with an explicit envsubst allowlist.
+RUN apk add --no-cache gettext-envsubst
+
 # Copy built static files
 COPY --from=builder /app/build /usr/share/nginx/html
 

@@ -19,6 +19,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install web entrypoint test dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gettext-base
       - run: go build ./...
       - run: go vet ./...
       - name: Architecture ratchet gates
@@ -35,4 +37,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Install web entrypoint test dependency
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gettext-base
       - run: make race

@@ -55,9 +55,10 @@ stack.
 ### Apply and verify
 
 The workflow builds local SHA-tagged daemon and web images, stages the exact
-source/docs tree, saves the host Compose file, updates it with
-`scripts/deploy_edge_compose_update.py`, and applies the stack. It then waits
-for readiness:
+source/docs tree, saves the prior Compose override, generates a new override
+with `scripts/deploy_edge_compose_override.py`, and applies the static host
+base plus override with `up -d --wait`. The host base is never edited.
+The workflow then verifies readiness:
 
 ```bash
 curl -fsS http://172.17.0.1:8080/ready
@@ -66,8 +67,8 @@ curl -fsS http://172.17.0.1:8080/ready
 After a successful run, verify:
 
 ```bash
-ssh edge-01 'docker compose -f /srv/data/bahia-controlplane/docker-compose.yml ps'
-ssh edge-01 'docker compose -f /srv/data/bahia-controlplane/docker-compose.yml images'
+ssh edge-01 'docker compose -f /srv/data/bahia-controlplane/docker-compose.yml -f /srv/data/bahia-controlplane/docker-compose.deploy-override.yml ps'
+ssh edge-01 'docker compose -f /srv/data/bahia-controlplane/docker-compose.yml -f /srv/data/bahia-controlplane/docker-compose.deploy-override.yml images'
 curl -fsS https://bahia.sharegap.net/health
 curl -fsS https://bahia.sharegap.net/ready
 curl -fsS -H 'Accept: application/nostr+json' https://bahia.sharegap.net/relay
