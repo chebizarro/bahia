@@ -45,9 +45,10 @@ func TestLegacyCutoverCensusEmptyIsEligibleButDoesNotAssertMigration(t *testing.
 		require.False(t, names[count.Table], "duplicate table %s", count.Table)
 		names[count.Table] = true
 	}
-	for _, table := range []string{"dns_zones", "ml_models", "adopted_runtime_identity", "org_ownership_repair", "hiveci_pipeline_policies", "security_scan_targets", "security_observable_publications", "deployment_policies", "hiveci_initiations", "managed_instance_health"} {
+	for _, table := range []string{"dns_zones", "ml_models", "adopted_runtime_identity", "org_ownership_repair", "hiveci_pipeline_policies", "security_scan_targets", "security_observable_publications", "deployment_policies", "managed_instance_health"} {
 		require.True(t, names[table], "missing family table %s", table)
 	}
+	require.False(t, names["hiveci_initiations"], "retired table must not be counted")
 	require.False(t, names["security_osv_vulnerability_cache"], "fetched OSV reference cache is not a cutover source")
 }
 

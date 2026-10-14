@@ -68,7 +68,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	// TestSecurityRetireFailedRetryableMigrationRoundTrip and
 	// TestNostrPublishTargetMigrationRoundTrip; roll them back so 000070's
 	// guard is the latest below.
-	for _, expected := range []string{"000088_ownership_attribution", "000087_route_canary_observation_sequence", "000086_hiveci_policy_index_archive", "000085_relay_policy_signed_event", "000084_runtime_observation_retention", "000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
+	for _, expected := range []string{"000089_drop_hiveci_initiations", "000088_ownership_attribution", "000087_route_canary_observation_sequence", "000086_hiveci_policy_index_archive", "000085_relay_policy_signed_event", "000084_runtime_observation_retention", "000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys"} {
 		rolled, downErr := Down(ctx, pool, logger, DownOptions{Confirm: true})
 		require.NoError(t, downErr)
 		require.Equal(t, []string{expected}, rolled)
@@ -141,7 +141,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 		WHERE table_schema=current_schema() AND table_name='ml_model_versions' AND column_name='updated_at')`).Scan(&columnExists))
 	require.True(t, columnExists)
 	require.NoError(t, pool.QueryRow(ctx, "SELECT to_regclass('hiveci_initiations') IS NOT NULL").Scan(&exists))
-	require.True(t, exists)
+	require.False(t, exists, "head migration retires the table")
 	require.NoError(t, pool.QueryRow(ctx, "SELECT count(*) FROM schema_migrations WHERE version = $1", rolled[0]).Scan(&count))
 	require.Equal(t, 1, count)
 
@@ -149,7 +149,7 @@ func TestMigrationDownGuardedRoundTrips(t *testing.T) {
 	rolled, err = Down(ctx, pool, logger, DownOptions{Confirm: true, To: "000065_runtime_release_deployment_intents"})
 	require.NoError(t, err)
 	require.Equal(t, []string{
-		"000088_ownership_attribution", "000087_route_canary_observation_sequence", "000086_hiveci_policy_index_archive", "000085_relay_policy_signed_event", "000084_runtime_observation_retention", "000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys",
+		"000089_drop_hiveci_initiations", "000088_ownership_attribution", "000087_route_canary_observation_sequence", "000086_hiveci_policy_index_archive", "000085_relay_policy_signed_event", "000084_runtime_observation_retention", "000083_drop_service_secret_data_keys", "000082_secret_access_audit_store_backed", "000081_f74a_confirmed_deletion_seam", "000080_service_secret_data_keys",
 		"000079_f74a_hot_observation_immutable", "000078_f74a_backdated_successor", "000077_f74a_unit_tombstones", "000076_f74a_observation_archive", "000075_org_strict_revocation",
 		"000074_ml_model_version_revision",
 		"000073_sbom_pending_publication", "000072_security_retire_failed_retryable",

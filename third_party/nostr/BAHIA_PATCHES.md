@@ -365,34 +365,44 @@ was dropped, causing the count to time out.
   before the store. `countInternal` sets `opts.isCount = true` instead of
   assigning `sub.countResult` after `PrepareSubscription`.
 
-No dedicated test: the existing `TestCountAfterTeardownIsDropped` covers the
-post-teardown path, and `TestCount` (upstream, needs a public relay) covers the
-happy path. The race window is eliminated by construction.
+Test: `subscription_count_publication_test.go`
+(`TestCountResultReadyWhenSubscriptionPublished`, run with `-race`) observes
+published subscriptions concurrently with COUNT delivery and requires the
+result channel to be ready before publication. `TestCountAfterTeardownIsDropped`
+covers the post-teardown path.
 
-## khatru: listener-before-query (NOT APPLIED — bahia-irsry.26)
+## khatru: CLOSE during a stored query (bahia-irsry.26)
 
-Khatru registers a REQ's live listener AFTER its stored query, leaving a gap
-where a client CLOSE finds nothing to remove and the listener lingers until
-disconnect. The natural upstream fix is to register the listener before the
-stored query, which this wave prototyped and tested.
+Khatru registers a REQ's live listener after its stored query. A client CLOSE
+while the first filter's query is running previously found no listener to
+remove; when the query returned, khatru attached a listener until disconnect.
 
-**Not applied to Bahia's vendored copy**: the relay sidecar's `pendingListener`
-mechanism deduplicates events delivered by both the stored query and the live
-listener, and it assumes the original ordering (listener after query). Changing
-khatru to listener-before-query causes duplicates (the stored query returns
-an event, and the now-active live listener delivers it again during the query).
-Adapting the sidecar would require a per-subscription stored-ID set with
-cross-goroutine synchronization, which is complex and error-prone.
+- `khatru/listener.go`, `relay.go`, `handlers.go`: register an in-flight REQ
+  context by connection and subscription id before querying. CLOSE and a
+  replacement REQ cancel the old context under `clientsMutex`; listener
+  registration checks that context under the same lock. Completion removes
+  only its own pending entry, so a late old query cannot clear a reused id.
+  Disconnect removes pending entries too. The websocket reader sequences the
+  short REQ/CLOSE registration step in wire order before starting each frame's
+  asynchronous work; otherwise a previous CLOSE could cancel a subsequent
+  REQ under the same id when handler goroutines were scheduled out of order.
+- Stored query still precedes listener registration. The sidecar's
+  `pendingListener` buffering and stored-ID deduplication therefore remain
+  valid; listener-before-query would cause duplicate delivery there. Because
+  a canceled request now skips `OnListenerAdded`, the sidecar clears its
+  pending buffer on context cancellation, matching the original request
+  context so a reused id is untouched.
 
-The sidecar already handles both issues:
-- **Gap closing**: `beginRequest` / `trackStored` / `listenerAdded` buffer and
-  deduplicate events that match during the gap.
-- **CLOSE during query**: `listenerAdded` checks `pending.ctx.Err()` and
-  schedules removal if the REQ was already canceled.
-
-An upstream patch for listener-before-query is prepared in
-`third_party/nostr/upstream-patches/` for submission when the sidecar's
-dedup can be simplified, or when upstream adopts it.
+Tests: `khatru/close_during_query_bahia_test.go`.
+`TestCloseDuringFirstStoredQueryRemovesRequest` sends a real CLOSE while the
+first of two stored filters is blocked, verifies cancellation, then checks
+that no listener remains on the still-open connection.
+`TestCloseThenReqSameIDKeepsReplacement` exercises wire-ordered reuse. The sidecar's
+`TestSidecarLongAndEmptyTagFiltersOverWebsocket` exercises rapid CLOSE/REQ
+reuse of one subscription id. The older
+`upstream-patches/` listener-before-query prototype is not this patch and
+must not be submitted as the Bahia fix. Upstream submission remains operator
+work.
 
 ## NIP-42 AUTH state (bahia-irsry.10.2) — verified
 

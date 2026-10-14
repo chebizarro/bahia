@@ -24,6 +24,32 @@ type listenerSpec struct {
 	cancel context.CancelCauseFunc
 }
 
+type pendingRequest struct {
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+}
+
+func (rl *Relay) startRequest(ws *WebSocket, id string, ctx context.Context, cancel context.CancelCauseFunc) {
+	rl.clientsMutex.Lock()
+	defer rl.clientsMutex.Unlock()
+	if _, connected := rl.clients[ws]; !connected {
+		cancel(ErrSubscriptionClosedByClient)
+		return
+	}
+	if rl.pendingRequests[ws] == nil {
+		rl.pendingRequests[ws] = make(map[string]pendingRequest)
+	}
+	rl.pendingRequests[ws][id] = pendingRequest{ctx, cancel}
+}
+
+func (rl *Relay) finishRequest(ws *WebSocket, id string, ctx context.Context) {
+	rl.clientsMutex.Lock()
+	defer rl.clientsMutex.Unlock()
+	if pending, ok := rl.pendingRequests[ws][id]; ok && pending.ctx == ctx {
+		delete(rl.pendingRequests[ws], id)
+	}
+}
+
 type listener struct {
 	id     string // duplicated here so we can easily send it on notifyListeners
 	filter nostr.Filter
@@ -317,10 +343,25 @@ func (rl *Relay) addListener(
 	filter nostr.Filter,
 	cancel context.CancelCauseFunc,
 ) {
+	rl.addRequestListener(nil, ws, id, filter, cancel)
+}
+
+// addRequestListener checks request cancellation under the same lock that CLOSE
+// uses, so a CLOSE during a stored query cannot be followed by a new listener.
+func (rl *Relay) addRequestListener(
+	ctx context.Context,
+	ws *WebSocket,
+	id string,
+	filter nostr.Filter,
+	cancel context.CancelCauseFunc,
+) {
 	select {
 	case <-rl.clientsMutex.C():
 		defer rl.clientsMutex.Unlock()
 	case <-ws.Context.Done():
+		return
+	}
+	if ctx != nil && ctx.Err() != nil {
 		return
 	}
 
@@ -347,6 +388,10 @@ func (rl *Relay) addListener(
 func (rl *Relay) removeListenerId(ws *WebSocket, id string) {
 	rl.clientsMutex.Lock()
 	defer rl.clientsMutex.Unlock()
+	if pending, ok := rl.pendingRequests[ws][id]; ok {
+		pending.cancel(ErrSubscriptionClosedByClient)
+		delete(rl.pendingRequests[ws], id)
+	}
 
 	if specs, ok := rl.clients[ws]; ok {
 		kept := specs[:0]
@@ -418,6 +463,7 @@ func (rl *Relay) removeClientAndListeners(ws *WebSocket) {
 		}
 	}
 	delete(rl.clients, ws)
+	delete(rl.pendingRequests, ws)
 }
 
 // returns how many listeners were notified

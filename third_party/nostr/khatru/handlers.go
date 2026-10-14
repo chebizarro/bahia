@@ -142,6 +142,8 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 			rl.OnConnect(ctx)
 		}
 
+		ordered := make(chan struct{})
+		close(ordered)
 		for {
 			typ, msgb, err := ws.conn.ReadMessage()
 			if err != nil {
@@ -166,18 +168,34 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 
 			// this is safe because ReadMessage() will always create a new slice
 			message := unsafe.String(unsafe.SliceData(msgb), len(msgb))
+			next := make(chan struct{})
 
-			go func(message string) {
+			go func(message string, previous <-chan struct{}, ready chan<- struct{}) {
+				<-previous
 				envelope, err := nostr.ParseMessage(message)
 				if err != nil {
 					if err == nostr.UnknownLabel && rl.Negentropy {
 						envelope = nip77.ParseNegMessage(message)
 					}
 					if envelope == nil {
+						close(ready)
 						ws.WriteJSON(nostr.NoticeEnvelope("failed to parse envelope: " + err.Error()))
 						return
 					}
 				}
+
+				var reqCtx context.Context
+				var cancelReqCtx context.CancelCauseFunc
+				switch env := envelope.(type) {
+				case *nostr.ReqEnvelope:
+					rl.removeListenerId(ws, env.SubscriptionID)
+					reqCtx, cancelReqCtx = context.WithCancelCause(ctx)
+					reqCtx = context.WithValue(reqCtx, subscriptionIdKey, env.SubscriptionID)
+					rl.startRequest(ws, env.SubscriptionID, reqCtx, cancelReqCtx)
+				case *nostr.CloseEnvelope:
+					rl.removeListenerId(ws, string(*env))
+				}
+				close(ready)
 
 				switch env := envelope.(type) {
 				case *nostr.EventEnvelope:
@@ -313,13 +331,7 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 					ws.WriteJSON(resp)
 
 				case *nostr.ReqEnvelope:
-					rl.removeListenerId(ws, env.SubscriptionID)
-
-					// a context just for the "stored events" request handler
-					reqCtx, cancelReqCtx := context.WithCancelCause(ctx)
-
-					// expose subscription id in the context
-					reqCtx = context.WithValue(reqCtx, subscriptionIdKey, env.SubscriptionID)
+					defer rl.finishRequest(ws, env.SubscriptionID, reqCtx)
 
 					// handle each filter separately -- dispatching events as they're loaded from databases
 					for _, filter := range env.Filters {
@@ -337,14 +349,13 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 							// a query that is just a bunch of "ids": [...] will not add listeners.
 							// is this a bug? maybe, but I don't think anyone is listening for an ID
 							// that hasn't been published yet anywhere -- if yes we can change later
-							rl.addListener(ws, env.SubscriptionID, filter, cancelReqCtx)
+							rl.addRequestListener(reqCtx, ws, env.SubscriptionID, filter, cancelReqCtx)
 						}
 					}
 
 					ws.WriteJSON(nostr.EOSEEnvelope{SubscriptionID: env.SubscriptionID})
 				case *nostr.CloseEnvelope:
-					id := string(*env)
-					rl.removeListenerId(ws, id)
+					return
 				case *nostr.AuthEnvelope:
 					wsBaseUrl := strings.Replace(rl.getBaseURL(r), "http", "ws", 1)
 					if pubkey, err := nip42.ValidateAuthEvent(env.Event, ws.Challenge, wsBaseUrl); err == nil {
@@ -439,7 +450,8 @@ func (rl *Relay) HandleWebsocket(w http.ResponseWriter, r *http.Request) {
 				case *nip77.CloseEnvelope:
 					ws.negentropySessions.Delete(env.SubscriptionID)
 				}
-			}(message)
+			}(message, ordered, next)
+			ordered = next
 		}
 	}()
 

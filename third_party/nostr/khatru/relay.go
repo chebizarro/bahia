@@ -42,8 +42,9 @@ func NewRelay() *Relay {
 			CheckOrigin:     func(r *http.Request) bool { return true },
 		},
 
-		clients:      make(map[*WebSocket][]listenerSpec, 100),
-		clientsMutex: channelmutex.New(),
+		clients:         make(map[*WebSocket][]listenerSpec, 100),
+		pendingRequests: make(map[*WebSocket]map[string]pendingRequest),
+		clientsMutex:    channelmutex.New(),
 
 		dispatcher: newDispatcher(),
 
@@ -110,9 +111,10 @@ type Relay struct {
 
 	// keep a connection reference to all connected clients for Server.Shutdown
 	// also used for keeping track of who is listening to what
-	clients      map[*WebSocket][]listenerSpec
-	dispatcher   dispatcher
-	clientsMutex *channelmutex.Mutex
+	clients         map[*WebSocket][]listenerSpec
+	pendingRequests map[*WebSocket]map[string]pendingRequest
+	dispatcher      dispatcher
+	clientsMutex    *channelmutex.Mutex
 
 	// set this to true to support negentropy
 	Negentropy bool
