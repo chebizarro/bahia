@@ -31,7 +31,6 @@ var legacyFamilies = []legacyFamily{
 	{"hive-ci", []string{"hiveci_workflow_runs", "hiveci_workflow_results", "hiveci_pipeline_policies", "hiveci_accepted_releases", "hiveci_release_conflicts"}},
 	{"security", []string{"security_scan_targets", "security_scan_runs", "security_target_latest", "security_findings", "security_scan_schedules", "security_policy_breaches", "security_observable_publications"}},
 	{"policy", []string{"deployment_policies"}},
-	{"initiation", []string{"hiveci_initiations"}},
 	{"managed-instance", []string{"managed_instance_health", "managed_instance_health_events", "managed_instance_recovery_attempts", "managed_instance_overrides"}},
 }
 
