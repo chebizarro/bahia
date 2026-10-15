@@ -5,6 +5,10 @@ test('signed-in protected read denial is visible and clears after recovery', asy
   await installE2EMocks(page);
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Dashboard/ })).toBeVisible();
+  await expect.poll(() => page.evaluate(async () => {
+    const { controlplaneConnection } = await import('/src/lib/stores/controlplane.svelte.js');
+    return controlplaneConnection.bootstrapComplete && controlplaneConnection.protectedReadsReady;
+  })).toBe(true);
 
   await page.evaluate(async () => {
     const { authState } = await import('/src/lib/stores/auth.svelte.js');

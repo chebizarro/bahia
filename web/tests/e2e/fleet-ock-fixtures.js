@@ -14,7 +14,8 @@ import { base64Encode, CONFIDENTIAL_ALGORITHM, CONFIDENTIAL_SCHEMA } from '../..
 import {
   OPERATOR_ALLOWLIST_CATALOG_KIND,
   OPERATOR_ALLOWLIST_D_PREFIX,
-  OPERATOR_ALLOWLIST_TOPIC
+  OPERATOR_ALLOWLIST_TOPIC,
+  SECURITY_ATTRIBUTION_RECORD
 } from '../../src/lib/nostr/kinds.gen.js';
 import { confidentialCpStateFixture } from './cp-state-fixtures.js';
 import { E2E_SERVICE_PUBKEY, TEST_PUBKEY } from './e2e-keyring.js';
@@ -79,4 +80,17 @@ export function operatorAllowlistFixture({ scope, pubkeys = [], key = fleetOCKFi
     payload: normalized.length ? { scope, pubkeys: normalized, updated_at: updatedAt } : {},
     key, nonceByte, createdAt, pubkey, deleted: normalized.length === 0
   });
+}
+
+/** Service-signed visibility edge encrypted with the fleet OCK. */
+export function securityAttributionFixture({ subjectType, subjectDigest, key = fleetOCKFixtureKey(), createdAt, nonceByte = 11 } = {}) {
+  const orgID = key.orgID;
+  const fixture = fleetOCKConfidentialCpStateFixture({
+    topic: 'security-attribution', legacyKind: SECURITY_ATTRIBUTION_RECORD,
+    d: `security:attribution:${orgID}:${subjectType}:${subjectDigest}`,
+    payload: { org_id: orgID, subject_type: subjectType, subject_digest: subjectDigest, visible: true },
+    key, createdAt, nonceByte
+  });
+  fixture.tags.push(['org', orgID], ['subject_type', subjectType], ['subject_digest', subjectDigest]);
+  return fixture;
 }

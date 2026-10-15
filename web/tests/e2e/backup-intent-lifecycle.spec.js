@@ -1,5 +1,26 @@
 import { test, expect } from '@playwright/test';
-import { E2E_SERVICE_PUBKEY, installE2EMocks } from './helpers.js';
+import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, installE2EMocks } from './helpers.js';
+import { buildDaemonIntentStatus } from './intent-helpers.js';
+import { intentStatusMatches } from '../../src/lib/nostr/intent-envelope.js';
+
+test('backup-run refusals use only a private request-correlated status coordinate', () => {
+  const intent = { id: 'backup-run-request', kind: 30900, pubkey: TEST_PUBKEY, created_at: 1,
+    tags: [['d', 'backup-run:repository-one'], ['domain', 'backup'], ['intent_id', 'run-intent-one']] };
+  const request = { domain: 'backup', coordinate: 'backup-run:repository-one', intentId: 'run-intent-one', eventId: intent.id };
+  for (const status of ['rejected', 'conflict']) {
+    const outcome = buildDaemonIntentStatus(intent, { servicePubkey: E2E_SERVICE_PUBKEY, status, reason: 'access_denied' });
+    expect(outcome.tags).toContainEqual(['d', `intent-status:${TEST_PUBKEY}:backup:run-intent-one`]);
+    expect(JSON.parse(outcome.content)).not.toHaveProperty('coordinate');
+    expect(intentStatusMatches(outcome, TEST_PUBKEY, request)).toBe(true);
+    const publicRefusal = { ...outcome, tags: outcome.tags.map(tag => tag[0] === 'd'
+      ? ['d', `intent-status:${TEST_PUBKEY}:backup-run:repository-one`] : tag) };
+    expect(intentStatusMatches(publicRefusal, TEST_PUBKEY, request)).toBe(false);
+  }
+  const accepted = buildDaemonIntentStatus(intent, { servicePubkey: E2E_SERVICE_PUBKEY });
+  expect(accepted.tags).toContainEqual(['d', `intent-status:${TEST_PUBKEY}:backup-run:repository-one`]);
+  expect(JSON.parse(accepted.content).coordinate).toBe(request.coordinate);
+  expect(intentStatusMatches(accepted, TEST_PUBKEY, request)).toBe(true);
+});
 
 test('backup repository intent stays pending until a scoped 30315 acceptance', async ({ page }) => {
   await installE2EMocks(page, { authenticated: true, extension: true, systemInfo: {
@@ -24,6 +45,7 @@ test('backup repository intent stays pending until a scoped 30315 acceptance', a
   });
 
   await page.getByRole('button', { name: 'Register repository' }).first().click();
+  await page.getByPlaceholder('Owning organization UUID').fill('f1e7f1e7-f1e7-51e7-a11e-f1e7f1e7f1e7');
   await page.getByPlaceholder('primary-kopia').fill('archive');
   await page.getByPlaceholder('kopia://primary').fill('kopia://archive');
   await page.locator('.mutation-panel form').getByRole('button', { name: 'Register repository' }).click();

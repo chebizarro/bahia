@@ -3,10 +3,25 @@ import { join } from 'node:path';
 import { test, expect } from '@playwright/test';
 import { cpStateFixture, confidentialCpStateFixture, workerStateFixture } from './cp-state-fixtures.js';
 import { E2E_SERVICE_PUBKEY, TEST_PUBKEY, installE2EMocks } from './helpers.js';
+import { fleetOCKConfidentialCpStateFixture, fleetOCKFixtureKey, fleetOCKKeyWrapFixture, securityAttributionFixture } from './fleet-ock-fixtures.js';
 
 const goFixture = JSON.parse(readFileSync(join(process.cwd(), 'tests/fixtures/paysec-confidential.json'), 'utf8'));
 const now = Math.floor(Date.now() / 1000);
 const artifactId = 'artifact-w2s3';
+const sbomHash = 'a'.repeat(64);
+const targetHash = 'd'.repeat(64);
+const fleetKey = fleetOCKFixtureKey({ version: goFixture.ock.version, fill: 0xbb });
+const attributedRecords = [
+  securityAttributionFixture({ subjectType: 'sbom', subjectDigest: sbomHash, key: fleetKey, createdAt: now, nonceByte: 11 }),
+  securityAttributionFixture({ subjectType: 'security-target', subjectDigest: targetHash, key: fleetKey, createdAt: now, nonceByte: 12 }),
+  fleetOCKConfidentialCpStateFixture({ topic: 'security-finding', legacyKind: 32012,
+    d: 'security:finding:attributed', key: fleetKey, createdAt: now, nonceByte: 13,
+    payload: { id: 'finding-attributed', finding_key_hash: 'attributed', target_key_hash: targetHash,
+      run_id: 'run-attributed', severity: 'high', summary: 'Attributed fixture finding' } }),
+  fleetOCKConfidentialCpStateFixture({ topic: 'security-schedule', legacyKind: 32013,
+    d: 'security:schedule:attributed', key: fleetKey, createdAt: now, nonceByte: 14,
+    payload: { id: 'schedule-attributed', target_key_hash: targetHash, run_id: 'run-attributed', enabled: true } })
+];
 
 function state(schema, d, content, createdAt = now, deleted = false) {
   return cpStateFixture({ schema, d, content, createdAt, deleted });
@@ -24,15 +39,15 @@ const initial = [
     tags: [['t', 'cp-audit'], ['fact', 'w2s3-fact'], ['event_type', 'backup.created'], ['service', 'svc-w2s3']],
     content: JSON.stringify({ event_type: 'backup.created', entity_id: 'svc-w2s3' }) },
   { kind: 30078, pubkey: E2E_SERVICE_PUBKEY, created_at: now,
-    tags: [['d', 'sbom-w2s3'], ['t', 'sbom-reference'], ['artifact', artifactId], ['format', 'spdx'], ['subject', 'sha256:' + 'a'.repeat(64)]],
+    tags: [['d', 'sbom-w2s3'], ['t', 'sbom-reference'], ['artifact', artifactId], ['format', 'spdx'], ['subject', 'sha256:' + sbomHash], ['x', sbomHash]],
     content: JSON.stringify({ format: 'spdx', packages: [{ name: 'package-north', version: '1.0' }], storage: { uri: 'blossom://sbom-w2s3' } }) },
-  ...goFixture.records.map(confidential)
+  ...goFixture.records.map(confidential),
+  ...attributedRecords
 ];
 
 test.describe('Store-first views', () => {
-  test.beforeEach(async ({ page }) => { await installE2EMocks(page, { nostrEvents: initial }); });
-
   test('activity, backup, ML, SBOM, payments and security render without read-path spinners', async ({ page }) => {
+    await installE2EMocks(page, { nostrEvents: [...initial, fleetOCKKeyWrapFixture({ key: fleetKey, createdAt: now })] });
     await page.goto('/events');
     await expect(page.getByText('backup.created')).toBeVisible();
     await page.goto('/backup');
@@ -44,12 +59,14 @@ test.describe('Store-first views', () => {
     await page.goto(`/artifacts/${artifactId}?tab=sbom`);
     await expect(page.getByText('package-north')).toBeVisible();
     await page.goto('/payments?worker=worker-a');
-    await expect(page.getByText('Payment records not readable with this key')).toBeVisible({ timeout: 20000 });
+    await expect(page.getByText('42 sats', { exact: true })).toBeVisible();
     await page.goto('/security');
-    await expect(page.getByText(/Security records not readable with this key/)).toBeVisible();
+    await expect(page.getByText('Attributed fixture finding')).toBeVisible();
+    await expect(page.getByText('Go fixture finding')).toHaveCount(0);
   });
 
   test('live backup replacement and tombstone update the view without a refresh cascade', async ({ page }) => {
+    await installE2EMocks(page, { nostrEvents: initial });
     await page.goto('/backup');
     await expect(page.getByText('Backup North')).toBeVisible();
     await page.evaluate((event) => window.__bahiaPushNostrEvent(event),
@@ -63,6 +80,7 @@ test.describe('Store-first views', () => {
   });
 
   test('fleet OCK arrival decrypts cached payment and security records without ContextVM', async ({ page }) => {
+    await installE2EMocks(page, { nostrEvents: initial });
     await page.goto('/payments?worker=worker-a');
     await expect(page.getByText('Payment records not readable with this key')).toBeVisible({ timeout: 20000 });
     const wrap = {
@@ -75,7 +93,8 @@ test.describe('Store-first views', () => {
     }));
     await expect(page.getByText('42 sats', { exact: true })).toBeVisible();
     await page.goto('/security');
-    await expect(page.getByText('Go fixture finding')).toBeVisible();
+    await expect(page.getByText('Attributed fixture finding')).toBeVisible();
+    await expect(page.getByText('Go fixture finding')).toHaveCount(0);
     await expect(page.getByText(/Security records not readable with this key/)).toHaveCount(0);
     await page.goto('/');
     await expect(page.locator('main a[href="/payments"] .card:has-text("Recent Spend") .card-value')).toHaveText('42 sats');
