@@ -218,6 +218,15 @@ service coordinate. Its content omits `coordinate` and `data`; rejection
 `store_unavailable`, or `processing_failed`), never a handler diagnostic. The
 `intent_id` and optional `e` tag retain request correlation.
 
+For a `backup-run` request, accepted status uses the ordinary requester/run
+coordinate and includes the run coordinate in content. A rejected or conflicted
+backup-run status instead uses
+`intent-status:<requester-pubkey>:backup:<intent-id>` and omits the run coordinate
+from both public tags and content. Both outcomes carry `e=<exact signed request
+event id>`. The local admission ledger keeps the run-coordinate timestamp floor
+across these two public coordinates, so an accepted result is newer than any
+pre-admission rejection without disclosing the target in a rejection.
+
 `status` is `accepted` or `rejected`; `reason` explains a rejection; `data`
 carries request output (a scan page, a build id, an org rekey summary,
 `result=evaluated` with an `evaluation` object for policy evaluation). The

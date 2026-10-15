@@ -47,9 +47,9 @@ func TestBackupRunPendingTerminalCompactionAndActiveIndexes(t *testing.T) {
 	require.Len(t, refusals, 1)
 	require.Empty(t, next)
 	status := signed(t, service, 30315, nostr.Now(), nostr.Tags{
-		{"d", "intent-status:" + original.Actor + ":" + coordinate}, {"domain", "intent"}, {"t", "intent-status"},
+		{"d", kinds.IntentPrivateStatusCoordinate(original.Actor, "backup", intentID)}, {"domain", "intent"}, {"t", "intent-status"},
 		{"status", "rejected"}, {"intent_id", intentID}, {"p", original.Actor}, {"e", request.ID.Hex()},
-	}, `{"intent_id":"`+intentID+`","coordinate":"`+coordinate+`","result":"rejected","reason":"coordinate already exists"}`)
+	}, `{"intent_id":"`+intentID+`","result":"rejected","reason":"access_denied"}`)
 	_, inserted, err = outbox.StageBackupRunRefusedStatus(refusals[0], status, "operator-relays")
 	require.NoError(t, err)
 	require.True(t, inserted)

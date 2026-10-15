@@ -32,9 +32,11 @@ func TestBackupRejectionReservesTimestampBeforePublisherRelayCall(t *testing.T) 
 	coordinate := "backup-run:" + uuid.NewString()
 	requestID, err := nostr.IDFromHex(nostr.Generate().Public().Hex())
 	require.NoError(t, err)
-	intent := &Intent{IntentID: "intent-rejected", Actor: actor, Coordinate: coordinate, Event: &nostr.Event{ID: requestID}}
+	intent := &Intent{IntentID: "intent-rejected", Domain: "backup", Actor: actor, Coordinate: coordinate, Event: &nostr.Event{ID: requestID}}
 	relayFailure := errors.New("relay accepted but durable publisher outcome was lost")
+	var rejected nostr.Event
 	publisher := NewIntentStatusPublisher(func(_ context.Context, event nostr.Event) error {
+		rejected = event
 		floor, err := outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor, coordinate)
 		require.NoError(t, err)
 		require.Equal(t, event.CreatedAt, floor, "the signed event must be reserved before the relay send")
@@ -70,6 +72,12 @@ func TestBackupRejectionReservesTimestampBeforePublisherRelayCall(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Greater(t, accepted.Event.CreatedAt, floor, "accepted status must beat a rejection sent to a relay before outbox loss")
+	require.Equal(t, kinds.IntentPrivateStatusCoordinate(actor, "backup", intent.IntentID), backupReceiptTag(rejected.Tags, "d"))
+	require.Equal(t, kinds.IntentStatusCoordinate(actor, coordinate), backupReceiptTag(accepted.Event.Tags, "d"))
+	require.Equal(t, requestID.Hex(), backupReceiptTag(rejected.Tags, "e"))
+	require.Equal(t, requestID.Hex(), backupReceiptTag(accepted.Event.Tags, "e"))
+	require.Equal(t, `{"intent_id":"intent-rejected","reason":"access_denied","result":"rejected"}`, rejected.Content)
+	require.NotContains(t, rejected.Content, coordinate)
 }
 
 func stageStatusTestRun(t *testing.T, outbox *localstore.Outbox, service nostr.SecretKey) (localstore.BackupRunAdmission, nostr.Event) {
@@ -219,9 +227,10 @@ func TestBackupRunRefusalStatusIsOneSignedEventUntilOperatorQuorum(t *testing.T)
 		ReceivedAt: now.Add(-2 * time.Minute), ExpiresAt: now.Add(-time.Minute)})
 	require.NoError(t, err)
 	require.True(t, inserted)
-	intent := &Intent{IntentID: record.IntentID, Actor: record.Actor, Coordinate: coordinate, Event: &request}
+	intent := &Intent{IntentID: record.IntentID, Domain: "backup", Actor: record.Actor, Coordinate: coordinate, Event: &request}
 	prior, err := status.buildStatusEventWithExpiryAt(t.Context(), intent, "rejected", "rejected", "earlier rejection", nil, time.Hour, nostr.Now())
 	require.NoError(t, err)
+	require.NoError(t, outbox.PublishUnadmittedBackupRunStatus(coordinate, request.ID.Hex(), prior, func() error { return nil }))
 	_, err = outbox.Enqueue(localstore.OutboxEntry{Event: prior, Target: "operator-relays"})
 	require.NoError(t, err)
 	_, err = outbox.CommitRound(prior.ID, localstore.OutboxRound{State: localstore.OutboxPublished, At: now.Add(-48 * time.Hour)})
@@ -244,7 +253,8 @@ func TestBackupRunRefusalStatusIsOneSignedEventUntilOperatorQuorum(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Greater(t, entry.Event.CreatedAt, prior.CreatedAt)
-	require.Equal(t, "intent-status:"+operator.Public().Hex()+":"+coordinate, backupReceiptTag(entry.Event.Tags, "d"))
+	require.Equal(t, kinds.IntentPrivateStatusCoordinate(operator.Public().Hex(), "backup", record.IntentID), backupReceiptTag(entry.Event.Tags, "d"))
+	require.NotContains(t, entry.Event.Content, coordinate)
 	require.Equal(t, "rejected", backupReceiptTag(entry.Event.Tags, "status"))
 	require.Equal(t, request.ID.Hex(), backupReceiptTag(entry.Event.Tags, "e"))
 	require.Empty(t, backupReceiptTag(entry.Event.Tags, "expiration"))
@@ -369,6 +379,7 @@ func TestBackupAcceptedStatusUsesOperatorRelaysAndBeatsSameSecondRejection(t *te
 	status := NewIntentStatusPublisher(func(context.Context, nostr.Event) error { return nil }, signer, zap.NewNop())
 	requestID, err := nostr.IDFromHex(record.RequestEventID)
 	require.NoError(t, err)
+	// A retained ordinary refusal from an earlier writer still seeds the admission floor.
 	intent := &Intent{IntentID: record.IntentID, Actor: record.Actor, Coordinate: record.Coordinate, Event: &nostr.Event{ID: requestID}}
 	rejectedAt := nostr.Now()
 	rejected, err := status.buildStatusEventWithExpiryAt(t.Context(), intent, "rejected", "rejected", "invalid before admission", nil, time.Hour, rejectedAt)
@@ -444,7 +455,7 @@ func TestAdmittedBackupCoordinateCannotPublishLaterGenericStatus(t *testing.T) {
 	publisher.SetBackupRunStatusGate(outbox.PublishUnadmittedBackupRunStatus)
 	requestID, err := nostr.IDFromHex(record.RequestEventID)
 	require.NoError(t, err)
-	intent := &Intent{IntentID: record.IntentID, Actor: record.Actor, Coordinate: record.Coordinate, Event: &nostr.Event{ID: requestID}}
+	intent := &Intent{IntentID: record.IntentID, Domain: "backup", Actor: record.Actor, Coordinate: record.Coordinate, Event: &nostr.Event{ID: requestID}}
 	require.ErrorContains(t, publisher.PublishRejectionChecked(t.Context(), intent, "permission revoked"), "immutable admission outcome")
 	require.ErrorContains(t, publisher.PublishAcceptedChecked(t.Context(), intent), "immutable admission outcome")
 	require.Empty(t, statuses.events, "preauthorization and validation paths share the guarded publisher")

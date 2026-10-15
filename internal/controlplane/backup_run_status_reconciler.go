@@ -159,7 +159,7 @@ func (r *BackupRunStatusReconciler) reconcileRefusal(ctx context.Context, record
 	if current.State != localstore.BackupRunRefusedState || current.StatusEventID != "" {
 		return nil
 	}
-	intent := &Intent{IntentID: current.IntentID, Actor: current.Actor, Coordinate: current.Coordinate, Event: &current.RequestEvent}
+	intent := &Intent{IntentID: current.IntentID, Domain: "backup", Actor: current.Actor, Coordinate: current.Coordinate, Event: &current.RequestEvent}
 	floor, err := r.outbox.BackupRunStatusTimestampFloor(current.ServicePubkey, current.Actor, current.Coordinate)
 	if err != nil {
 		return err
@@ -200,7 +200,7 @@ func (r *BackupRunStatusReconciler) reconcileRecord(ctx context.Context, record 
 	if err != nil {
 		return err
 	}
-	intent := &Intent{IntentID: current.IntentID, Actor: current.Actor, Coordinate: current.Coordinate,
+	intent := &Intent{IntentID: current.IntentID, Domain: "backup", Actor: current.Actor, Coordinate: current.Coordinate,
 		Event: &nostr.Event{ID: requestID}, StatusData: map[string]any{
 			"run_id": strings.TrimPrefix(current.Coordinate, "backup-run:"), "state_event_id": current.StateEventID, "execution": "queued",
 		}}

@@ -24,12 +24,12 @@ type IntentStatusPublisher struct {
 	logger  *zap.Logger
 	// statusExpiry is the NIP-40 expiration duration (default 7 days).
 	statusExpiry        time.Duration
-	backupRunStatusGate func(string, nostr.Event, func() error) error
+	backupRunStatusGate func(string, string, nostr.Event, func() error) error
 }
 
 // SetBackupRunStatusGate serializes generic backup status publication with
 // run admission and reserves the signed timestamp before relay I/O.
-func (p *IntentStatusPublisher) SetBackupRunStatusGate(gate func(string, nostr.Event, func() error) error) {
+func (p *IntentStatusPublisher) SetBackupRunStatusGate(gate func(string, string, nostr.Event, func() error) error) {
 	if p != nil {
 		p.backupRunStatusGate = gate
 	}
@@ -135,7 +135,10 @@ func (p *IntentStatusPublisher) publishStatus(ctx context.Context, intent *Inten
 		if p.backupRunStatusGate == nil {
 			return fmt.Errorf("backup run status gate is unavailable")
 		}
-		return p.backupRunStatusGate(intent.Coordinate, ev, publish)
+		if intent.Event == nil || intent.Event.ID == nostr.ZeroID {
+			return fmt.Errorf("backup run status requires the signed request event id")
+		}
+		return p.backupRunStatusGate(intent.Coordinate, intent.Event.ID.Hex(), ev, publish)
 	}
 	return publish()
 }

@@ -937,10 +937,20 @@ func backupRunStatusEventClockKey(ev nostr.Event) []byte {
 	}
 	actor := outboxTag(ev.Tags, "p")
 	coordinate, ok := strings.CutPrefix(outboxTag(ev.Tags, "d"), "intent-status:"+actor+":")
-	if actor == "" || !ok || !strings.HasPrefix(coordinate, "backup-run:") {
+	if actor == "" || !ok {
 		return nil
 	}
-	return backupRunStatusClockKey(ev.PubKey, actor, coordinate)
+	if strings.HasPrefix(coordinate, "backup-run:") {
+		return backupRunStatusClockKey(ev.PubKey, actor, coordinate)
+	}
+	if (outboxTag(ev.Tags, "status") == "rejected" || outboxTag(ev.Tags, "status") == "conflict") &&
+		outboxTag(ev.Tags, "intent_id") != "" && outboxTag(ev.Tags, "e") != "" &&
+		outboxTag(ev.Tags, "d") == kinds.IntentPrivateStatusCoordinate(actor, "backup", outboxTag(ev.Tags, "intent_id")) {
+		if _, err := nostr.IDFromHex(outboxTag(ev.Tags, "e")); err == nil {
+			return backupRunStatusClockKey(ev.PubKey, actor, coordinate)
+		}
+	}
+	return nil
 }
 
 func backupRunStatusTimestampFloor(tx *bbolt.Tx, key []byte) (nostr.Timestamp, error) {
@@ -973,6 +983,62 @@ func recordBackupRunStatusTimestamp(tx *bbolt.Tx, ev nostr.Event) error {
 	var value [8]byte
 	binary.BigEndian.PutUint64(value[:], uint64(ev.CreatedAt))
 	return tx.Bucket(backupRunStatusClockBucket).Put(key, value[:])
+}
+
+// recordBackupRunCoordinateStatusTimestamp keeps an internal admission floor
+// across private refusals without publishing the target coordinate.
+func recordBackupRunCoordinateStatusTimestamp(tx *bbolt.Tx, ev nostr.Event, coordinate string) error {
+	if !strings.HasPrefix(coordinate, "backup-run:") {
+		return fmt.Errorf("backup run status clock requires a run coordinate")
+	}
+	key := backupRunStatusClockKey(ev.PubKey, outboxTag(ev.Tags, "p"), coordinate)
+	prior, err := backupRunStatusTimestampFloor(tx, key)
+	if err != nil || ev.CreatedAt <= prior {
+		return err
+	}
+	var value [8]byte
+	binary.BigEndian.PutUint64(value[:], uint64(ev.CreatedAt))
+	return tx.Bucket(backupRunStatusClockBucket).Put(key, value[:])
+}
+
+func validUnadmittedBackupRunStatus(ev nostr.Event, coordinate, requestEventID string) bool {
+	actor, intentID, requestID := outboxTag(ev.Tags, "p"), outboxTag(ev.Tags, "intent_id"), outboxTag(ev.Tags, "e")
+	if actor == "" || intentID == "" || requestID == "" || requestID != requestEventID || !oneBackupRunTag(ev.Tags, "p", actor) ||
+		!oneBackupRunTag(ev.Tags, "intent_id", intentID) || !oneBackupRunTag(ev.Tags, "e", requestID) ||
+		!oneBackupRunTag(ev.Tags, "domain", "intent") || !oneBackupRunTag(ev.Tags, "t", "intent-status") ||
+		!oneBackupRunTag(ev.Tags, "status", outboxTag(ev.Tags, "status")) {
+		return false
+	}
+	if _, err := nostr.PubKeyFromHex(actor); err != nil {
+		return false
+	}
+	if _, err := nostr.IDFromHex(requestID); err != nil {
+		return false
+	}
+	var body struct {
+		Coordinate string `json:"coordinate"`
+		IntentID   string `json:"intent_id"`
+		Reason     string `json:"reason"`
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(ev.Content), &body) != nil || json.Unmarshal([]byte(ev.Content), &fields) != nil || body.IntentID != intentID {
+		return false
+	}
+	switch outboxTag(ev.Tags, "status") {
+	case "rejected", "conflict":
+		if _, exposed := fields["coordinate"]; exposed {
+			return false
+		}
+		if body.Reason != "" && (outboxTag(ev.Tags, "status") == "rejected" && body.Reason != "access_denied" ||
+			outboxTag(ev.Tags, "status") == "conflict" && body.Reason != "revision_conflict") {
+			return false
+		}
+		return oneBackupRunTag(ev.Tags, "d", kinds.IntentPrivateStatusCoordinate(actor, "backup", intentID))
+	case "accepted":
+		return oneBackupRunTag(ev.Tags, "d", kinds.IntentStatusCoordinate(actor, coordinate)) && body.Coordinate == coordinate
+	default:
+		return false
+	}
 }
 
 func outboxTag(tags nostr.Tags, key string) string {

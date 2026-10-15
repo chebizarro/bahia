@@ -2,7 +2,7 @@ import { untrack } from 'svelte';
 import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from './boot.js';
 import { toWebSocketUrl } from './pool-utils.js';
 import { signIntent } from './intent-signer.js';
-import { INTENT_STATUS_TOPIC, intentStatusCoordinates } from './intent-envelope.js';
+import { INTENT_STATUS_TOPIC, intentStatusCoordinates, intentStatusMatches } from './intent-envelope.js';
 import { createIntentOutbox } from './outbox.js';
 import { createPendingIntents } from '../stores/pending-intents.svelte.js';
 import { authState, resolveActiveSigner, signWithAuth } from '../stores/auth.svelte.js';
@@ -22,6 +22,7 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
   const pending = createPendingIntents({ namespace, servicePubkey, requesterPubkey });
   const subscriptions = new Map();
   const statusWaiters = new Map();
+  const waitingRequestEventIds = new Map();
   let unsubscribeCanonical = () => {};
   let unsubscribeStatus = () => {};
   let unsubscribePending = () => {};
@@ -76,7 +77,8 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
       for (const { handle } of subscriptions.values()) handle.unsubscribe();
       subscriptions.clear(); outbox.close(); pending.close();
     },
-    waitForStatus({ domain, coordinate, intentId, signal }) {
+    waitForStatus({ domain, coordinate, intentId, eventId, signal }) {
+      const expectedEventId = eventId || pending.query({ coordinate }).find(row => row.intentId === intentId)?.eventId;
       const filter = { kinds: [30315], authors: [servicePubkey],
         '#d': intentStatusCoordinates(requesterPubkey, { domain, coordinate, intentId }), '#p': [requesterPubkey], '#t': [INTENT_STATUS_TOPIC] };
       return new Promise((resolve, reject) => {
@@ -90,6 +92,7 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
           unsubscribePendingStatus();
           signal?.removeEventListener('abort', abort);
           statusWaiters.delete(cancel);
+          waitingRequestEventIds.delete(intentId);
           releaseResolved(coordinate);
           if (error) reject(error); else resolve(value);
         };
@@ -97,8 +100,9 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
         const cancel = error => finish(null, error);
         const onEvent = event => {
           if (event?.kind !== 30315 || event.pubkey !== servicePubkey ||
-              !filter['#d'].includes(tag(event, 'd')) || tag(event, 'p') !== requesterPubkey ||
-              tag(event, 'intent_id') !== intentId || tag(event, 't') !== INTENT_STATUS_TOPIC) return;
+              !intentStatusMatches(event, requesterPubkey, { domain, coordinate, intentId,
+                eventId: expectedEventId || waitingRequestEventIds.get(intentId) }) ||
+              tag(event, 't') !== INTENT_STATUS_TOPIC) return;
           let body;
           try { body = JSON.parse(event.content || '{}'); }
           catch { finish(null, new Error('Invalid intent status content')); return; }
@@ -129,6 +133,7 @@ export function createIntentClient({ store, pool, servicePubkey, requesterPubkey
         expectedUpdatedAt, intentId }, signer);
       retainStatus({ coordinate, domain, intentId: signed.intentId });
       await pending.add({ event: signed.event, domain, op, desiredState: content });
+      if ([...statusWaiters.values()].includes(coordinate)) waitingRequestEventIds.set(signed.intentId, signed.event.id);
       store.ingest(signed.event);
       await outbox.enqueue(signed.event);
       return { ...signed, domain, pending: true, desiredState: content };
@@ -201,7 +206,7 @@ export async function publishIntent(request) {
 export async function acceptedIntentStatus(submitted, { signal } = {}) {
   if (submitted.sensitive) return waitForSensitiveIntentStatus(submitted, { signal });
   return (await currentClient()).waitForStatus({ domain: submitted.domain, coordinate: submitted.coordinate,
-    intentId: submitted.intentId, signal });
+    intentId: submitted.intentId, eventId: submitted.event?.id || submitted.eventId, signal });
 }
 
 /** Subscribe before publication so canonical projections cannot outrun request status. */

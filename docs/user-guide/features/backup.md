@@ -34,6 +34,12 @@ relay warm-start; its rows do not prove ownership.
 
 The MCP registry exposes apply, list, and inspect tools for each resource under both a base name such as `apply_backup_policy` and a `bahia_` alias such as `bahia_apply_backup_policy`. See [MCP Tools](../mcp-tools.md) for the complete names.
 
+A run request is followed through the service-signed kind-30315 status.
+Acceptance uses `intent-status:<requester>:backup-run:<run-id>`; a refusal uses
+`intent-status:<requester>:backup:<intent-id>` and does not disclose the run
+coordinate. Match the `e` tag to the exact signed request event ID as well as
+the intent ID; the status alone is not proof that the backup effect completed.
+
 ## Run and verify
 
 Use the Backup UI or:

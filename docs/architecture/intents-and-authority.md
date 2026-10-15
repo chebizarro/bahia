@@ -291,8 +291,9 @@ or conflicted outcomes in confidential tenant domains use
 public envelope does not reveal the entity coordinate. Readers of those
 outcomes subscribe to both coordinates for the request. Tags: `domain=intent`,
 `status`, `t=intent-status`, `e=<intent-event-id>` when available,
-`p=<requester>`, `intent_id`, and a NIP-40 `expiration` of `created_at + 7 days`
-(the sidecar sweeps expired events). Ordinary content includes
+`p=<requester>`, `intent_id`, and normally a NIP-40 `expiration` of
+`created_at + 7 days` (the sidecar sweeps expired events). Durable backup-run
+accepted and refused outcomes do not expire. Ordinary content includes
 `{"intent_id","coordinate","result"}`; confidential outcomes omit `coordinate`.
 
 Status values: `accepted`, `rejected` (authorization or validation failure for
@@ -367,9 +368,10 @@ not stage a run or return `pending`/`accepted`. Existing ledger requests are re-
 relay EVENT/EOSE, a wake, or their bounded retry/expiration deadline. An
 expired request or a definitive same-coordinate history conflict becomes a
 local refusal, then the reconciler signs one non-expiring `30315` `rejected`
-status at `intent-status:<requester>:<coordinate>` and commits it with an
-operator-relay outbox row. Its timestamp is strictly above the durable floor
-of earlier service statuses on that coordinate. A refused or partial relay
+status at `intent-status:<requester>:backup:<intent-id>` with the exact
+signed request ID in `e`, and commits it with an
+operator-relay outbox row. Its timestamp is strictly above the durable internal run-coordinate floor
+of earlier service statuses, without exposing that coordinate in the status envelope. A refused or partial relay
 round leaves the same signed event pinned for outbox retry; replay reports
 terminal rejection only after exact operator-relay quorum proof, including
 after ordinary settled-row pruning. An already-admitted, fully ACKed historical record may
@@ -397,9 +399,10 @@ relay statuses are not emitted. Outbox exhaustion is not proof that no relay
 holds the staged event: a failed row remains pinned, emits no false refusal,
 and can retry the same signed event ID. Replay of the same signed request is idempotent, while another
 request using its intent ID or run coordinate is rejected without replacing
-the first request's status. The accepted status uses a durable timestamp floor
-above any earlier service status on the same NIP-01 coordinate, so a
-same-second pre-admission rejection cannot win by event-ID tie-break. Generic
+the first request's status. The accepted status uses a durable internal run-coordinate timestamp floor
+above any earlier service rejection, even though rejection and acceptance
+have different public NIP-01 coordinates. The refusal also has its own
+request-correlated replacement floor. Generic
 backup-run status publication reserves its timestamp before operator-relay I/O
 under the same admission lock used to stage the run; a relay success followed
 by outbox failure cannot escape the timestamp floor, and a later rejection

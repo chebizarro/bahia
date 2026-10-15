@@ -1,4 +1,4 @@
-import { intentStatusCoordinates } from '$lib/nostr/intent-envelope.js';
+import { intentStatusCoordinates, intentStatusMatches } from '$lib/nostr/intent-envelope.js';
 
 export { intentStatusCoordinates } from '$lib/nostr/intent-envelope.js';
 
@@ -85,7 +85,7 @@ export function createPendingIntents({ namespace, servicePubkey, requesterPubkey
       const intentId = tag(event, 'intent_id');
       const row = [...rows.values()].find(item => item.intentId === intentId);
       if (!row || tag(event, 'p') !== requesterPubkey ||
-        !intentStatusCoordinates(requesterPubkey, row).includes(tag(event, 'd'))) return false;
+        !intentStatusMatches(event, requesterPubkey, row)) return false;
       let body;
       try { body = JSON.parse(event.content || '{}'); } catch { return false; }
       const status = tag(event, 'status') || body.status;
