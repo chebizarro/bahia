@@ -14,10 +14,10 @@
 # Signet's own Dockerfile also runs its Meson suite; that is Signet's CI, not
 # a prerequisite for a disposable dev instance, so this build does not.
 
-FROM golang:1.26-bookworm AS nak
+FROM golang:1.26-bookworm@sha256:d9c68c2c51161e12fd77e4c6320687c9cd86e1af1e3ad6e6cd63ff970641453c AS nak
 RUN GOBIN=/out go install github.com/fiatjaf/nak@v0.19.7
 
-FROM debian:bookworm-slim AS signet
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS signet
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build pkg-config python3-pip git \
     libglib2.0-dev libjson-glib-dev libjansson-dev libssl-dev libsqlite3-dev libsqlcipher-dev \
@@ -35,7 +35,7 @@ RUN cmake -S /src -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=
   && cp /build/signet/signetd /build/signet/signetctl /out/ \
   && ldd /out/signetd /out/signetctl | awk '$3 ~ "^/build/" {print $3}' | sort -u | xargs -r cp -L -t /out/lib/
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 libjson-glib-1.0-0 libjansson4 libssl3 libsqlite3-0 libsqlcipher0 libsodium23 \
     libmicrohttpd12 libsecp256k1-1 libnsync1 libwebsockets17 libcurl4 libcap2 ca-certificates python3 \
