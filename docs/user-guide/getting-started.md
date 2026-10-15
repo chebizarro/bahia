@@ -229,3 +229,11 @@ supported. `local` and a raw operator private key are not. The service key
 under `nostr` remains separate. Without `config_fabric`, startup succeeds but
 `config_fabric_signer` health warns that daemon publish and rollback are
 unavailable.
+
+For the **service** identity, `nostr.signer.method: frostr` is a contained
+2-of-3 group-key option, not a production rotation. It requires mounted
+owner-only share and transport-key files, two pinned peer identities/public
+shares, relay endpoints, and injected round coordination plus a cross-process
+single-writer fence. Current daemon startup rejects it without those runtime
+dependencies; `local`, `nip46` and `nip55l` remain the deployment methods.
+See the [service signer runbook](../runbooks/service-signer.md#frostr-threshold-custody-contained-not-a-production-switch).

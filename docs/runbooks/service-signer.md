@@ -14,13 +14,17 @@ signer instead.
 
 | Key | Env | Meaning |
 |---|---|---|
-| `nostr.public_key` | `BAHIA_NOSTR_PUBLIC_KEY` | Service pubkey, 64 hex. Required for `nip46`/`nip55l`; optional for `local` (must match the key if set). |
-| `nostr.signer.method` | `BAHIA_NOSTR_SIGNER_METHOD` | `local`, `nip46` or `nip55l`. Empty = `local` if `nostr.private_key` is set. |
+| `nostr.public_key` | `BAHIA_NOSTR_PUBLIC_KEY` | Service pubkey, 64 hex. Required for `nip46`/`nip55l`/`frostr`; optional for `local` (must match the key if set). |
+| `nostr.signer.method` | `BAHIA_NOSTR_SIGNER_METHOD` | `local`, `nip46`, `nip55l` or opt-in `frostr`. Empty = `local` if `nostr.private_key` is set. |
 | `nostr.signer.bunker_uri` | `BAHIA_NOSTR_SIGNER_BUNKER_URI` | `bunker://…` URI or NIP-05 name (`nip46`). Secret. |
 | `nostr.signer.client_secret_key` | `BAHIA_NOSTR_SIGNER_CLIENT_SECRET_KEY` | Bahia's dedicated NIP-46 client key, 64 hex (`nip46`). Secret. |
 | `nostr.signer.client_secret_key_file` | `BAHIA_NOSTR_SIGNER_CLIENT_SECRET_KEY_FILE` | Absolute path to a file holding that key instead (≤ 4 KiB). |
 | `nostr.signer.nip55l.bus_address` | `BAHIA_NOSTR_SIGNER_NIP55L_BUS_ADDRESS` | D-Bus address; empty = session bus (`nip55l`). |
 | `nostr.signer.nip55l.app_id` | `BAHIA_NOSTR_SIGNER_NIP55L_APP_ID` | Application id shown to the signer's approval policy; default `bahia`. |
+| `nostr.signer.frostr.share_file` | — | Absolute path to the owner-only mounted daemon share (never inline or in argv). |
+| `nostr.signer.frostr.transport_key_file` | — | Absolute path to a separate owner-only transport identity key. |
+| `nostr.signer.frostr.peers` | — | Exactly two peer ids, transport pubkeys and public share encodings. |
+| `nostr.signer.frostr.relays` | — | At least one `wss://` relay for the injected round transport. |
 | `nostr.signer.timeout` | `BAHIA_NOSTR_SIGNER_TIMEOUT` | Bounds connecting and each signer request; default `30s`. For `nip55l` the default is `330s` and the minimum `300s`, because a signer approval may wait up to 300 s. |
 
 Startup rejects: an unknown method; a remote method together with
@@ -91,6 +95,33 @@ nostr:
 Features that need binary NIP-44 (`nip44_encrypt_b64`/`nip44_decrypt_b64`)
 fail with an "unsupported" error on bunkers that do not implement that
 extension; everything else uses standard NIP-46 only.
+
+## FROSTR threshold custody (contained, not a production switch)
+
+The configuration shape is:
+
+```yaml
+nostr:
+  public_key: <64-hex group x-only pubkey>
+  signer:
+    method: frostr
+    frostr:
+      share_file: /run/secrets/bahia-frostr-daemon-share
+      transport_key_file: /run/secrets/bahia-frostr-node-key
+      relays: ["wss://controlled-relay.example"]
+      peers:
+        - {id: 2, pubkey: <64-hex operator transport pubkey>, public_share: <hex public share>}
+        - {id: 3, pubkey: <64-hex cold transport pubkey>, public_share: <hex public share>}
+```
+
+Both files must be regular, owner-only mounted secrets. Do not put a share in
+YAML, environment variables, command arguments, logs, or Beads. Bahia validates
+each public share against the group key and refuses missing or mismatched
+material. Selecting `frostr` in the current daemon fails closed because
+production relay coordination and cross-process fencing are not wired;
+operator-gated group-key rotation is tracked under h9n7f. The stage-1
+in-process and fake-relay evidence, custody caveats and latency budget are in
+the [design decision](../designs/ock-key-distribution-alternatives.md#frostr-service-custody-stage-1-decision-bahia-4m4b8).
 
 ## NIP-55L (local D-Bus signer)
 

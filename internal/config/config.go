@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -799,7 +800,7 @@ type ConfigFabricConfig struct {
 }
 
 func (c *ConfigFabricConfig) validate() error {
-	if c.PublicKey == "" && c.Signer == (NostrSignerConfig{}) {
+	if c.PublicKey == "" && reflect.DeepEqual(c.Signer, NostrSignerConfig{}) {
 		return nil
 	}
 	if strings.EqualFold(strings.TrimSpace(c.Signer.Method), NostrSignerLocal) || strings.TrimSpace(c.Signer.Method) == "" {
@@ -822,6 +823,8 @@ const (
 	NostrSignerNIP46 = "nip46"
 	// NostrSignerNIP55L delegates to a local NIP-55L signer over D-Bus.
 	NostrSignerNIP55L = "nip55l"
+	// NostrSignerFrostr uses a 2-of-3 threshold service identity.
+	NostrSignerFrostr = "frostr"
 
 	defaultNostrSignerTimeout = 30 * time.Second
 	// NIP-55L approvals may wait up to 300 s for the user, so its request
@@ -834,7 +837,7 @@ const (
 // NostrSignerConfig selects the service identity's signer. Exactly one custody
 // mode is active: a remote method never coexists with nostr.private_key.
 type NostrSignerConfig struct {
-	// Method is local, nip46 or nip55l. Empty means local when
+	// Method is local, nip46, nip55l or frostr. Empty means local when
 	// nostr.private_key is set and no service identity otherwise.
 	Method string `koanf:"method" yaml:"method" secret:"false"`
 	// BunkerURI is a bunker:// URI or NIP-05 name (nip46 only).
@@ -845,9 +848,25 @@ type NostrSignerConfig struct {
 	ClientSecretKey     string                  `koanf:"client_secret_key" yaml:"client_secret_key" secret:"true"`
 	ClientSecretKeyFile string                  `koanf:"client_secret_key_file" yaml:"client_secret_key_file" secret:"false"`
 	NIP55L              NostrSignerNIP55LConfig `koanf:"nip55l" yaml:"nip55l"`
+	Frostr              NostrSignerFrostrConfig `koanf:"frostr" yaml:"frostr"`
 	// Timeout bounds connecting to the signer and each signer request.
 	// Zero uses 30s, or 330s for nip55l, whose minimum is 300s.
 	Timeout time.Duration `koanf:"timeout" yaml:"timeout" secret:"false"`
+}
+
+// NostrSignerFrostrConfig holds only public group metadata and paths to
+// mounted secrets. Neither a share nor a transport identity belongs in YAML.
+type NostrSignerFrostrConfig struct {
+	ShareFile        string                  `koanf:"share_file" yaml:"share_file" secret:"false"`
+	TransportKeyFile string                  `koanf:"transport_key_file" yaml:"transport_key_file" secret:"false"`
+	Relays           []string                `koanf:"relays" yaml:"relays" secret:"false"`
+	Peers            []NostrSignerFrostrPeer `koanf:"peers" yaml:"peers"`
+}
+
+type NostrSignerFrostrPeer struct {
+	ID          int    `koanf:"id" yaml:"id" secret:"false"`
+	Pubkey      string `koanf:"pubkey" yaml:"pubkey" secret:"false"`
+	PublicShare string `koanf:"public_share" yaml:"public_share" secret:"false"`
 }
 
 // NostrSignerNIP55LConfig addresses a NIP-55L D-Bus signer (nip55l only).
@@ -881,6 +900,8 @@ func (n *NostrConfig) validateServiceSigner() error {
 	signer.ClientSecretKeyFile = strings.TrimSpace(signer.ClientSecretKeyFile)
 	signer.NIP55L.BusAddress = strings.TrimSpace(signer.NIP55L.BusAddress)
 	signer.NIP55L.AppID = strings.TrimSpace(signer.NIP55L.AppID)
+	signer.Frostr.ShareFile = strings.TrimSpace(signer.Frostr.ShareFile)
+	signer.Frostr.TransportKeyFile = strings.TrimSpace(signer.Frostr.TransportKeyFile)
 	n.PublicKey = strings.ToLower(strings.TrimSpace(n.PublicKey))
 	if signer.Timeout < 0 {
 		return fmt.Errorf("config validation failed: nostr.signer.timeout must not be negative")
@@ -896,16 +917,20 @@ func (n *NostrConfig) validateServiceSigner() error {
 	}
 	nip46Set := signer.BunkerURI != "" || signer.ClientSecretKey != "" || signer.ClientSecretKeyFile != ""
 	nip55lSet := signer.NIP55L != (NostrSignerNIP55LConfig{})
+	frostrSet := signer.Frostr.ShareFile != "" || signer.Frostr.TransportKeyFile != "" || len(signer.Frostr.Relays) != 0 || len(signer.Frostr.Peers) != 0
 	switch signer.Method {
 	case "", NostrSignerLocal:
-		if nip46Set || nip55lSet {
-			return fmt.Errorf("config validation failed: nostr.signer remote settings require nostr.signer.method nip46 or nip55l")
+		if nip46Set || nip55lSet || frostrSet {
+			return fmt.Errorf("config validation failed: nostr.signer remote settings require nostr.signer.method nip46, nip55l or frostr")
 		}
 		if signer.Method == NostrSignerLocal && strings.TrimSpace(n.PrivateKey) == "" {
 			return fmt.Errorf("config validation failed: nostr.signer.method=local requires nostr.private_key")
 		}
 		return nil
 	case NostrSignerNIP46:
+		if frostrSet {
+			return fmt.Errorf("config validation failed: nostr.signer.frostr settings require nostr.signer.method=frostr")
+		}
 		if nip55lSet {
 			return fmt.Errorf("config validation failed: nostr.signer.nip55l settings require nostr.signer.method=nip55l")
 		}
@@ -922,6 +947,9 @@ func (n *NostrConfig) validateServiceSigner() error {
 			return fmt.Errorf("config validation failed: nostr.signer.client_secret_key_file must be an absolute path")
 		}
 	case NostrSignerNIP55L:
+		if frostrSet {
+			return fmt.Errorf("config validation failed: nostr.signer.frostr settings require nostr.signer.method=frostr")
+		}
 		if nip46Set {
 			return fmt.Errorf("config validation failed: nostr.signer bunker and client key settings require nostr.signer.method=nip46")
 		}
@@ -931,8 +959,34 @@ func (n *NostrConfig) validateServiceSigner() error {
 		if signer.Timeout < minNostrSignerNIP55LTimeout {
 			return fmt.Errorf("config validation failed: nostr.signer.timeout must be at least %s for nostr.signer.method=nip55l (signer approvals may take 300s)", minNostrSignerNIP55LTimeout)
 		}
+	case NostrSignerFrostr:
+		if nip46Set || nip55lSet {
+			return fmt.Errorf("config validation failed: frostr cannot use nip46 or nip55l settings")
+		}
+		if !filepath.IsAbs(signer.Frostr.ShareFile) || !filepath.IsAbs(signer.Frostr.TransportKeyFile) {
+			return fmt.Errorf("config validation failed: nostr.signer.frostr share_file and transport_key_file must be absolute mounted-secret paths")
+		}
+		if len(signer.Frostr.Peers) != 2 || len(signer.Frostr.Relays) == 0 {
+			return fmt.Errorf("config validation failed: nostr.signer.frostr requires two peers and at least one relay")
+		}
+		ids := map[int]bool{}
+		pubkeys := map[string]bool{}
+		for i := range signer.Frostr.Peers {
+			p := &signer.Frostr.Peers[i]
+			p.Pubkey = strings.ToLower(strings.TrimSpace(p.Pubkey))
+			p.PublicShare = strings.ToLower(strings.TrimSpace(p.PublicShare))
+			if p.ID < 1 || p.ID > 3 || ids[p.ID] || !isHexKey(p.Pubkey) || p.PublicShare == "" || pubkeys[p.Pubkey] {
+				return fmt.Errorf("config validation failed: nostr.signer.frostr.peers[%d] has invalid or duplicate public identity/share", i)
+			}
+			ids[p.ID], pubkeys[p.Pubkey] = true, true
+		}
+		for _, relay := range signer.Frostr.Relays {
+			if !strings.HasPrefix(relay, "wss://") {
+				return fmt.Errorf("config validation failed: nostr.signer.frostr.relays must use wss")
+			}
+		}
 	default:
-		return fmt.Errorf("config validation failed: nostr.signer.method must be one of local, nip46, nip55l")
+		return fmt.Errorf("config validation failed: nostr.signer.method must be one of local, nip46, nip55l, frostr")
 	}
 	if strings.TrimSpace(n.PrivateKey) != "" {
 		return fmt.Errorf("config validation failed: nostr.private_key must not be set with nostr.signer.method=%s; the remote signer holds the service key", signer.Method)

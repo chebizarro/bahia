@@ -68,7 +68,7 @@ func TestServiceSignerValidation(t *testing.T) {
 			n.Signer.ClientSecretKeyFile = "/run/secrets/bahia-nip46"
 		}},
 		"nip55l":                   {mutate: func(n *NostrConfig) { n.PublicKey = testServicePubkey; n.Signer.Method = NostrSignerNIP55L }},
-		"unknown method":           {mutate: func(n *NostrConfig) { n.Signer.Method = "signet" }, want: "must be one of local, nip46, nip55l"},
+		"unknown method":           {mutate: func(n *NostrConfig) { n.Signer.Method = "signet" }, want: "must be one of local, nip46, nip55l, frostr"},
 		"local without key":        {mutate: func(n *NostrConfig) { n.Signer.Method = NostrSignerLocal }, want: "requires nostr.private_key"},
 		"nip46 mixed with raw key": {mutate: func(n *NostrConfig) { nip46(n); n.PrivateKey = local }, want: "nostr.private_key must not be set"},
 		"nip55l mixed with raw key": {mutate: func(n *NostrConfig) {
@@ -88,7 +88,7 @@ func TestServiceSignerValidation(t *testing.T) {
 			n.Signer.Method = NostrSignerNIP55L
 			n.Signer.BunkerURI = testBunkerURI
 		}, want: "require nostr.signer.method=nip46"},
-		"remote fields, no method": {mutate: func(n *NostrConfig) { n.PrivateKey = local; n.Signer.BunkerURI = testBunkerURI }, want: "require nostr.signer.method nip46 or nip55l"},
+		"remote fields, no method": {mutate: func(n *NostrConfig) { n.PrivateKey = local; n.Signer.BunkerURI = testBunkerURI }, want: "require nostr.signer.method nip46, nip55l or frostr"},
 		"malformed pubkey":         {mutate: func(n *NostrConfig) { nip46(n); n.PublicKey = "npub1x" }, want: "nostr.public_key must be 64 hex"},
 		"nip55l short timeout": {mutate: func(n *NostrConfig) {
 			n.PublicKey = testServicePubkey
@@ -114,6 +114,40 @@ func TestServiceSignerValidation(t *testing.T) {
 				if strings.Contains(err.Error(), secret) {
 					t.Fatal("validation error leaked a secret")
 				}
+			}
+		})
+	}
+}
+
+func TestFrostrConfigRequiresMountedSecretsAndTwoPeers(t *testing.T) {
+	base := NostrConfig{PublicKey: testServicePubkey, Signer: NostrSignerConfig{Method: NostrSignerFrostr, Frostr: NostrSignerFrostrConfig{
+		ShareFile:        "/run/secrets/bahia-frostr-share",
+		TransportKeyFile: "/run/secrets/bahia-frostr-node",
+		Relays:           []string{"wss://relay.example"},
+		Peers: []NostrSignerFrostrPeer{
+			{ID: 2, Pubkey: testServicePubkey, PublicShare: strings.Repeat("a", 78)},
+			{ID: 3, Pubkey: strings.Repeat("b", 64), PublicShare: strings.Repeat("b", 78)},
+		},
+	}}}
+	if err := base.validateServiceSigner(); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*NostrConfig){
+		"missing share":     func(n *NostrConfig) { n.Signer.Frostr.ShareFile = "" },
+		"relative node key": func(n *NostrConfig) { n.Signer.Frostr.TransportKeyFile = "node.key" },
+		"missing peer":      func(n *NostrConfig) { n.Signer.Frostr.Peers = n.Signer.Frostr.Peers[:1] },
+		"duplicate peer":    func(n *NostrConfig) { n.Signer.Frostr.Peers[1].ID = 2 },
+		"no relay":          func(n *NostrConfig) { n.Signer.Frostr.Relays = nil },
+		"insecure relay":    func(n *NostrConfig) { n.Signer.Frostr.Relays = []string{"ws://relay.example"} },
+		"raw key":           func(n *NostrConfig) { n.PrivateKey = strings.Repeat("c", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base
+			cfg.Signer.Frostr.Relays = append([]string(nil), base.Signer.Frostr.Relays...)
+			cfg.Signer.Frostr.Peers = append([]NostrSignerFrostrPeer(nil), base.Signer.Frostr.Peers...)
+			mutate(&cfg)
+			if err := cfg.validateServiceSigner(); err == nil {
+				t.Fatal("incomplete frostr config accepted")
 			}
 		})
 	}
