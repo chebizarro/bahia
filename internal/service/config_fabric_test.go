@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/relaysidecar"
 	"github.com/openagentsinc/bahia/internal/repository"
 	"github.com/openagentsinc/bahia/internal/repository/repositorytest"
@@ -190,6 +192,40 @@ func TestConfigFabricPublishApplyStatusClearsDriftEndToEnd(t *testing.T) {
 	local, err := ConfigDriftFromEvents(append(append([]nostr.Event(nil), desiredPublisher.events...), observed...))
 	if err != nil || !reflect.DeepEqual(local, drift) {
 		t.Fatalf("local drift differs from REST projection: local=%#v REST=%#v err=%v", local, drift, err)
+	}
+}
+
+func TestConfigDesiredSerializedEnvelopeMatchesStoreFirstFilter(t *testing.T) {
+	event, err := ComposeConfigEvent(validPolicyRequest(7), time.Unix(1787625660, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("../../web/tests/fixtures/config-fabric-envelopes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []struct {
+		Kind int        `json:"kind"`
+		Tags nostr.Tags `json:"tags"`
+	}
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures) != 2 {
+		t.Fatalf("fixtures = %d", len(fixtures))
+	}
+	actual, _ := json.Marshal(event.Tags)
+	expected, _ := json.Marshal(fixtures[0].Tags)
+	if string(actual) != string(expected) {
+		t.Fatalf("wire tags = %s, want %s", actual, expected)
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(fixtures[0].Kind)}, Tags: nostr.TagMap{"t": {kinds.ConfigFabricTopic}}}
+	if !filter.Matches(*event) {
+		t.Fatal("desired event does not match store-first filter")
+	}
+	filter.Tags["t"] = []string{"wrong"}
+	if filter.Matches(*event) {
+		t.Fatal("desired event matched wrong topic")
 	}
 }
 

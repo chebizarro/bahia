@@ -1,9 +1,16 @@
 package kinds
 
 const (
+	ConfigFabricTopic = "config-fabric"
+	ConfigStatusTopic = "config-status"
 	IntentTopic       = "bahia-intent"
 	IntentStatusTopic = "intent-status"
 )
+
+// ConfigStatusCoordinate is the stable addressable status coordinate.
+func ConfigStatusCoordinate(service, policy, scope string) string {
+	return "config-status:" + service + ":" + policy + ":" + scope
+}
 
 // IntentStatusCoordinate is the bounded NIP-38 status coordinate for an entity.
 func IntentStatusCoordinate(actor, coordinate string) string {

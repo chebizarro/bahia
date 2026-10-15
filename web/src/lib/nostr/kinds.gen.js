@@ -443,6 +443,8 @@ export const ASSISTANT_TRANSCRIPT_TOPIC = 'assistant-transcript';
 export const ASSISTANT_TRANSCRIPT_SESSION_TOPIC_PREFIX = 'assistant-transcript:';
 export const ASSISTANT_STATUS_TOPIC = 'assistant-status';
 export const RELAY_SETTINGS_TOPIC = 'relay-settings';
+export const CONFIG_FABRIC_TOPIC = 'config-fabric';
+export const CONFIG_STATUS_TOPIC = 'config-status';
 // Assistant session-state topic.
 export const ASSISTANT_SESSION_TOPIC = 'assistant-session';
 // Security and SBOM observable topics.
