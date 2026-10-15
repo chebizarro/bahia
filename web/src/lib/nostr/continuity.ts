@@ -21,13 +21,11 @@ import { getEventStore, getPool, getRelayUrls, getServicePubkeys, onStoreRefresh
 import { toWebSocketUrl } from '$lib/nostr/pool-utils.js';
 import { authState } from '$lib/stores/auth.js';
 import { operatorAllowlistFor, trustedOperatorAuthors } from '$lib/stores/operator-allowlist.svelte.js';
-import { OPERATOR_ALLOWLIST_SCOPE_CONTINUITY } from '$lib/nostr/kinds.gen.js';
+import { OPERATOR_ALLOWLIST_SCOPE_CONTINUITY, CONTINUITY_FAMILY_TOPIC, CONTINUITY_STATUS_TOPIC, CONTINUITY_RECOVERY_PROGRESS_TOPIC, CONTINUITY_HEARTBEAT_TOPIC } from '$lib/nostr/kinds.gen.js';
 import { createPagedReader } from '$lib/nostr/store-first-backfill.js';
 import type { ContinuityAssessmentDTO, ContinuityRunDTO, ContinuityServiceStatusDTO } from '$lib/types/continuity';
 
 const CONTINUITY_PAGE_SIZE = 500;
-const CONTINUITY_STATUS_TAG = 'continuity';
-const CONTINUITY_STATUS_READ_MODEL_TAG = 'continuity-status';
 const WORKER_STATE_SCHEMA = BAHIA_STATE_SCHEMAS.WORKER_STATE;
 
 export const CONTINUITY_READ_MODEL_KINDS = [CONTINUITY_STATUS, RECOVERY_PROGRESS];
@@ -134,13 +132,13 @@ export function continuityFilterUnits({ serviceAuthors = [], operatorAuthors = [
 } = {}) {
   return [
     { name: 'service', filters: serviceAuthors.length ? [
-      { kinds: [CONTINUITY_STATUS], '#t': [CONTINUITY_STATUS_TAG, CONTINUITY_STATUS_READ_MODEL_TAG], authors: serviceAuthors },
-      { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_STATUS_TAG, 'recovery-progress'], authors: serviceAuthors },
+      { kinds: [CONTINUITY_STATUS], '#t': [CONTINUITY_FAMILY_TOPIC, CONTINUITY_STATUS_TOPIC], authors: serviceAuthors },
+      { kinds: [RECOVERY_PROGRESS], '#t': [CONTINUITY_FAMILY_TOPIC, CONTINUITY_RECOVERY_PROGRESS_TOPIC], authors: serviceAuthors },
       { kinds: [CASCADIA_CONTROLPLANE_STATE], '#t': [WORKER_STATE_TOPIC], authors: serviceAuthors }
     ] : [] },
     { name: 'operator', filters: operatorAuthors.length ? [
       { kinds: CONTINUITY_DEFINITION_KINDS, authors: operatorAuthors },
-      { kinds: [HEARTBEAT_OBSERVATION], '#t': ['continuity-heartbeat'], authors: operatorAuthors }
+      { kinds: [HEARTBEAT_OBSERVATION], '#t': [CONTINUITY_HEARTBEAT_TOPIC], authors: operatorAuthors }
     ] : [] }
   ];
 }

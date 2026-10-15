@@ -456,6 +456,10 @@ export const SBOM_REFERENCE_TOPIC = 'sbom-reference';
 export const SBOM_AVAILABILITY_TOPIC = 'sbom-availability';
 // Release attestation topic.
 export const RELEASE_ATTESTATION_TOPIC = 'release-attestation';
+export const CONTINUITY_FAMILY_TOPIC = 'continuity';
+export const CONTINUITY_STATUS_TOPIC = 'continuity-status';
+export const CONTINUITY_RECOVERY_PROGRESS_TOPIC = 'recovery-progress';
+export const CONTINUITY_DEGRADED_ACTIVATION_TOPIC = 'degraded-mode-activation';
 export const CONTINUITY_HEARTBEAT_TOPIC = 'continuity-heartbeat';
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
   [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,

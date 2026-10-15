@@ -1,11 +1,14 @@
 package nostr
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
 )
 
@@ -224,6 +227,28 @@ func TestReplicationPolicySerializationUsesIndexedTagsAndJSONContent(t *testing.
 	require.Equal(t, "svc.api", decoded.ServiceKey)
 	require.Equal(t, "worker-replica", decoded.Targets[0].WorkerPubKey)
 	require.Equal(t, 30*time.Second, decoded.Targets[0].MaxStaleness)
+}
+
+func TestHeartbeatSerializedEnvelopeMatchesWebFilter(t *testing.T) {
+	event, err := EncodeHeartbeatObservationEvent(domain.HeartbeatObservation{WorkerPubKey: "workerpubkey", ObservedAt: time.Unix(1710000000, 0).UTC(), Sequence: 42, Interval: 15 * time.Second, ExpiresAfter: 45 * time.Second})
+	require.NoError(t, err)
+	data, err := os.ReadFile("../../../web/tests/fixtures/continuity-envelopes.json")
+	require.NoError(t, err)
+	var fixtures []struct {
+		Kind int          `json:"kind"`
+		Tags gonostr.Tags `json:"tags"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 3)
+	actual, err := json.Marshal(event.Tags)
+	require.NoError(t, err)
+	expected, err := json.Marshal(fixtures[2].Tags)
+	require.NoError(t, err)
+	require.Equal(t, string(expected), string(actual))
+	filter := gonostr.Filter{Kinds: []gonostr.Kind{gonostr.Kind(fixtures[2].Kind)}, Tags: gonostr.TagMap{"t": {kinds.ContinuityHeartbeatTopic}}}
+	require.True(t, filter.Matches(event))
+	filter.Tags["t"] = []string{"wrong"}
+	require.False(t, filter.Matches(event))
 }
 
 func TestHeartbeatObservationSerializationUsesWorkerSequenceAndIntervalTags(t *testing.T) {

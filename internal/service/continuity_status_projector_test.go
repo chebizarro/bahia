@@ -4,14 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
 )
+
+func TestContinuitySerializedReadModelsMatchWebFilters(t *testing.T) {
+	data, err := os.ReadFile("../../web/tests/fixtures/continuity-envelopes.json")
+	require.NoError(t, err)
+	var fixtures []struct {
+		Kind int          `json:"kind"`
+		Tags gonostr.Tags `json:"tags"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 3)
+	status := ContinuityStatus{ServiceKey: "svc-api", ActiveProfile: domain.ContinuityModeDegraded,
+		OperationState: ContinuityOperationRecoveryInProgress, CurrentRunID: "run-1",
+		CurrentStepIndex: 1, CurrentStepCount: 3, CurrentStepAction: "restore_dns_routes"}
+	for i, produced := range []gonostr.Tags{continuityStatusTags(status), recoveryProgressTags(status)} {
+		actual, err := json.Marshal(produced)
+		require.NoError(t, err)
+		expected, err := json.Marshal(fixtures[i].Tags)
+		require.NoError(t, err)
+		require.Equal(t, string(expected), string(actual))
+		topic := kinds.ContinuityStatusTopic
+		if i == 1 {
+			topic = kinds.ContinuityRecoveryProgressTopic
+		}
+		filter := gonostr.Filter{Kinds: []gonostr.Kind{gonostr.Kind(fixtures[i].Kind)}, Tags: gonostr.TagMap{"t": {kinds.ContinuityFamilyTopic, topic}}}
+		event := gonostr.Event{Kind: gonostr.Kind(fixtures[i].Kind), Tags: produced}
+		require.True(t, filter.Matches(event))
+		filter.Tags["t"] = []string{"wrong"}
+		require.False(t, filter.Matches(event))
+	}
+}
 
 func TestContinuityStatusProjectorUpdatesStoreAndPublishesStatusAndActivation(t *testing.T) {
 	ctx := context.Background()

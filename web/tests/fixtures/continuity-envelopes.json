@@ -1,0 +1,5 @@
+[
+  {"kind":30351,"pubkey":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tags":[["d","continuity-status:svc-api"],["service","svc-api"],["profile","degraded"],["operation_state","recovery_in_progress"],["t","bahia"],["t","continuity"],["t","continuity-status"],["run","run-1"]]},
+  {"kind":30353,"pubkey":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","tags":[["d","recovery-progress:svc-api:run-1"],["service","svc-api"],["run","run-1"],["profile","degraded"],["operation_state","recovery_in_progress"],["step","1"],["step_count","3"],["t","bahia"],["t","continuity"],["t","recovery-progress"],["action","restore_dns_routes"]]},
+  {"kind":30315,"pubkey":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tags":[["d","continuity:heartbeat:workerpubkey"],["domain","continuity"],["schema","bahia.status.continuity-heartbeat.v1"],["t","continuity-heartbeat"],["status","online"],["worker","workerpubkey"],["p","workerpubkey"],["sequence","42"],["interval_ms","15000"],["expiration","1710000045"]]}
+]

@@ -12,6 +12,7 @@ import (
 	gonostr "fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/events"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -301,8 +302,8 @@ func continuityStatusTags(status ContinuityStatus) gonostr.Tags {
 		{"profile", string(status.ActiveProfile)},
 		{"operation_state", status.OperationState},
 		{"t", "bahia"},
-		{"t", "continuity"},
-		{"t", "continuity-status"},
+		{"t", kinds.ContinuityFamilyTopic},
+		{"t", kinds.ContinuityStatusTopic},
 	}
 	return appendWorkerAndRunTags(tags, status)
 }
@@ -313,8 +314,8 @@ func degradedActivationTags(previous ContinuityStatus, hadPrevious bool, status 
 		{"profile", string(status.ActiveProfile)},
 		{"operation_state", status.OperationState},
 		{"t", "bahia"},
-		{"t", "continuity"},
-		{"t", "degraded-mode-activation"},
+		{"t", kinds.ContinuityFamilyTopic},
+		{"t", kinds.ContinuityDegradedActivationTopic},
 	}
 	if hadPrevious {
 		tags = append(tags, gonostr.Tag{"previous_profile", string(previous.ActiveProfile)})
@@ -332,8 +333,8 @@ func recoveryProgressTags(status ContinuityStatus) gonostr.Tags {
 		{"step", strconv.Itoa(status.CurrentStepIndex)},
 		{"step_count", strconv.Itoa(status.CurrentStepCount)},
 		{"t", "bahia"},
-		{"t", "continuity"},
-		{"t", "recovery-progress"},
+		{"t", kinds.ContinuityFamilyTopic},
+		{"t", kinds.ContinuityRecoveryProgressTopic},
 	}
 	if status.CurrentStepAction != "" {
 		tags = append(tags, gonostr.Tag{"action", status.CurrentStepAction})

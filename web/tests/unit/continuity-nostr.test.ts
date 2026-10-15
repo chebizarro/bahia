@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import envelopes from '../fixtures/continuity-envelopes.json';
 
 const bootMock = vi.hoisted(() => ({
   store: null as any, pool: null as any, relays: [] as string[], refresh: null as any,
@@ -51,6 +53,16 @@ describe('continuity Nostr read models', () => {
       expect.objectContaining({ kinds: [30900], '#t': ['worker-state'], authors: [SERVICE_AUTHOR] })
     ]));
     expect(continuityNostrFilters()).toEqual([]);
+  });
+
+  it('matches the byte-exact serialized Go status, progress, and heartbeat envelopes', () => {
+    const filters = continuityNostrFilters({ serviceAuthors: [SERVICE_AUTHOR], operatorAuthors: [WORKER_AUTHOR] });
+    for (const envelope of envelopes) {
+      const produced = event({ ...envelope, id: 'c'.repeat(64), content: '{}' });
+      expect(produced.tags).toEqual(envelope.tags);
+      expect(filters.some((filter) => matchFilter(filter, produced)), JSON.stringify(envelope.tags)).toBe(true);
+      expect(filters.some((filter) => matchFilter(filter, { ...produced, tags: produced.tags.filter(([name]) => name !== 't') }))).toBe(false);
+    }
   });
 
   it('renders verified cached service events immediately and ignores an untrusted signer', async () => {

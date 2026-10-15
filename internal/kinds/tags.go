@@ -199,7 +199,13 @@ const AssistantSessionTopic = "assistant-session"
 // Continuity heartbeat observation topic. The heartbeat
 // producer stamps this on 30315 observations so the web client can scope
 // with #t instead of #domain.
-const ContinuityHeartbeatTopic = "continuity-heartbeat"
+const (
+	ContinuityFamilyTopic             = "continuity"
+	ContinuityStatusTopic             = "continuity-status"
+	ContinuityRecoveryProgressTopic   = "recovery-progress"
+	ContinuityDegradedActivationTopic = "degraded-mode-activation"
+	ContinuityHeartbeatTopic          = "continuity-heartbeat"
+)
 
 const (
 	SecurityScanStatusTopic = "security-scan-status"
