@@ -612,11 +612,7 @@ func (s *CredentialStore) readReplies(ctx context.Context) (caughtUp bool, err e
 	// Replies are backdated by up to two days, so the since bound must reach
 	// that far back; on a reissue after a dropped connection the resume
 	// cursor keeps the same reach, and the pool's dedupe absorbs replays.
-	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{{
-		Kinds: []nostr.Kind{signetKindGiftWrap},
-		Tags:  nostr.TagMap{"p": []string{s.clientPK.Hex()}},
-		Since: nostr.Timestamp(time.Now().Add(-signetReplyWindow).Unix()),
-	}}, nostrpool.SubscribeOptions{AwaitUnavailableRelays: true, ResumeOverlap: signetReplyWindow, ValidateEvent: s.plausibleReply})
+	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{signetReplyFilter(s.clientPK, nostr.Timestamp(time.Now().Add(-signetReplyWindow).Unix()))}, nostrpool.SubscribeOptions{AwaitUnavailableRelays: true, ResumeOverlap: signetReplyWindow, ValidateEvent: s.plausibleReply})
 	if err != nil {
 		return false, fmt.Errorf("subscribe to Signet replies: %w", err)
 	}

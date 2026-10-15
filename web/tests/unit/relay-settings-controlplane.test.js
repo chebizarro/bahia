@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { matchFilter } from 'nostr-tools/filter';
 import { RELAY_SETTINGS_TOPIC } from '../../src/lib/nostr/kinds.gen.js';
+import relayEnvelope from '../fixtures/relay-settings-envelope.json';
 
 const submitSensitiveIntentMock = vi.hoisted(() => vi.fn(async request => ({ intentId: request.intentId, pending: true })));
 const queryMock = vi.hoisted(() => vi.fn(() => []));
@@ -165,9 +166,12 @@ describe('relay settings control-plane helpers', () => {
       kind: 30900,
       pubkey: servicePubkey,
       created_at: 200,
-      tags: [['d', 'relay-settings:operator'], ['domain', 'relay-settings'], ['entity', 'relay-policy'], ['schema', 'bahia.relay-settings.v1'], ['t', RELAY_SETTINGS_TOPIC], ['status', 'applied'], ['p', 'f'.repeat(64)]],
+      tags: relayEnvelope.tags,
       content
     };
+    expect(produced.tags).toEqual(relayEnvelope.tags);
+    expect(produced.kind).toBe(relayEnvelope.kind);
+    expect(produced.pubkey).toBe(relayEnvelope.pubkey);
     const pretopic = { ...produced, id: 'f'.repeat(64), created_at: 100, tags: produced.tags.filter((tag) => tag[0] !== 't') };
     for (const event of [produced, pretopic]) {
       expect(matchFilter(filter, event)).toBe(true);

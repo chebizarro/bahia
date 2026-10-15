@@ -5847,7 +5847,7 @@ func newDocsRelayQuerier(pool *nostrAdapter.RelayPool, pubkey string, logger *za
 			Kinds:   []nostr.Kind{nostr.Kind(kinds.LongFormContent)},
 			Authors: []nostr.PubKey{parsedPubkey},
 			Tags: nostr.TagMap{
-				"t": []string{"bahia-docs"},
+				"t": []string{kinds.DocsTopic},
 			},
 		}
 

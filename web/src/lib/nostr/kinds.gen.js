@@ -443,6 +443,10 @@ export const ASSISTANT_TRANSCRIPT_TOPIC = 'assistant-transcript';
 export const ASSISTANT_TRANSCRIPT_SESSION_TOPIC_PREFIX = 'assistant-transcript:';
 export const ASSISTANT_STATUS_TOPIC = 'assistant-status';
 export const RELAY_SETTINGS_TOPIC = 'relay-settings';
+export const RELAY_SETTINGS_COORDINATE = 'relay-settings:operator';
+export const DOCS_TOPIC = 'bahia-docs';
+export const CONFIG_FABRIC_TOPIC = 'config-fabric';
+export const CONFIG_STATUS_TOPIC = 'config-status';
 // Assistant session-state topic.
 export const ASSISTANT_SESSION_TOPIC = 'assistant-session';
 // Security and SBOM observable topics.
@@ -454,6 +458,10 @@ export const SBOM_REFERENCE_TOPIC = 'sbom-reference';
 export const SBOM_AVAILABILITY_TOPIC = 'sbom-availability';
 // Release attestation topic.
 export const RELEASE_ATTESTATION_TOPIC = 'release-attestation';
+export const CONTINUITY_FAMILY_TOPIC = 'continuity';
+export const CONTINUITY_STATUS_TOPIC = 'continuity-status';
+export const CONTINUITY_RECOVERY_PROGRESS_TOPIC = 'recovery-progress';
+export const CONTINUITY_DEGRADED_ACTIVATION_TOPIC = 'degraded-mode-activation';
 export const CONTINUITY_HEARTBEAT_TOPIC = 'continuity-heartbeat';
 export const DNS_STATE_SCHEMA_BY_LEGACY_KIND = Object.freeze({
   [DNS_ZONE_STATE]: DNS_STATE_SCHEMAS.ZONE,

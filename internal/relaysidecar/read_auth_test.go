@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -411,11 +413,30 @@ func TestConfigStatusEvent_HasExpiration(t *testing.T) {
 		PolicyName: "relay-sidecar",
 		Version:    1,
 		Schema:     configRelaySchema,
-		EventID:    nostr.Generate().Public().Hex(), // arbitrary
+		EventID:    strings.Repeat("a", 64), // arbitrary
 		Author:     nostr.Generate().Public().Hex(),
 	}
 	err = consumer.publishStatus(context.Background(), projection, projection.EventID, "accepted", "")
 	require.NoError(t, err)
+
+	// The producer's serialized envelope must preserve the protected store-first #t contract.
+	data, err := os.ReadFile("../../web/tests/fixtures/config-fabric-envelopes.json")
+	require.NoError(t, err)
+	var fixtures []struct {
+		Kind int        `json:"kind"`
+		Tags nostr.Tags `json:"tags"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 2)
+	wireTags := append(nostr.Tags(nil), published.Tags...)
+	wireTags[len(wireTags)-1] = append(nostr.Tag(nil), wireTags[len(wireTags)-1]...)
+	require.Equal(t, "expiration", wireTags[len(wireTags)-1][0])
+	wireTags[len(wireTags)-1][1] = "2000000000" // expiry is wall-clock dependent
+	require.Equal(t, fixtures[1].Tags, wireTags)
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(fixtures[1].Kind)}, Tags: nostr.TagMap{"t": {kinds.ConfigStatusTopic}}}
+	require.True(t, filter.Matches(published))
+	filter.Tags["t"] = []string{"wrong"}
+	require.False(t, filter.Matches(published))
 
 	// Verify the d-tag is stable (does not include eventID or status).
 	expectedD := "config-status:test-svc:relay-sidecar:prod"

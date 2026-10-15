@@ -297,7 +297,7 @@ func composeConfigEvent(request ConfigPublishRequest, createdAt time.Time) (*nos
 	}
 	tags := nostr.Tags{
 		{"d", configDTag(request.ServiceID, request.PolicyName)},
-		{"t", "config-fabric"},
+		{"t", kinds.ConfigFabricTopic},
 		{"service", request.ServiceID},
 		{"scope", request.Scope},
 		{"version", strconv.Itoa(request.Version)},
@@ -770,7 +770,7 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	if err != nil || (schema != configStatusSchemaV3 && schema != configStatusSchema && schema != legacyConfigStatusSchema) {
 		return status, fmt.Errorf("invalid status schema tag")
 	}
-	if domain, err := exactlyOneTag(tags, "domain"); err != nil || domain != "config-status" {
+	if domain, err := exactlyOneTag(tags, "domain"); err != nil || domain != kinds.ConfigStatusTopic {
 		return status, fmt.Errorf("invalid status domain tag")
 	}
 	if tagged, err := exactlyOneTag(tags, "service"); err != nil || tagged != status.ServiceID {
@@ -797,7 +797,7 @@ func statusFromRecord(record repository.NostrEventRecord) (statusConfig, error) 
 	}
 	status.PolicyName = schemaMatch[1]
 	dTag, err := exactlyOneTag(tags, "d")
-	stableDTag := "config-status:" + status.ServiceID + ":" + status.PolicyName + ":" + status.Scope
+	stableDTag := kinds.ConfigStatusCoordinate(status.ServiceID, status.PolicyName, status.Scope)
 	// v3 uses a stable d per (service, policy, scope); v2 embeds eventID+status.
 	var expectedDTag string
 	switch schema {

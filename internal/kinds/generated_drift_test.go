@@ -86,12 +86,16 @@ func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
 		jsStrings[match[1]] = match[2]
 	}
 	for jsName, goValue := range map[string]string{
-		"BAHIA_CP_STATE_SCHEMA": CASControlStateSchema,
-		"DNS_STATE_DOMAIN":      DNSDomain,
-		"DNS_ZONE_TOPIC":        DNSZoneTopic,
-		"DNS_ENDPOINT_TOPIC":    DNSEndpointTopic,
-		"DNS_POLICY_TOPIC":      DNSPolicyTopic,
-		"DNS_BACKEND_TOPIC":     DNSBackendTopic,
+		"BAHIA_CP_STATE_SCHEMA":     CASControlStateSchema,
+		"DNS_STATE_DOMAIN":          DNSDomain,
+		"RELAY_SETTINGS_COORDINATE": RelaySettingsCoordinate,
+		"DOCS_TOPIC":                DocsTopic,
+		"CONFIG_FABRIC_TOPIC":       ConfigFabricTopic,
+		"CONFIG_STATUS_TOPIC":       ConfigStatusTopic,
+		"DNS_ZONE_TOPIC":            DNSZoneTopic,
+		"DNS_ENDPOINT_TOPIC":        DNSEndpointTopic,
+		"DNS_POLICY_TOPIC":          DNSPolicyTopic,
+		"DNS_BACKEND_TOPIC":         DNSBackendTopic,
 	} {
 		if got, ok := jsStrings[jsName]; !ok || got != goValue {
 			t.Fatalf("kinds.gen.js %s = %q (present=%t), want internal/kinds value %q", jsName, got, ok, goValue)

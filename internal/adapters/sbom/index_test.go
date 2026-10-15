@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/keyer"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -132,6 +134,7 @@ func TestBuildSBOMReferenceEvent(t *testing.T) {
 		t.Fatalf("BuildSBOMReferenceEvent failed: %v", err)
 	}
 
+	assertSBOMSerializedEnvelope(t, ev, 0, kinds.SBOMReferenceTopic)
 	if int(ev.Kind) != KindSBOMReference {
 		t.Errorf("Event kind = %d, want %d", ev.Kind, KindSBOMReference)
 	}
@@ -312,6 +315,7 @@ func TestBuildSBOMAvailabilityListEvent(t *testing.T) {
 		t.Fatalf("BuildSBOMAvailabilityListEvent failed: %v", err)
 	}
 
+	assertSBOMSerializedEnvelope(t, ev, 1, kinds.SBOMAvailabilityTopic)
 	expectedDTag := "sbom:available:artifact:" + SubjectKey(subject)
 	if dTag != expectedDTag {
 		t.Errorf("d-tag = %q, want %q", dTag, expectedDTag)
@@ -544,5 +548,42 @@ func TestIndexPublisher_QueuedPublishIsKept(t *testing.T) {
 	}
 	if len(mock.events) != 1 || eventID != mock.events[0].ID.Hex() {
 		t.Fatalf("expected the single queued event ID, got %q after %d publishes", eventID, len(mock.events))
+	}
+}
+
+func assertSBOMSerializedEnvelope(t *testing.T, event *nostr.Event, index int, topic string) {
+	t.Helper()
+	data, err := os.ReadFile("../../../web/tests/fixtures/sbom-envelopes.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures []struct {
+		Kind int        `json:"kind"`
+		Tags nostr.Tags `json:"tags"`
+	}
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixtures) != 2 {
+		t.Fatalf("fixtures = %d", len(fixtures))
+	}
+	actual, err := json.Marshal(event.Tags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := json.Marshal(fixtures[index].Tags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != string(expected) {
+		t.Fatalf("wire tags = %s, want %s", actual, expected)
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(fixtures[index].Kind)}, Tags: nostr.TagMap{"t": {topic}}}
+	if !filter.Matches(*event) {
+		t.Fatal("SBOM producer envelope did not match reader filter")
+	}
+	filter.Tags["t"] = []string{"wrong"}
+	if filter.Matches(*event) {
+		t.Fatal("SBOM producer envelope matched wrong topic")
 	}
 }

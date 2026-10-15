@@ -1,0 +1,4 @@
+[
+  {"kind":30078,"pubkey":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tags":[["d","service:khatru-relay:rate-limits"],["t","config-fabric"],["service","khatru-relay"],["scope","prod"],["version","7"],["schema","cascadia.config.rate-limits.v1"]]},
+  {"kind":30900,"pubkey":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","tags":[["d","config-status:test-svc:relay-sidecar:prod"],["domain","config-status"],["t","config-status"],["schema","cascadia.config.status.v3"],["status","accepted"],["service","test-svc"],["scope","prod"],["version","1"],["e","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],["expiration","2000000000"]]}
+]

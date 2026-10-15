@@ -739,9 +739,9 @@ func (c *ConfigConsumer) publishStatus(ctx context.Context, projection ConfigPro
 		Kind:      configStatusKind,
 		CreatedAt: createdAt,
 		Tags: nostr.Tags{
-			{"d", "config-status:" + projection.ServiceID + ":" + projection.PolicyName + ":" + projection.Scope},
-			{"domain", "config-status"},
-			{"t", "config-status"},
+			{"d", kinds.ConfigStatusCoordinate(projection.ServiceID, projection.PolicyName, projection.Scope)},
+			{"domain", kinds.ConfigStatusTopic},
+			{"t", kinds.ConfigStatusTopic},
 			{"schema", configStatusSchema},
 			{"status", status},
 			{"service", projection.ServiceID},

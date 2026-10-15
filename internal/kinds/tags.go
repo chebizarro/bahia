@@ -1,9 +1,17 @@
 package kinds
 
 const (
+	DocsTopic         = "bahia-docs"
+	ConfigFabricTopic = "config-fabric"
+	ConfigStatusTopic = "config-status"
 	IntentTopic       = "bahia-intent"
 	IntentStatusTopic = "intent-status"
 )
+
+// ConfigStatusCoordinate is the stable addressable status coordinate.
+func ConfigStatusCoordinate(service, policy, scope string) string {
+	return "config-status:" + service + ":" + policy + ":" + scope
+}
 
 // IntentStatusCoordinate is the bounded NIP-38 status coordinate for an entity.
 func IntentStatusCoordinate(actor, coordinate string) string {
@@ -83,7 +91,8 @@ const (
 	// AssistantStatusTopic is on every 30315 assistant status.
 	AssistantStatusTopic = "assistant-status"
 	// RelaySettingsTopic is on the relay-settings operator policy (30900).
-	RelaySettingsTopic = "relay-settings"
+	RelaySettingsTopic      = "relay-settings"
+	RelaySettingsCoordinate = "relay-settings:operator"
 )
 
 // AssistantTranscriptSessionTopic is the "t" topic scoping one session's
@@ -192,7 +201,13 @@ const AssistantSessionTopic = "assistant-session"
 // Continuity heartbeat observation topic. The heartbeat
 // producer stamps this on 30315 observations so the web client can scope
 // with #t instead of #domain.
-const ContinuityHeartbeatTopic = "continuity-heartbeat"
+const (
+	ContinuityFamilyTopic             = "continuity"
+	ContinuityStatusTopic             = "continuity-status"
+	ContinuityRecoveryProgressTopic   = "recovery-progress"
+	ContinuityDegradedActivationTopic = "degraded-mode-activation"
+	ContinuityHeartbeatTopic          = "continuity-heartbeat"
+)
 
 const (
 	SecurityScanStatusTopic = "security-scan-status"

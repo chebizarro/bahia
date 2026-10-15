@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import configEnvelopes from '../fixtures/config-fabric-envelopes.json';
+import sbomEnvelopes from '../fixtures/sbom-envelopes.json';
 import { CP_STATE_TOPICS, BACKUP_RUN_ATTESTATION, BACKUP_VERIFICATION_ATTESTATION, CAS_CONTROL_STATE, DASHBOARD_WIDGET, SBOM_REFERENCE, SBOM_AVAILABILITY_LIST } from '../../src/lib/nostr/kinds.gen.js';
 
 const bridge = vi.hoisted(() => ({ subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })) }));
@@ -14,6 +17,7 @@ afterEach(() => { teardownStoreFirstSubscriptions(); bridge.subscribe.mockClear(
 const calls = () => bridge.subscribe.mock.calls.map(([args]) => args);
 const publicReq = () => calls()[0];
 const protectedReq = () => calls()[1];
+const protectedFiltersForTest = () => { initStoreFirstSubscriptions(); return protectedReq().filters; };
 
 describe('store-first relay subscriptions', () => {
   it('subscribes once: a public REQ for open cp-state topics and a protected REQ for NIP-42 read models', () => {
@@ -36,6 +40,24 @@ describe('store-first relay subscriptions', () => {
     for (const filter of [...publicReq().filters, ...protectedReq().filters]) {
       if (filter['#t']?.includes('config-fabric')) expect(filter.authors).toBeUndefined();
       else expect(filter.authors).toEqual(['b'.repeat(64)]);
+    }
+  });
+
+  it('matches the serialized desired and status producer envelopes by exact protected filters', () => {
+    const filters = (protectedFiltersForTest());
+    for (const envelope of configEnvelopes) {
+      const event = { ...envelope, id: 'a'.repeat(64), created_at: 100, content: '' };
+      expect(filters.some((filter) => matchFilter(filter, event)), JSON.stringify(envelope.tags)).toBe(true);
+      expect(filters.some((filter) => matchFilter(filter, { ...event, tags: event.tags.filter(([name]) => name !== 't') }))).toBe(false);
+    }
+  });
+
+  it('matches serialized SBOM producer envelopes with their protected filters', () => {
+    const filters = protectedFiltersForTest();
+    for (const envelope of sbomEnvelopes) {
+      const produced = { ...envelope, id: 'a'.repeat(64), created_at: 100, content: '' };
+      expect(filters.some((filter) => matchFilter(filter, produced)), JSON.stringify(envelope.tags)).toBe(true);
+      expect(filters.some((filter) => matchFilter(filter, { ...produced, tags: produced.tags.filter(([name]) => name !== 't') }))).toBe(false);
     }
   });
 

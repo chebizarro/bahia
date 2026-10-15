@@ -10,6 +10,8 @@ import {
   CAS_CONTROL_STATE,
   CONFIG_ACL_LIST,
   CONFIG_POLICY,
+  CONFIG_FABRIC_TOPIC,
+  CONFIG_STATUS_TOPIC,
   CP_AUDIT_TOPIC,
   DASHBOARD_WIDGET,
   CP_STATE_TOPICS,
@@ -96,8 +98,8 @@ function publicFilters(servicePubkey, recent) {
 function protectedFilters(servicePubkey, recent, widgetAuthors) {
   return [
     { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [CP_STATE_TOPICS.SOUL_RUNTIME_POLICY], limit: 50 },
-    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': ['config-status'], limit: 500 },
-    { kinds: [CONFIG_ACL_LIST, CONFIG_POLICY], '#t': ['config-fabric'], limit: 500 },
+    { kinds: [CAS_CONTROL_STATE], authors: [servicePubkey], '#t': [CONFIG_STATUS_TOPIC], limit: 500 },
+    { kinds: [CONFIG_ACL_LIST, CONFIG_POLICY], '#t': [CONFIG_FABRIC_TOPIC], limit: 500 },
     { kinds: BAHIA_AUDIT_KINDS, authors: [servicePubkey], '#t': [CP_AUDIT_TOPIC, CP_STATE_TOPICS.MANAGED_INSTANCE_HEALTH, CP_STATE_TOPICS.ROUTE_CANARY], since: recent, limit: 500 },
     { kinds: [SBOM_REFERENCE], authors: [servicePubkey], '#t': [SBOM_REFERENCE_TOPIC], limit: 200 },
     { kinds: [SBOM_AVAILABILITY_LIST], authors: [servicePubkey], '#t': [SBOM_AVAILABILITY_TOPIC], limit: 200 },
