@@ -7,6 +7,7 @@
  */
 import { boot, getEventStore } from '$lib/nostr/boot.js';
 import { KINDS } from '$lib/nostr/kinds.js';
+import { DOCS_TOPIC } from '$lib/nostr/kinds.gen.js';
 import { nostr } from '$lib/nostr/subscriptions.js';
 import { dedupeReplaceableEvents } from '$lib/nostr/replaceable.js';
 import { getDTag, getTagValue, getTagValues } from '$lib/nostr/tags.js';
@@ -23,10 +24,10 @@ async function fetchDocsEvents({ bypassCache = false } = {}) {
   const publishers = getBootstrapSeed()?.service_pubkeys || [];
   if (!publishers.length) throw new Error('Documentation publisher not configured');
   await boot();
-  const filter = { kinds: [KINDS.LONG_FORM_CONTENT], '#t': ['bahia-docs'], authors: publishers };
+  const filter = { kinds: [KINDS.LONG_FORM_CONTENT], '#t': [DOCS_TOPIC], authors: publishers };
   const trusted = new Set(publishers);
   const isTrustedDoc = (event) => event?.kind === KINDS.LONG_FORM_CONTENT && trusted.has(event.pubkey)
-    && event.tags?.some((tag) => tag[0] === 't' && tag[1] === 'bahia-docs');
+    && event.tags?.some((tag) => tag[0] === 't' && tag[1] === DOCS_TOPIC);
   const stored = (getEventStore()?.query(filter) || []).filter(isTrustedDoc);
   if (stored.length && !bypassCache) {
     return { events: dedupeReplaceableEvents(stored), complete: false,
@@ -253,7 +254,7 @@ function parseDocTopic(event) {
   if (!topic) return null;
 
   const title = getTagValue(event, 'title', topic);
-  const categories = getTagValues(event, 't').filter((t) => t !== 'bahia-docs');
+  const categories = getTagValues(event, 't').filter((t) => t !== DOCS_TOPIC);
   const category = categories[0] || 'guide';
 
   return {

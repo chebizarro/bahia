@@ -88,6 +88,7 @@ func TestGeneratedFrontendControlStateStringsMatchGo(t *testing.T) {
 	for jsName, goValue := range map[string]string{
 		"BAHIA_CP_STATE_SCHEMA": CASControlStateSchema,
 		"DNS_STATE_DOMAIN":      DNSDomain,
+		"DOCS_TOPIC":            DocsTopic,
 		"CONFIG_FABRIC_TOPIC":   ConfigFabricTopic,
 		"CONFIG_STATUS_TOPIC":   ConfigStatusTopic,
 		"DNS_ZONE_TOPIC":        DNSZoneTopic,

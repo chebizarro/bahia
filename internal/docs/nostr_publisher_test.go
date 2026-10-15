@@ -2,6 +2,7 @@ package docs
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,6 +251,39 @@ func TestNostrDocsPublisher_NIP23EventStructure(t *testing.T) {
 	}
 
 	ev := events[0]
+	data, err := os.ReadFile("../../web/tests/fixtures/docs-envelope.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Kind int        `json:"kind"`
+		Tags nostr.Tags `json:"tags"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	actualTags := append(nostr.Tags(nil), ev.Tags...)
+	actualTags[4] = append(nostr.Tag(nil), actualTags[4]...)
+	actualTags[4][1] = "0" // published_at is the current wall clock
+	actual, err := json.Marshal(actualTags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected, err := json.Marshal(fixture.Tags)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(actual) != string(expected) {
+		t.Fatalf("serialized docs tags = %s, want %s", actual, expected)
+	}
+	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(fixture.Kind)}, Tags: nostr.TagMap{"t": {kinds.DocsTopic}}}
+	if !filter.Matches(*ev) {
+		t.Fatal("publisher event did not match docs reader filter")
+	}
+	filter.Tags["t"] = []string{"wrong"}
+	if filter.Matches(*ev) {
+		t.Fatal("publisher event matched wrong docs topic")
+	}
 
 	// Verify NIP-23 structure.
 	if ev.Kind != 30023 {

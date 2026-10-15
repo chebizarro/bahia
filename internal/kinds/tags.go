@@ -1,6 +1,7 @@
 package kinds
 
 const (
+	DocsTopic         = "bahia-docs"
 	ConfigFabricTopic = "config-fabric"
 	ConfigStatusTopic = "config-status"
 	IntentTopic       = "bahia-intent"

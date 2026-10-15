@@ -179,7 +179,7 @@ func (p *NostrDocsPublisher) publishTopic(ctx context.Context, doc Document, has
 			{"d", doc.Topic.Topic},
 			{"title", doc.Topic.Title},
 			{"t", doc.Topic.Category},
-			{"t", "bahia-docs"},
+			{"t", kinds.DocsTopic},
 			{"published_at", strconv.FormatInt(now.Unix(), 10)},
 			{"summary", fmt.Sprintf("Bahia documentation: %s", doc.Topic.Title)},
 			{"content-hash", hash},

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import docsEnvelope from '../fixtures/docs-envelope.json';
 
 const trustMock = vi.hoisted(() => ({ publishers: ['a'.repeat(64)], stored: [] }));
 
@@ -71,6 +73,14 @@ describe('Nostr documentation client', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('matches the serialized Go docs publisher envelope with its reader filter', async () => {
+    await fetchDocsCatalog();
+    const filter = subscriptionsMock.nostr.subscribeWithRecovery.mock.calls.at(-1)[0][0];
+    const produced = { ...docsEnvelope, id: 'b'.repeat(64), created_at: 100, content: '# Test Topic' };
+    expect(matchFilter(filter, produced)).toBe(true);
+    expect(matchFilter(filter, { ...produced, tags: produced.tags.filter(([name, value]) => name !== 't' || value !== 'bahia-docs') })).toBe(false);
   });
 
   it('ignores an empty docs cache and queries relay-backed NIP-23 events', async () => {
