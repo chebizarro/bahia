@@ -135,11 +135,7 @@ func (s *managementReplyStream) supervise(ctx context.Context) {
 }
 
 func (s *managementReplyStream) readReplies(ctx context.Context) (caughtUp bool, err error) {
-	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{{
-		Kinds: []nostr.Kind{signetKindGiftWrap},
-		Tags:  nostr.TagMap{"p": []string{s.provisioner.Hex()}},
-		Since: nostr.Timestamp(time.Now().Add(-signetReplyWindow).Unix()),
-	}}, nostrpool.SubscribeOptions{AwaitUnavailableRelays: true, ResumeOverlap: signetReplyWindow, ValidateEvent: s.plausibleReply})
+	sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{signetReplyFilter(s.provisioner, nostr.Timestamp(time.Now().Add(-signetReplyWindow).Unix()))}, nostrpool.SubscribeOptions{AwaitUnavailableRelays: true, ResumeOverlap: signetReplyWindow, ValidateEvent: s.plausibleReply})
 	if err != nil {
 		return false, fmt.Errorf("subscribe to Signet management replies: %w", err)
 	}

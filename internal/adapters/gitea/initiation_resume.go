@@ -160,14 +160,15 @@ func (i *Initiator) dispatchJob(ctx context.Context, rec *InitiationRecord) erro
 	return i.advance(ctx, rec, StageJobPublished)
 }
 
+func loomJobConfirmationFilter(author nostr.PubKey, runEventID string) nostr.Filter {
+	return nostr.Filter{Authors: []nostr.PubKey{author}, Kinds: []nostr.Kind{nostr.Kind(kinds.LoomJobRequest)}, Tags: nostr.TagMap{"e": {runEventID}}}
+}
+
 func (i *Initiator) confirmJob(ctx context.Context, rec *InitiationRecord) error {
 	if rec.RunEvent == nil || rec.LoomJob == nil {
 		return fmt.Errorf("%w: missing prepared Loom identity", ErrPublishUnconfirmed)
 	}
-	event, err := i.inspect(ctx, nostr.Filter{
-		Authors: []nostr.PubKey{rec.RunEvent.PubKey}, Kinds: []nostr.Kind{nostr.Kind(kinds.LoomJobRequest)},
-		Tags: nostr.TagMap{"e": []string{rec.Result.CIRunID}},
-	})
+	event, err := i.inspect(ctx, loomJobConfirmationFilter(rec.RunEvent.PubKey, rec.Result.CIRunID))
 	if err != nil {
 		return err
 	}

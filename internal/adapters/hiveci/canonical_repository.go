@@ -144,7 +144,7 @@ func (r *CanonicalRepository) FindWorkflowRun(_ context.Context, repoCoordinate,
 	if err := r.available(); err != nil {
 		return nil, err
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.HiveCIWorkflowRun)}, Tags: nostr.TagMap{"a": []string{repoCoordinate}}, Limit: evidenceQueryLimit}
+	filter := workflowRunsForRepoFilter(repoCoordinate)
 	for ev := range r.events.QueryEvents(filter) {
 		candidate := ev
 		run := r.runFromEvent(&candidate)
@@ -250,7 +250,7 @@ func (r *CanonicalRepository) GetLatestResultByRunEventID(ctx context.Context, r
 	if err := r.available(); err != nil {
 		return nil, err
 	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.HiveCIWorkflowResult)}, Tags: nostr.TagMap{"e": []string{runEventID}}, Limit: evidenceQueryLimit}
+	filter := workflowResultsForRunFilter(runEventID)
 	for ev := range r.events.QueryEvents(filter) {
 		candidate := ev
 		result, err := r.resultFromEvent(ctx, &candidate)
@@ -716,4 +716,12 @@ func (r *CanonicalRepository) RebuildIndex(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failed...)
+}
+
+func workflowRunsForRepoFilter(repoCoordinate string) nostr.Filter {
+	return nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.HiveCIWorkflowRun)}, Tags: nostr.TagMap{"a": {repoCoordinate}}, Limit: evidenceQueryLimit}
+}
+
+func workflowResultsForRunFilter(runEventID string) nostr.Filter {
+	return nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.HiveCIWorkflowResult)}, Tags: nostr.TagMap{"e": {runEventID}}, Limit: evidenceQueryLimit}
 }

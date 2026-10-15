@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import externalEnvelopes from '../fixtures/external-web-envelopes.json';
 
 const systemInfoMock = vi.hoisted(() => ({
   loadSystemInfo: vi.fn()
@@ -149,6 +151,14 @@ describe('DNS dashboard Nostr subscription store', () => {
       supported_nips: [1, 11, 42],
       advisory_limitations: { auth_required: true, payment_required: true, restricted_writes: true, max_limit: 25 }
     });
+  });
+
+  it('matches representative external NIP-66 discovery tags with the trusted #d filter', () => {
+    const filter = store.relayMonitorFilters(['wss://relay.example'], ['a'.repeat(64)])[1];
+    const fixture = externalEnvelopes.nip66_discovery;
+    const produced = { ...fixture, id: 'b'.repeat(64), created_at: 100, content: '{}' };
+    expect(matchFilter(filter, produced)).toBe(true);
+    expect(matchFilter(filter, { ...produced, tags: produced.tags.map((tag) => tag[0] === 'd' ? ['d', 'wss://wrong.example'] : tag) })).toBe(false);
   });
 
   it('subscribes to NIP-66 monitor events only for configured trusted monitor pubkeys', async () => {

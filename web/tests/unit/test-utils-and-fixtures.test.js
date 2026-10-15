@@ -1,4 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { matchFilter } from 'nostr-tools/filter';
+import externalEnvelopes from '../fixtures/external-web-envelopes.json';
 
 const nostrMock = vi.hoisted(() => ({
   subscribeWithRecovery: vi.fn(),
@@ -73,6 +75,20 @@ describe('Nostr branch behavior coverage', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('matches representative external NIP-34 state tags with the branch #d filter', async () => {
+    let readerFilter;
+    nostrMock.subscribeWithRecovery.mockImplementation((filters, handlers) => {
+      readerFilter = filters[0];
+      handlers.onEose?.('wss://repo.example');
+      return vi.fn();
+    });
+    await fetchRepoBranches(repoCoordinate(), { timeout: 0 });
+    const fixture = externalEnvelopes.nip34_state;
+    const produced = { ...fixture, id: 'b'.repeat(64), created_at: 100, content: '' };
+    expect(matchFilter(readerFilter, produced)).toBe(true);
+    expect(matchFilter(readerFilter, { ...produced, tags: produced.tags.map((tag) => tag[0] === 'd' ? ['d', 'wrong'] : tag) })).toBe(false);
   });
 
   it('fetches repository branches from explicit NIP-34 relay URLs, settles on EOSE, and stays subscribed', async () => {
