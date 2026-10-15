@@ -26,7 +26,7 @@ RUN npm run build
 
 # Runtime stage
 # nginx:alpine
-FROM nginx:alpine@sha256:62ff2089abf5a9ed33bd232895bef5e22f7bb4b200675cec49a5ebc48e3d4ac8
+FROM nginx:alpine@sha256:72aeb3308ef6cb3118242fb16389518923916dfa206e32d1a8377acc328b9870
 
 ARG PUBLIC_BAHIA_GIT_COMMIT="dev"
 ARG PUBLIC_BAHIA_WEB_VERSION=""
