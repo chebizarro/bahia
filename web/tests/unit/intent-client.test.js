@@ -40,8 +40,10 @@ function fixture() {
 function status(intent, state, reason = '', extra = {}, coordinate = `intent-status:${requesterPubkey}:${intent.coordinate}`) {
   return finalizeEvent({ kind: 30315, created_at: Math.floor(Date.now() / 1000),
     tags: [['d', coordinate], ['p', requesterPubkey],
-      ['t', 'intent-status'], ['intent_id', intent.intentId], ['status', state]],
-    content: JSON.stringify({ reason, ...extra }) }, serviceSecret);
+      ['t', 'intent-status'], ['intent_id', intent.intentId], ['status', state],
+      ...(intent.domain === 'backup' ? [['e', intent.event.id]] : [])],
+    content: JSON.stringify({ reason, ...(intent.domain === 'backup' ? { intent_id: intent.intentId } : {}),
+      ...(intent.domain === 'backup' && state === 'accepted' ? { coordinate: intent.coordinate } : {}), ...extra }) }, serviceSecret);
 }
 
 function untilPending(client, predicate) {
@@ -76,11 +78,39 @@ describe('intent client wiring', () => {
     expect(poolSubscriptions[0].filters[0]['#d']).toEqual([privateCoordinate,
       `intent-status:${requesterPubkey}:backup-run:one`]);
     const waiting = client.waitForStatus(submitted);
+    expect(await client.pending.handleStatus(status({ ...submitted, event: { id: 'wrong-request' } },
+      'rejected', 'access_denied', {}, privateCoordinate))).toBe(false);
+    expect(await client.pending.handleStatus(status(submitted, 'rejected', 'access_denied'))).toBe(false);
+    expect(await client.pending.handleStatus(status(submitted, 'accepted', '', {}, privateCoordinate))).toBe(false);
+    expect(await client.pending.handleStatus(status(submitted, 'rejected', 'access_denied',
+      { coordinate: submitted.coordinate }, privateCoordinate))).toBe(false);
     store.ingest(status(submitted, 'rejected', 'access_denied', {}, privateCoordinate));
     await expect(waiting).rejects.toThrow('access_denied');
     expect(client.pending.query()[0]).toMatchObject({ status: 'rejected', reason: 'access_denied' });
     await client.pending.handleStatus(status(submitted, 'accepted'));
     expect(client.pending.query()).toEqual([]);
+    client.close();
+  });
+
+  it('accepts a backup-run status after the broad reader removes its pending row', async () => {
+    const { client, store } = fixture(); await client.open();
+    const submitted = await client.submit({ domain: 'backup', op: 'run', coordinate: 'backup-run:accepted',
+      orgId, content: { id: 'accepted' } });
+    const waiting = client.waitForStatus(submitted);
+    store.ingest(status(submitted, 'accepted'));
+    await expect(waiting).resolves.toMatchObject({ coordinate: submitted.coordinate });
+    expect(client.pending.query()).toEqual([]);
+    client.close();
+  });
+
+  it('binds a pre-submit backup-run waiter to the signed event once submitted', async () => {
+    const { client, store } = fixture(); await client.open();
+    const request = { domain: 'backup', op: 'run', coordinate: 'backup-run:pre-submit', intentId: 'intent-pre-submit',
+      orgId, content: { id: 'pre-submit' } };
+    const waiting = client.waitForStatus(request);
+    const submitted = await client.submit(request);
+    store.ingest(status(submitted, 'accepted'));
+    await expect(waiting).resolves.toMatchObject({ coordinate: request.coordinate });
     client.close();
   });
 

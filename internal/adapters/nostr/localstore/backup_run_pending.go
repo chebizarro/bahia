@@ -218,7 +218,10 @@ func (o *Outbox) GetBackupRunPending(intentID, coordinate, requestEventID string
 				if record.State != BackupRunRefusedState || raw == nil || json.Unmarshal(raw, &proof) != nil ||
 					!proof.ValidFor(proof.Event, record.StatusTarget) || proof.Event.ID != id ||
 					proof.Event.PubKey.Hex() != record.ServicePubkey || !isBackupRunRefusedStatusEvent(proof.Event) ||
-					outboxTag(proof.Event.Tags, "d") != "intent-status:"+record.Actor+":"+record.Coordinate ||
+					outboxTag(proof.Event.Tags, "d") != kinds.IntentPrivateStatusCoordinate(record.Actor, "backup", record.IntentID) ||
+					!oneBackupRunTag(proof.Event.Tags, "p", record.Actor) ||
+					!oneBackupRunTag(proof.Event.Tags, "intent_id", record.IntentID) ||
+					!oneBackupRunTag(proof.Event.Tags, "e", record.RequestEvent.ID.Hex()) ||
 					string(tx.Bucket(backupRunStatusEventsBucket).Get([]byte(record.StatusEventID))) != intentID {
 					return fmt.Errorf("backup run refusal lacks exact relay quorum proof")
 				}
@@ -231,6 +234,11 @@ func (o *Outbox) GetBackupRunPending(intentID, coordinate, requestEventID string
 				raw := tx.Bucket(outboxEntriesBucket).Get(id[:])
 				if record.State != BackupRunRefusedState || raw == nil || json.Unmarshal(raw, &entry) != nil || entry.Event.ID != id ||
 					entry.Target != record.StatusTarget || entry.Event.PubKey.Hex() != record.ServicePubkey ||
+					!entry.Event.CheckID() || !entry.Event.VerifySignature() ||
+					!oneBackupRunTag(entry.Event.Tags, "d", kinds.IntentPrivateStatusCoordinate(record.Actor, "backup", record.IntentID)) ||
+					!oneBackupRunTag(entry.Event.Tags, "p", record.Actor) ||
+					!oneBackupRunTag(entry.Event.Tags, "intent_id", record.IntentID) ||
+					!oneBackupRunTag(entry.Event.Tags, "e", record.RequestEvent.ID.Hex()) ||
 					string(tx.Bucket(backupRunStatusEventsBucket).Get([]byte(record.StatusEventID))) != intentID {
 					return fmt.Errorf("backup run refusal lacks its retryable signed outbox entry")
 				}
@@ -555,7 +563,7 @@ func (o *Outbox) StageBackupRunRefusedStatus(record BackupRunPending, event nost
 	if record.State != BackupRunRefusedState || !validBackupRunPendingIdentity(record) ||
 		!event.CheckID() || !event.VerifySignature() || event.PubKey.Hex() != record.ServicePubkey ||
 		!isBackupRunRefusedStatusEvent(event) ||
-		!oneBackupRunTag(event.Tags, "d", "intent-status:"+record.Actor+":"+record.Coordinate) ||
+		!oneBackupRunTag(event.Tags, "d", kinds.IntentPrivateStatusCoordinate(record.Actor, "backup", record.IntentID)) ||
 		!oneBackupRunTag(event.Tags, "status", "rejected") ||
 		!oneBackupRunTag(event.Tags, "domain", "intent") ||
 		!oneBackupRunTag(event.Tags, "t", "intent-status") ||
@@ -571,8 +579,10 @@ func (o *Outbox) StageBackupRunRefusedStatus(record BackupRunPending, event nost
 		Result     string `json:"result"`
 		Reason     string `json:"reason"`
 	}
-	if json.Unmarshal([]byte(event.Content), &content) != nil || content.IntentID != record.IntentID ||
-		content.Coordinate != record.Coordinate || content.Result != "rejected" || content.Reason != record.LastFailure || content.Reason == "" {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(event.Content), &content) != nil || json.Unmarshal([]byte(event.Content), &fields) != nil ||
+		content.IntentID != record.IntentID || content.Coordinate != "" || content.Result != "rejected" ||
+		content.Reason != "access_denied" || fields["coordinate"] != nil {
 		return "", false, fmt.Errorf("backup run refusal content does not match the ledger")
 	}
 	entry := OutboxEntry{Event: event, Target: target, EntityType: "backup_run.status", EnqueuedAt: time.Now().UTC(), State: OutboxPending}
@@ -604,7 +614,11 @@ func (o *Outbox) StageBackupRunRefusedStatus(record BackupRunPending, event nost
 		if err != nil {
 			return err
 		}
-		if event.CreatedAt <= floor {
+		privateFloor, err := backupRunStatusTimestampFloor(tx, backupRunStatusEventClockKey(event))
+		if err != nil {
+			return err
+		}
+		if event.CreatedAt <= max(floor, privateFloor) {
 			return fmt.Errorf("backup run refusal is not newer than the durable coordinate floor")
 		}
 		if tx.Bucket(outboxEntriesBucket).Get(event.ID[:]) != nil {
@@ -625,6 +639,9 @@ func (o *Outbox) StageBackupRunRefusedStatus(record BackupRunPending, event nost
 			return err
 		}
 		if err := recordBackupRunStatusTimestamp(tx, event); err != nil {
+			return err
+		}
+		if err := recordBackupRunCoordinateStatusTimestamp(tx, event, current.Coordinate); err != nil {
 			return err
 		}
 		current.StatusEventID = event.ID.Hex()

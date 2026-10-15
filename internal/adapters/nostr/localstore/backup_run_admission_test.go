@@ -3,6 +3,7 @@ package localstore
 import (
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,10 +19,12 @@ func TestBackupRunStatusPublicationReservesBeforeRelayAndSerializesAdmission(t *
 	service := nostr.Generate()
 	actor := nostr.Generate().Public().Hex()
 	coordinate := "backup-run:" + uuid.NewString()
+	requestID := nostr.Generate().Public().Hex()
 	status := signed(t, service, 30315, nostr.Now(), nostr.Tags{
-		{"d", "intent-status:" + actor + ":" + coordinate}, {"domain", "intent"},
+		{"d", kinds.IntentPrivateStatusCoordinate(actor, "backup", "intent-race")}, {"domain", "intent"},
 		{"t", "intent-status"}, {"status", "rejected"}, {"p", actor},
-	}, `{"result":"rejected"}`)
+		{"intent_id", "intent-race"}, {"e", requestID},
+	}, `{"intent_id":"intent-race","result":"rejected","reason":"access_denied"}`)
 	relayEntered := make(chan struct{})
 	releaseRelay := make(chan struct{})
 	released := false
@@ -32,7 +35,7 @@ func TestBackupRunStatusPublicationReservesBeforeRelayAndSerializesAdmission(t *
 	}()
 	gateDone := make(chan error, 1)
 	go func() {
-		gateDone <- outbox.PublishUnadmittedBackupRunStatus(coordinate, status, func() error {
+		gateDone <- outbox.PublishUnadmittedBackupRunStatus(coordinate, requestID, status, func() error {
 			close(relayEntered)
 			<-releaseRelay
 			return errors.New("relay accepted but outbox admission failed")
@@ -46,7 +49,6 @@ func TestBackupRunStatusPublicationReservesBeforeRelayAndSerializesAdmission(t *
 		outbox.shared.backupRunStatusMu.Unlock()
 		t.Fatal("run admission could pass an in-flight status publication")
 	}
-	requestID := nostr.Generate().Public().Hex()
 	state := signed(t, service, nostr.Kind(kinds.CASControlState), nostr.Now(), nostr.Tags{
 		{"d", coordinate}, {"t", kinds.CPStateTopicBackupRun}, {"domain", "backup"},
 		{"schema", kinds.CASControlStateSchema}, {"legacy_kind", "31996"}, {"deleted", "false"},
@@ -64,10 +66,59 @@ func TestBackupRunStatusPublicationReservesBeforeRelayAndSerializesAdmission(t *
 	require.NoError(t, err)
 	require.Equal(t, status.CreatedAt, floor, "a failed post-relay outbox write cannot erase the ordering reservation")
 	published := false
-	later := signed(t, service, 30315, status.CreatedAt+1, status.Tags, `{"result":"rejected"}`)
-	err = outbox.PublishUnadmittedBackupRunStatus(coordinate, later, func() error { published = true; return nil })
+	later := signed(t, service, 30315, status.CreatedAt+1, status.Tags, status.Content)
+	err = outbox.PublishUnadmittedBackupRunStatus(coordinate, requestID, later, func() error { published = true; return nil })
 	require.ErrorContains(t, err, "immutable admission outcome")
 	require.False(t, published, "an admitted coordinate must not be published after the lock is released")
+}
+
+func TestBackupRunStatusGateRejectsWrongEnvelopeAndPendingRequest(t *testing.T) {
+	outbox, _ := openTempOutbox(t)
+	service, actor := nostr.Generate(), nostr.Generate()
+	coordinate := "backup-run:" + uuid.NewString()
+	intentID := "intent-" + uuid.NewString()
+	createdAt := nostr.Now()
+	expiresAt := createdAt.Time().Add(5 * time.Minute)
+	request := signed(t, actor, nostr.Kind(kinds.CASControlState), createdAt, nostr.Tags{
+		{"d", coordinate}, {"intent_id", intentID}, {"expiration", strconv.FormatInt(expiresAt.Unix(), 10)},
+	}, `{}`)
+	_, inserted, err := outbox.PutBackupRunPending(BackupRunPending{IntentID: intentID, Coordinate: coordinate,
+		RequestEvent: request, Actor: actor.Public().Hex(), ServicePubkey: service.Public().Hex(),
+		ReceivedAt: createdAt.Time(), ExpiresAt: expiresAt})
+	require.NoError(t, err)
+	require.True(t, inserted)
+	makeStatus := func(d, status, eventID, content string) nostr.Event {
+		return signed(t, service, 30315, createdAt+1, nostr.Tags{
+			{"d", d}, {"domain", "intent"}, {"t", "intent-status"}, {"status", status},
+			{"p", actor.Public().Hex()}, {"intent_id", intentID}, {"e", eventID},
+		}, content)
+	}
+	private := kinds.IntentPrivateStatusCoordinate(actor.Public().Hex(), "backup", intentID)
+	body := `{"intent_id":"` + intentID + `","result":"rejected","reason":"access_denied"}`
+	for _, tc := range []struct{ name, d, status, eventID, content string }{
+		{"ordinary-rejection", kinds.IntentStatusCoordinate(actor.Public().Hex(), coordinate), "rejected", request.ID.Hex(), body},
+		{"wrong-request", private, "rejected", nostr.Generate().Public().Hex(), body},
+		{"leaked-coordinate", private, "rejected", request.ID.Hex(), `{"intent_id":"` + intentID + `","coordinate":"` + coordinate + `","result":"rejected"}`},
+		{"private-acceptance", private, "accepted", request.ID.Hex(), `{"intent_id":"` + intentID + `","coordinate":"` + coordinate + `","result":"applied"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			err := outbox.PublishUnadmittedBackupRunStatus(coordinate, request.ID.Hex(), makeStatus(tc.d, tc.status, tc.eventID, tc.content),
+				func() error { called = true; return nil })
+			require.Error(t, err)
+			require.False(t, called)
+			floor, err := outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor.Public().Hex(), coordinate)
+			require.NoError(t, err)
+			require.Zero(t, floor)
+		})
+	}
+	called := false
+	require.NoError(t, outbox.PublishUnadmittedBackupRunStatus(coordinate, request.ID.Hex(),
+		makeStatus(private, "rejected", request.ID.Hex(), body), func() error { called = true; return nil }))
+	require.True(t, called)
+	floor, err := outbox.BackupRunStatusTimestampFloor(service.Public().Hex(), actor.Public().Hex(), coordinate)
+	require.NoError(t, err)
+	require.Equal(t, createdAt+1, floor)
 }
 
 func TestBackupRunAdmissionScanSkipsMalformedRecordWithoutStarvingLaterACK(t *testing.T) {

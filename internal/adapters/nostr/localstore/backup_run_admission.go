@@ -122,14 +122,13 @@ func (o *Outbox) GetBackupRunAdmission(intentID, coordinate, requestEventID stri
 // PublishUnadmittedBackupRunStatus prevents an in-flight generic rejection
 // from racing a newly staged run. It reserves the signed status timestamp
 // before relay I/O, so even a relay success followed by outbox failure cannot
-// leave the later accepted result tied or older on the NIP-01 coordinate.
-func (o *Outbox) PublishUnadmittedBackupRunStatus(coordinate string, event nostr.Event, publish func() error) error {
+// leave the later accepted result tied or older on the internal run floor.
+func (o *Outbox) PublishUnadmittedBackupRunStatus(coordinate, requestEventID string, event nostr.Event, publish func() error) error {
 	if o == nil || o.shared == nil || o.shared.readOnly || publish == nil || !strings.HasPrefix(coordinate, "backup-run:") {
 		return fmt.Errorf("backup run status publication requires a writable outbox and run coordinate")
 	}
-	if backupRunStatusEventClockKey(event) == nil ||
-		outboxTag(event.Tags, "d") != "intent-status:"+outboxTag(event.Tags, "p")+":"+coordinate {
-		return fmt.Errorf("backup run status publication requires an exact signed coordinate")
+	if backupRunStatusEventClockKey(event) == nil || !validUnadmittedBackupRunStatus(event, coordinate, requestEventID) {
+		return fmt.Errorf("backup run status publication requires an exact signed request and coordinate")
 	}
 	o.shared.backupRunStatusMu.Lock()
 	defer o.shared.backupRunStatusMu.Unlock()
@@ -146,6 +145,11 @@ func (o *Outbox) PublishUnadmittedBackupRunStatus(coordinate string, event nostr
 			if raw := tx.Bucket(backupRunPendingBucket).Get(owner); raw == nil || json.Unmarshal(raw, &pending) != nil {
 				return fmt.Errorf("backup run pending coordinate is unavailable")
 			}
+			if pending.Coordinate != coordinate || pending.Actor != outboxTag(event.Tags, "p") ||
+				pending.IntentID != outboxTag(event.Tags, "intent_id") ||
+				pending.RequestEvent.ID.Hex() != outboxTag(event.Tags, "e") {
+				return fmt.Errorf("backup run status does not match the pending signed request")
+			}
 			if pending.State == BackupRunRefusedState || pending.StatusEventID != "" {
 				return fmt.Errorf("backup run coordinate has an immutable refusal outcome")
 			}
@@ -155,10 +159,17 @@ func (o *Outbox) PublishUnadmittedBackupRunStatus(coordinate string, event nostr
 		if err != nil {
 			return err
 		}
-		if event.CreatedAt <= floor {
+		coordinateFloor, err := backupRunStatusTimestampFloor(tx, backupRunStatusClockKey(event.PubKey, outboxTag(event.Tags, "p"), coordinate))
+		if err != nil {
+			return err
+		}
+		if event.CreatedAt <= max(floor, coordinateFloor) {
 			return fmt.Errorf("backup run status is not newer than the durable coordinate floor")
 		}
-		return recordBackupRunStatusTimestamp(tx, event)
+		if err := recordBackupRunStatusTimestamp(tx, event); err != nil {
+			return err
+		}
+		return recordBackupRunCoordinateStatusTimestamp(tx, event, coordinate)
 	}); err != nil {
 		return err
 	}

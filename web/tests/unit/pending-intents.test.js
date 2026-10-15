@@ -68,13 +68,14 @@ describe('pending intent overlay', () => {
       const store = createPendingIntents({ namespace: `status-envelope-${++sequence}`, servicePubkey: service,
         requesterPubkey: actor });
       await store.open();
-      await store.add({ event: { kind: 30900, id: 'request', created_at: 100,
+      await store.add({ event: { kind: 30900, id: envelope.domain === 'backup' ? 'a'.repeat(64) : 'request', created_at: 100,
         tags: [['d', envelope.coordinate], ['intent_id', envelope.intent_id]] }, domain: envelope.domain });
       const filter = { kinds: [30315], '#d': intentStatusCoordinates(actor, {
         domain: envelope.domain, coordinate: envelope.coordinate, intentId: envelope.intent_id
       }), '#p': [actor], '#t': [INTENT_STATUS_TOPIC] };
-      const event = { kind: 30315, pubkey: service, tags: envelope.tags, content: '{"reason":"denied"}' };
+      const event = { kind: 30315, pubkey: service, tags: envelope.tags, content: envelope.content || '{"reason":"denied"}' };
       expect(JSON.stringify(event.tags)).toBe(JSON.stringify(envelope.tags));
+      if (envelope.content) expect(event.content).toBe(envelope.content);
       expect(filter['#d']).toContain(envelope.tags[0][1]);
       expect(filter['#p']).toContain(envelope.tags[4][1]);
       expect(filter['#t']).toContain(envelope.tags[3][1]);

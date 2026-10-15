@@ -37,8 +37,9 @@ describe('Go-generated domain intent fixtures', () => {
       expect(store.query({ domain: fixture.request.domain, status: 'pending' })).toHaveLength(1);
       const status = { kind: 30315, pubkey: servicePubkey,
         tags: [['d', `intent-status:${requesterPubkey}:${fixture.request.coordinate}`],
-          ['p', requesterPubkey], ['intent_id', fixture.request.intentId], ['status', 'accepted']],
-        content: '{"status":"accepted"}' };
+          ['p', requesterPubkey], ['intent_id', fixture.request.intentId], ['status', 'accepted'],
+          ...(fixture.request.domain === 'backup' ? [['e', event.id]] : [])],
+        content: JSON.stringify({ status: 'accepted', ...(fixture.request.domain === 'backup' ? { coordinate: fixture.request.coordinate, intent_id: fixture.request.intentId } : {}) }) };
       expect(await store.handleStatus({ ...status, pubkey: requesterPubkey })).toBe(false);
       expect(store.query()).toHaveLength(1);
       expect(await store.handleStatus(status)).toBe(true);
