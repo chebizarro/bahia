@@ -91,7 +91,8 @@ const (
 	// AssistantStatusTopic is on every 30315 assistant status.
 	AssistantStatusTopic = "assistant-status"
 	// RelaySettingsTopic is on the relay-settings operator policy (30900).
-	RelaySettingsTopic = "relay-settings"
+	RelaySettingsTopic      = "relay-settings"
+	RelaySettingsCoordinate = "relay-settings:operator"
 )
 
 // AssistantTranscriptSessionTopic is the "t" topic scoping one session's

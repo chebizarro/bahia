@@ -25,7 +25,7 @@ import (
 const (
 	RelaySettingsSchema = "bahia.relay-settings.v1"
 	RelaySettingsDomain = "relay-settings"
-	RelaySettingsDTag   = "relay-settings:operator"
+	RelaySettingsDTag   = kinds.RelaySettingsCoordinate
 
 	defaultRelayPolicyProjectionFreshness = 5 * time.Minute
 )

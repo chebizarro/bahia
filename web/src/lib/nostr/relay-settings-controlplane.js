@@ -2,14 +2,14 @@ import { getEventStore, getServicePubkey } from './boot.js';
 import { FLEET_INTENT_ORG_ID } from './intent-client.svelte.js';
 import { relayPolicyIntent } from './final-ops-intents.js';
 import { submitSensitiveIntent } from '../stores/sensitive-intents.svelte.js';
-import { CASCADIA_CONTROLPLANE_STATE } from './kinds.gen.js';
+import { CASCADIA_CONTROLPLANE_STATE, RELAY_SETTINGS_COORDINATE } from './kinds.gen.js';
 import { parseJsonContent } from './content.js';
 import { getDTag, getTagValue } from './tags.js';
 import { nostr as defaultNostr } from './subscriptions.js';
 
 export const RELAY_SETTINGS_SCHEMA = 'bahia.relay-settings.v1';
 export const RELAY_SETTINGS_DOMAIN = 'relay-settings';
-export const RELAY_SETTINGS_DTAG = 'relay-settings:operator';
+export const RELAY_SETTINGS_DTAG = RELAY_SETTINGS_COORDINATE;
 
 export const RELAY_POLICY_TRUTH_STATES = Object.freeze({
   LOADING: 'loading',
