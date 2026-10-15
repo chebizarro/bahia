@@ -59,9 +59,10 @@ describe('continuity Nostr read models', () => {
     const filters = continuityNostrFilters({ serviceAuthors: [SERVICE_AUTHOR], operatorAuthors: [WORKER_AUTHOR] });
     for (const envelope of envelopes) {
       const produced = event({ ...envelope, id: 'c'.repeat(64), content: '{}' });
+      const filterEvent = { ...produced, sig: '' };
       expect(produced.tags).toEqual(envelope.tags);
-      expect(filters.some((filter) => matchFilter(filter, produced)), JSON.stringify(envelope.tags)).toBe(true);
-      expect(filters.some((filter) => matchFilter(filter, { ...produced, tags: produced.tags.filter(([name]) => name !== 't') }))).toBe(false);
+      expect(filters.some((filter) => matchFilter(filter, filterEvent)), JSON.stringify(envelope.tags)).toBe(true);
+      expect(filters.some((filter) => matchFilter(filter, { ...filterEvent, tags: produced.tags.filter(([name]) => name !== 't') }))).toBe(false);
     }
   });
 

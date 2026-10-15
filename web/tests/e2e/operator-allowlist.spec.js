@@ -15,17 +15,18 @@ const status = (service) => ({
   tags: [['d', `continuity-status:${service}`], ['service', service], ['t', 'continuity'], ['t', 'continuity-status']],
   content: JSON.stringify({ service_key: service, active_profile: 'full', operation_state: 'steady' })
 });
-const failoverRequest = (service, pubkey) => ({
-  kind: 38430, pubkey, created_at: now,
-  tags: [['service', service], ['worker', 'standby-a']], content: JSON.stringify({ reason: 'primary unavailable' })
+const profile = (service, pubkey) => ({
+  kind: 31400, pubkey, created_at: now,
+  tags: [['d', `continuity-profile:${service}`], ['service', service], ['primary', 'primary-a'], ['profile', 'full']],
+  content: JSON.stringify({ service_key: service, primary_worker_pubkey: 'primary-a' })
 });
 
 const allowlist = operatorAllowlistFixture({ scope: 'continuity', pubkeys: [otherOperator], createdAt: now });
 const operatorEvents = [
   status('svc-cached'),
-  failoverRequest('svc-mine', TEST_PUBKEY),
-  failoverRequest('svc-other-operator', otherOperator),
-  failoverRequest('svc-stranger', stranger)
+  profile('svc-mine', TEST_PUBKEY),
+  profile('svc-other-operator', otherOperator),
+  profile('svc-stranger', stranger)
 ];
 
 test('the allowlist record names no operator in the clear', () => {
@@ -37,11 +38,11 @@ test('the allowlist record names no operator in the clear', () => {
   expect(JSON.parse(allowlist.content).schema).toBe('bahia.confidential.aead.v1');
 });
 
-test('a fleet-OCK holder sees another authorized operator\'s request and still not a non-listed signer\'s', async ({ page }) => {
+test('a fleet-OCK holder sees another authorized operator\'s topology and still not a non-listed signer\'s', async ({ page }) => {
   await installE2EMocks(page, { nostrEvents: [...operatorEvents, fleetOCKKeyWrapFixture({ recipient: TEST_PUBKEY, createdAt: now }), allowlist] });
   await page.goto('/continuity');
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
-  await page.getByRole('button', { name: /^Requests/ }).click();
+  await page.getByRole('button', { name: 'Topology' }).click();
   await expect(page.getByRole('heading', { name: 'svc-mine' })).toBeVisible();
   // The decrypted allowlist widens the trusted operator set and the relay REQ.
   await expect(page.getByRole('heading', { name: 'svc-other-operator' })).toBeVisible();
@@ -54,7 +55,7 @@ test('without the fleet OCK the allowlist is opaque and only the signed-in key i
   await installE2EMocks(page, { nostrEvents: [...operatorEvents, allowlist] });
   await page.goto('/continuity');
   await expect(page.getByRole('heading', { name: 'svc-cached' })).toBeVisible();
-  await page.getByRole('button', { name: /^Requests/ }).click();
+  await page.getByRole('button', { name: 'Topology' }).click();
   await expect(page.getByRole('heading', { name: 'svc-mine' })).toBeVisible();
   await expect(page.getByTestId('continuity-operator-scope-note')).toContainText('other fleet operators are not shown');
   await expect(page.getByRole('heading', { name: 'svc-other-operator' })).toHaveCount(0);

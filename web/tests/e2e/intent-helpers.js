@@ -65,15 +65,17 @@ export function buildDaemonIntentStatus(intent, { servicePubkey, status = 'accep
   const tag = name => intent.tags?.find(item => item[0] === name)?.[1] || '';
   const coordinate = tag('d');
   const intentId = tag('intent_id');
+  const privateBackupRun = tag('domain') === 'backup' && coordinate.startsWith('backup-run:') &&
+    (status === 'rejected' || status === 'conflict');
   return {
     id: id || `intent-status-${intent.id || intentId}`,
     kind: 30315,
     pubkey: servicePubkey,
     created_at: createdAt ?? created_at ?? Math.max(Math.floor(Date.now() / 1000), intent.created_at || 0),
-    tags: [['d', `intent-status:${intent.pubkey}:${coordinate}`], ['domain', 'intent'], ['status', status],
+    tags: [['d', privateBackupRun ? `intent-status:${intent.pubkey}:backup:${intentId}` : `intent-status:${intent.pubkey}:${coordinate}`], ['domain', 'intent'], ['status', status],
       ['t', 'intent-status'], ['p', intent.pubkey], ['intent_id', intentId], ['e', intent.id],
       ...(reason ? [['reason', reason]] : [])],
-    content: JSON.stringify({ status, intent_id: intentId, coordinate, reason,
+    content: JSON.stringify({ status, intent_id: intentId, ...(!privateBackupRun ? { coordinate } : {}), reason,
       ...(data !== undefined ? { data } : {}), ...(evaluation !== undefined ? { evaluation } : {}) })
   };
 }

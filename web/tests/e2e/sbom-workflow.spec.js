@@ -1,12 +1,19 @@
 import { test, expect } from '@playwright/test';
 import { BAHIA_STATE_SCHEMAS, cpAuditFixture, cpStateFixture } from './cp-state-fixtures.js';
 import { installE2EMocks } from './helpers.js';
+import { fleetOCKKeyWrapFixture, securityAttributionFixture } from './fleet-ock-fixtures.js';
 import { createHash } from 'node:crypto';
 
 const SERVICE_PUBKEY = '79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798';
 const ARTIFACT_ID = 'artifact-sbom-1';
 const NO_SBOM_ARTIFACT_ID = 'artifact-no-sbom';
 const SERVICE_ID = 'svc-sbom';
+const generatedSBOMHash = 'a'.repeat(64);
+const importedSBOMHash = 'b'.repeat(64);
+
+function withSBOMVisibility(events, hash) {
+  return [...events, fleetOCKKeyWrapFixture(), securityAttributionFixture({ subjectType: 'sbom', subjectDigest: hash })];
+}
 
 const KINDS = {
   SBOM_STATUS: 30315,
@@ -164,6 +171,7 @@ test.describe('SBOM workflow', () => {
       created_at: '2026-05-13T12:05:00.000Z'
     };
     const attestation = {
+      schema: 'bahia.audit.sbom.v1',
       subject: [{ name: ARTIFACT_ID, digest: { sha256: subjectDigest } }],
       predicate: {
         format: 'spdx',
@@ -179,7 +187,7 @@ test.describe('SBOM workflow', () => {
       authenticated: true,
       extension: true,
       systemInfo: relaySystemInfo,
-      nostrEvents: [serviceEvent(), artifactEvent({ packages, sbom, attestation })]
+      nostrEvents: withSBOMVisibility([serviceEvent(), artifactEvent({ packages, sbom, attestation })], sbomHash)
     });
     await failOnUnsupportedSBOMEndpoints(page, ARTIFACT_ID);
 
@@ -207,7 +215,7 @@ test.describe('SBOM workflow', () => {
       authenticated: true,
       extension: true,
       systemInfo: relaySystemInfo,
-      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
+      nostrEvents: withSBOMVisibility([serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })], generatedSBOMHash)
     });
     await failOnUnsupportedSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
 
@@ -259,7 +267,7 @@ test.describe('SBOM workflow', () => {
       authenticated: true,
       extension: true,
       systemInfo: relaySystemInfo,
-      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })]
+      nostrEvents: withSBOMVisibility([serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })], importedSBOMHash)
     });
     await failOnUnsupportedSBOMEndpoints(page, NO_SBOM_ARTIFACT_ID);
 
@@ -356,7 +364,7 @@ test.describe('SBOM workflow', () => {
       await route.fulfill({ json: { url: blossomURL, sha256: hash, size: bytes.length }, headers: { 'Access-Control-Allow-Origin': '*' } });
     });
     await installE2EMocks(page, { authenticated: true, extension: true, systemInfo: info,
-      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })] });
+      nostrEvents: withSBOMVisibility([serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })], importedSBOMHash) });
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}?tab=sbom`);
     await page.getByLabel('SBOM file').setInputFiles({ name: 'large.spdx.json', mimeType: 'application/json', buffer: bytes });
     await page.getByRole('button', { name: 'Import SBOM', exact: true }).click();
@@ -371,7 +379,7 @@ test.describe('SBOM workflow', () => {
     const hash = 'c'.repeat(64);
     const blossomURL = `https://blossom.example.test/${hash}`;
     await installE2EMocks(page, { authenticated: true, extension: true, systemInfo: relaySystemInfo,
-      nostrEvents: [serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })] });
+      nostrEvents: withSBOMVisibility([serviceEvent(), artifactEvent({ id: NO_SBOM_ARTIFACT_ID })], importedSBOMHash) });
     await page.goto(`/artifacts/${NO_SBOM_ARTIFACT_ID}?tab=sbom`);
     await page.getByLabel('Blossom URL').fill(blossomURL);
     await page.getByLabel('SHA-256 (optional)').fill(hash);
