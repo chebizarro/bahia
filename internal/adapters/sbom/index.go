@@ -14,6 +14,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/domain"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
@@ -41,8 +42,8 @@ const (
 // SBOMReferenceTopic and SBOMAvailabilityTopic are the single-letter "t"
 // topics stamped on SBOM events so relay consumers can scope on #t.
 const (
-	SBOMReferenceTopic    = "sbom-reference"
-	SBOMAvailabilityTopic = "sbom-availability"
+	SBOMReferenceTopic    = kinds.SBOMReferenceTopic
+	SBOMAvailabilityTopic = kinds.SBOMAvailabilityTopic
 )
 
 const (
