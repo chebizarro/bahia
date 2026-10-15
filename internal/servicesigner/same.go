@@ -2,6 +2,7 @@ package servicesigner
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/openagentsinc/bahia/internal/config"
@@ -21,12 +22,17 @@ import (
 // to compare the keys themselves.
 func SameSigner(a, b config.NostrConfig) bool {
 	method := a.ServiceSignerMethod()
+	// A mounted share or node key can be replaced without changing its path.
+	// Reopening is the only safe way to observe that rotation.
+	if method == config.NostrSignerFrostr {
+		return false
+	}
 	if method != b.ServiceSignerMethod() || a.Signer.ClientSecretKeyFile != "" || b.Signer.ClientSecretKeyFile != "" {
 		return false
 	}
 	signerA, signerB := a.Signer, b.Signer
 	signerA.Method, signerB.Method = method, method
-	return signerA == signerB &&
+	return reflect.DeepEqual(signerA, signerB) &&
 		strings.TrimSpace(a.PrivateKey) == strings.TrimSpace(b.PrivateKey) &&
 		strings.EqualFold(strings.TrimSpace(a.PublicKey), strings.TrimSpace(b.PublicKey))
 }

@@ -119,3 +119,91 @@ Production recommendation remains **no-go pending** cross-client Marmot interop,
 - Go MLS: https://github.com/thomas-vilte/mls-go , https://pkg.go.dev/github.com/Deln0r/mls-go , https://github.com/tmc/mls
 - Keyhive/BeeKEM: https://www.inkandswitch.com/keyhive/notebook/02/ , https://docs.rs/beekem/latest/beekem/
 - NIP-26 status: nips repo `26.md` (`unrecommended`)
+
+## FROSTR service-custody stage 1 decision (bahia-4m4b8)
+
+**Decision: a contained 2-of-3 signer experiment is viable; production key
+rotation is not approved.** The group x-only public key is the service npub.
+`internal/servicesigner` accepts opt-in `method: frostr` only with a pinned
+`nostr.public_key`, an owner-only mounted daemon share and transport key, two
+public peer shares/identities, a round coordinator and a single-writer fence.
+The daemon assembly supplies neither a relay coordinator nor a durable fence,
+so selecting the method in a deployed config currently fails closed. The
+existing `local`, `nip46`, and `nip55l` defaults are unchanged.
+
+### Library evaluation
+
+| Candidate | Standard BIP-340 under group x-only key? | Key generation / ECDH | Maintenance and license | Verdict |
+|---|---|---|---|---|
+| [`bytemare/frost`](https://github.com/bytemare/frost) + [`bytemare/dkg`](https://github.com/bytemare/dkg) | **No**. RFC 9591 secp256k1 uses different key/challenge conventions; its signatures are not BIP-340 without a separately specified adaptation. | Dealerless DKG; opaque scalar/point operations. | Active 2026 tags, MIT. | Reject for direct Bahia use despite strong DKG. Curve choice alone is insufficient. |
+| [`taurusgroup/multi-party-sig`](https://github.com/taurushq-io/multi-party-sig/blob/main/protocols/frost/frost.go) `v0.7.0-alpha-2025-01-28` | **Yes**, `KeygenTaproot` + `SignTaproot` explicitly implement BIP-340. | Dealerless DKG and exposed `PrivateShare`/verification shares permit a separate threshold-ECDH implementation; no high-level ECDH operation. | Last tagged version January 2025; Apache-2.0; upstream warns that further testing/auditing is needed. | Viable alternate for a later DKG ceremony, not selected for this contained signer seam. |
+| [`fiatjaf.com/promenade/frost`](https://pkg.go.dev/fiatjaf.com/promenade/frost) `v0.4.4` | **Yes**. Its challenge is `BIP0340/challenge`, it normalizes even-Y shares/nonces, and Bahia's test verifies the result with independent `btcec/schnorr` under the group x-only pubkey. | **Trusted dealer only** (`TrustedKeyDeal`); `CreateECDHShare` and `AggregateECDHShards` expose Lagrange-weighted ECDH. | Tagged June 2026, Go 1.25, Unlicense, pre-v1, no claimed audit. | **Stage-1 choice.** Its explicit NIP-44-relevant ECDH surface keeps the experiment small. Trusted dealing and an audit are rollout blockers. |
+| FROSTR-ORG [`bifrost`](https://github.com/FROSTR-ORG/bifrost) / [`bifrost-rs`](https://github.com/FROSTR-ORG/bifrost-rs), OwnAuth's FROSTR work | BIP-340 implementations exist, but the published Bifrost libraries are TypeScript/Rust, not a reusable pure-Go dependency. | Bifrost supports threshold ECDH; OwnAuth's dealerless ceremony is a protocol reference, not imported code. | Bifrost MIT; Rust/TypeScript do not meet the pure-Go requirement. | Transport convention/reference, not a Go crypto dependency. |
+| `LLFourn/secp256kfun` and `bancaditalia/secp256k1-frost` | BIP-340-capable modes exist. | Different ecosystems. | Rust and C respectively. | Reject: not pure Go. |
+
+The chosen `promenade` dependency is not cryptographically interoperable with
+the Bifrost share package by assertion. Only the final signature and ECDH
+result are checked against standard Nostr primitives. A production ceremony
+must document how all three shares are generated, verified independently,
+distributed, backed up, and destroyed at the dealer; replacing the dealer
+with Taurus DKG is preferable if independently validated.
+
+### Stage-1 behavior and costs
+
+The in-process transport exercises actual 2-of-3 commitments and partial
+signatures. A fake-relay test exercises the Nostr transport seam. The wire
+skeleton uses Bifrost's [kind `20004`](https://github.com/FROSTR-ORG/bifrost/blob/master/src/const.ts), a dedicated transport identity per peer, a `p` tag, NIP-44-encrypted phase/session payloads, signed events, and a continuously supplied inbound event stream. Its relay adapter contract requires a scoped long-lived REQ and verified `OK true`; no live-relay or Bifrost wire-interoperability claim is made. Two publishes and two peer replies are needed per signature (commit and partial); threshold ECDH takes one exchange. Neither enqueue nor local signing is proof of relay acceptance.
+
+Measured with `go test ./internal/servicesigner -bench BenchmarkFrostrSignInProcess -benchtime=500x -run '^$' -count=3` on Darwin arm64 / Apple M4 Max, Go 1.26.3. Three local runs were 1.210, 1.477 and 1.415 ms/op; the table uses the median (1.415 ms), with 167 allocations/op. Simulated RTT is a **virtual transport accounting model**, not a sleep or a live network measurement; it adds two serial RTTs to the measured local median. A live multi-relay and approval-path tail-latency test remains necessary.
+
+| Operation/model | Local crypto median | Added RTT | Estimated per-publish signer cost |
+|---|---:|---:|---:|
+| In-process 2-of-3 signature | 1.415 ms | 0 | 1.415 ms |
+| 25 ms peer/relay RTT | 1.415 ms | 2 × 25 ms | 51.415 ms |
+| 100 ms peer/relay RTT | 1.415 ms | 2 × 100 ms | 201.415 ms |
+
+Recommended production budget: reserve **at least 250 ms p95 for signing**
+only if controlled relays and the operator share can demonstrate <=100 ms p95
+per round exchange; otherwise do not put this custody method on the canonical
+publish path. This excludes relay `OK` publication latency and human approval.
+Every canonical event incurs the two signing exchanges; outbox retries that
+reuse an already signed event do not sign again.
+
+Threshold NIP-44 derives the conversation key without rebuilding the service
+scalar: each holder computes `lambda_i * share_i * lift_x(peer)`; the daemon
+adds two contributions, extracts the X coordinate and applies NIP-44 v2 HKDF
+(`nip44-v2`). Tests compare that key against `nip44.GenerateConversationKey`
+using a **test-only reconstructed key** for both daemon+operator and
+daemon+cold subsets, and exercise binary ciphertext round trips. The library
+does not expose a DLEQ proof for an ECDH contribution; a malicious peer can
+cause a wrong derived key (decryption then fails), so authenticated
+contribution proofs are a production hardening requirement.
+
+### Recovery, fencing, and stage 2
+
+The normal pair is daemon + operator. The cold share remains offline. If the
+daemon is lost, an operator + cold-share ceremony can recover the existing
+group identity and issue a replacement daemon share under a controlled
+operator process. The running Bahia signer does **not** reconstruct the key,
+does not load the cold share, and does not implement that ceremony. Losing two
+shares is terminal. Compromising two shares gives complete signing and
+decryption authority, including historic NIP-44 ciphertexts.
+
+Single-writer authorization is a signer obligation. `frostrKeyer` serializes
+local operations and acquires the injected `FrostrFence` for both signing and
+threshold ECDH. A
+process mutex is not a cross-process lease; the production fence must be
+durable, identity-scoped, generation-aware, and enforced by peer policy before
+any nonce commitment or ECDH contribution. A reload must not admit overlapping
+writers. The stage-1 fake fence proves API enforcement only, not distributed
+exclusion.
+
+Stage 2, operator-gated under **h9n7f**, must provide: audited group-key
+generation or DKG and secure daemon/operator/cold share provisioning; an
+authenticated, replay-safe, admission-controlled persistent relay adapter and
+real peer responders; externally enforced single-writer fencing and approval
+policy; DLEQ or equivalent ECDH-share validation; controlled-relay RTT/tail
+measurements; offline operator+cold recovery rehearsal; NIP-44/OCK access and
+historical ciphertext migration planning; and explicit approval to rotate
+canonical kind-30900 authorship from the old service pubkey to the new group
+pubkey. This stage changes no production identity or canonical records.

@@ -11,6 +11,7 @@ pubkey. Operator configuration is in
 | `local` (default when only `nostr.private_key` is set) | process memory | none |
 | `nip46` | any NIP-46 bunker | kind-24133 requests through `nostrout.Bunker` (outbound admission, signer lane) |
 | `nip55l` | a local NIP-55L signer | D-Bus, through an injected constructor |
+| `frostr` (opt-in, not production-wired) | daemon share of a 2-of-3 group key; operator and cold shares remain separate | encrypted kind-20004 round messages through an injected relay seam |
 
 ## Identity pinning
 
@@ -29,6 +30,23 @@ Bahia authenticates to a remote signer with its own dedicated client identity
 service key) and sends only standard requests. Deciding which client may use
 the service key, and refusing everyone else, is the signer's job. Bahia never
 calls signer-specific or management methods for its own identity.
+
+For `frostr`, `servicesigner.Open` additionally requires an injected
+cross-process `FrostrFence` and round transport. Signing and threshold ECDH
+both acquire that fence. It refuses a missing fence or
+transport rather than falling back to the local key. The signer holds a
+process-local mutex across each operation, but only the injected fence can
+exclude other daemon processes. The current daemon assembly does not supply
+the production relay adapter or fence, so this method cannot silently become
+the deployed service identity. See the [stage-1 decision](../designs/ock-key-distribution-alternatives.md#frostr-service-custody-stage-1-decision-bahia-4m4b8).
+
+The FROSTR transport seam uses Bifrost kind `20004`, encrypted peer messages,
+strict author and `p`-tag pinning, and session/phase correlation. Its relay
+adapter must continuously subscribe to that scoped stream and verify publish
+`OK true` rather than interpreting enqueue as acceptance. The in-process and
+fake-relay tests do not establish live-relay or Bifrost wire interoperability.
+Threshold ECDH derives NIP-44 conversation keys from two additive point
+contributions; no full service secret is reconstructed.
 
 ## NIP-46 request contract
 
@@ -67,7 +85,9 @@ service signer session is handed across that swap instead of duplicated:
   file to the key it holds at reload (`servicesigner.ResolveClientKeyFile`),
   compares that, and opens exactly the key it compared. Rotating the file's
   content and reloading opens a session with the new key; moving the same key
-  between inline and file keeps the session.
+  between inline and file keeps the session. A `frostr` config is always
+  reopened on reload because either mounted share or transport key can change
+  under an unchanged path.
 - **Unchanged.** The candidate (`app.New(cfg, app.Replacing(running))`) takes
   a hold on the running session; no second `connect` is sent. Each
   application releases its hold last in its shutdown and the session closes

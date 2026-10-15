@@ -12,7 +12,7 @@ Code wins over any page here; if they disagree, fix the page.
 | [intents-and-authority.md](intents-and-authority.md) | Signed `30900` intents, trust set, the daemon's processing pipeline, `30315` status, canonical state, readiness, adding a domain handler |
 | [outbox-delivery.md](outbox-delivery.md) | Local outbox durability and the abandonment contract (undelivered markers, `canonical_delivery`, operator retry) |
 | [confidential-state.md](confidential-state.md) | Org content keys (NIP-CAS-0011): envelopes, key distribution, rotation and refounding, operator allowlists, what readers do |
-| [service-signer.md](service-signer.md) | The service identity's signer (local, any NIP-46 bunker, NIP-55L): identity pinning, standard NIP-46 contract, binary NIP-44 capability |
+| [service-signer.md](service-signer.md) | The service identity's signer (local, NIP-46, NIP-55L, opt-in FROSTR): identity pinning, threshold custody, standard NIP-46 contract, binary NIP-44 capability |
 | [service-identity.md](service-identity.md) | The single injected service `nostr.Keyer`, raw-key derivations that fail closed, and the guard |
 | [secret-store.md](secret-store.md) | Secret values in Signet's secret store: credential references in canonical records, the `SecretStore` seam, the Signet access path, threat model, rotation and migration |
 | [entity-identity.md](entity-identity.md) | Author-minted UUIDv7 ids, natural keys, replay vs conflict |

@@ -1,7 +1,7 @@
 // Package servicesigner builds Bahia's service identity signer from
 // nostr.signer configuration. The identity is a standard nostr.Keyer whatever
-// holds the key: process memory (local), any NIP-46 bunker (nip46) or a local
-// NIP-55L D-Bus signer (nip55l). Single-writer fencing is the signer's job;
+// holds the key: process memory (local), any NIP-46 bunker (nip46), a local
+// NIP-55L D-Bus signer (nip55l), or a FROSTR threshold group (frostr). Single-writer fencing is the signer's job;
 // Bahia authenticates with its dedicated client identity and never calls
 // signer-specific or management methods for its own identity.
 package servicesigner
@@ -71,6 +71,15 @@ type Options struct {
 	OnAuthURL func(authURL string)
 	// Logger receives the default NIP-46 authorization notice. Nil is no-op.
 	Logger *zap.Logger
+	// FrostrTransport is the injected event-driven share coordinator. The
+	// daemon cannot activate frostr until a relay-backed coordinator is wired.
+	FrostrTransport FrostrRoundTransport
+	// FrostrFence must provide a cross-process single-writer lease in any
+	// deployment; the signer refuses to run without one.
+	FrostrFence FrostrFence
+	// FrostrRelay provides the continuous kind-20004 subscription and verified
+	// publication path when a transport was not injected directly.
+	FrostrRelay FrostrEventRelay
 }
 
 // Open builds the configured service signer and verifies that it reports the
@@ -128,6 +137,22 @@ func Open(ctx context.Context, cfg config.NostrConfig, opts Options) (nostr.Keye
 		signer, err = newNIP55L(ctx, NIP55LConfig{ServicePubkey: expected, AppID: cfg.Signer.NIP55L.AppID, BusAddress: cfg.Signer.NIP55L.BusAddress, CallTimeout: timeout})
 		if err == nil && signer == nil {
 			err = errors.New("NIP-55L constructor returned no signer")
+		}
+	case config.NostrSignerFrostr:
+		transport := opts.FrostrTransport
+		ownedTransport := false
+		if transport == nil && opts.FrostrRelay != nil {
+			transport, err = openNostrFrostrTransport(ctx, cfg.Signer.Frostr, opts.FrostrRelay, timeout)
+			if err != nil {
+				return nil, fmt.Errorf("open FROSTR transport: %w", err)
+			}
+			ownedTransport = true
+		}
+		signer, err = openFrostr(cfg, expected, transport, opts.FrostrFence)
+		if err != nil && ownedTransport {
+			if closer, ok := transport.(io.Closer); ok {
+				_ = closer.Close()
+			}
 		}
 	default:
 		return nil, fmt.Errorf("unknown nostr.signer.method %q", method)

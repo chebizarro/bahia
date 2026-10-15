@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -33,7 +34,7 @@ func (s configFabricKeyer) Sign(ctx context.Context, event *nostr.Event) error {
 }
 
 func newConfigFabricKeyer(cfg config.ConfigFabricConfig, admission *nostrout.Admission, logger *zap.Logger, running *serviceSigner) (*serviceSigner, func(), error) {
-	if strings.TrimSpace(cfg.PublicKey) == "" && cfg.Signer == (config.NostrSignerConfig{}) {
+	if strings.TrimSpace(cfg.PublicKey) == "" && reflect.DeepEqual(cfg.Signer, config.NostrSignerConfig{}) {
 		return nil, func() {}, nil
 	}
 	method := strings.ToLower(strings.TrimSpace(cfg.Signer.Method))
