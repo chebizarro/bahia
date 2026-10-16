@@ -113,3 +113,22 @@ func (s localSource) Events(ctx context.Context, pub nostr.PubKey) ([]nostr.Even
 	}
 	return out, nil
 }
+
+func (s localSource) StoreEvent(ctx context.Context, ev nostr.Event) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !ev.CheckID() || !ev.VerifySignature() {
+		return errors.New("invalid recovery event for local store")
+	}
+	if _, err := os.Stat(s.path); err != nil {
+		return errors.New("daemon local store file missing")
+	}
+	store, err := localstore.Open(s.path)
+	if err != nil {
+		return errors.New("daemon local store unavailable (run operator recovery with daemon stopped)")
+	}
+	defer func() { _ = store.Close() }()
+	_, err = store.SaveEvent(ev)
+	return err
+}

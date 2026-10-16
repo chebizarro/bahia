@@ -76,6 +76,11 @@ type hostnameRecoveryRecord struct {
 	Plan          domain.DesiredPublicRoutePlan `json:"plan"`
 }
 
+// HostnameRecoveryRecord is the canonical receipt payload used by the
+// hostname publisher. Recovery decodes this type to preserve the completed
+// provider-effect phase; it must not call the effectful intent handler.
+type HostnameRecoveryRecord = hostnameRecoveryRecord
+
 func (h *HostnameIntentHandler) HandleIntent(ctx context.Context, intent *Intent) error {
 	if !h.ready() {
 		return fmt.Errorf("canonical hostname history has not caught up")

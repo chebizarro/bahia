@@ -113,3 +113,84 @@ Audited relay events, the durable local Nostr store, and verified pre-compromise
 snapshots only. PostgreSQL and its outbox are never canonical; SQL-only
 candidates surface as unsigned review drafts that require operator-signed
 intents to re-enter canonical state.
+
+## Domain reassertion safety
+
+The engine passes only the new-identity `servicesigner` keyer to registered
+`DomainRecoveryAdapter` implementations. A domain inventories accepted old-key
+heads from EOSE-complete controlled-relay reads and the durable local store,
+rebuilds each head with its production typed publisher, and checks exact tags
+and content before publishing. An accepted old-key event beyond the trust
+activation barrier is rejected even if its ID appears in the inventory.
+New-key heads with the same coordinate and
+equivalent tags/content are not re-signed. Verification reads the new-key head
+back from both surfaces and emits a sorted-coordinate SHA-256 equivalence
+digest. Service and environment registry recovery includes service tombstones,
+environment tombstones and the environment's explicit deployment-unit set;
+adoption bindings use the existing live binding publisher. An accepted binding
+tombstone has no production publisher and therefore fails closed.
+
+The CLI declares all domain groups required before `reassert-canonical-state`
+or `verify` can complete. A partially registered build cannot issue a
+completed phase receipt. PostgreSQL-only rows are never passed to a recovery
+publisher: they require an unsigned review draft followed by a separate
+operator-signed intent.
+
+Security state uses the fleet OCK (`SecurityCanonicalPublisher.publishConfidential`)
+and attribution edges use the subject organization's OCK
+(`SecurityCanonicalPublisher.PublishAttribution`). Both call
+`EncryptConfidential` with no service-only plaintext, so those records have
+no service-key-derived `service_inner`. The registered security adapter
+validates the public typed envelope, OCK scope and associated-data coordinate,
+requires no `service_inner`, and preserves the accepted ciphertext and keyed
+`state_hash` byte-for-byte through the production projector signing path. It
+does not possess OCK keys or decrypt the payload; provenance is the accepted
+old-key inventory and exact new-key read-back. This does not apply to other
+confidential families that may carry `service_inner`.
+SBOM attestations are excluded from canonical reassertion and are regenerated
+under `bahia-4f10q.3.3`.
+
+Relay settings and the four advertised relay sets are recovered from accepted
+old-key heads, not from SQL or regenerated effective policy. Recovery validates
+the typed policy against the operator-controlled relay guard and requires the
+production serializers to reproduce the old tags and content exactly. The
+recovery relay pool is bootstrapped from `controlled_relays` in the recovery
+configuration; relay URLs carried by the signed policy or relay sets never
+select a destination for the reassertion itself. A historical settings head
+whose envelope or normalized content cannot be reproduced fails closed rather
+than silently changing its authority or topology.
+
+Hostname reservation and withdrawal-receipt recovery uses only the relay-first
+canonical record publisher. It decodes and validates the original typed plan,
+revision, deletion flag and withdrawal phase, then requires exact wire
+equivalence before signing. It never enters the hostname intent handler or
+route manager, so reassertion cannot re-run DNS, tunnel, Caddy or TLS effects.
+
+Backup recovery covers the recipe, policy, repository and definition registry
+records plus backup run-state heads. The signed `org` tag must equal content
+`org_id` for every head, including tombstones; tombstone-only tag fields are
+reconstructed before exact comparison. An embedded run verification is taken
+from the accepted run head, not looked up in PostgreSQL. The normal canonical
+publishers sign these records with no backup execution or scheduling source
+attached. Restore, standalone verification and retention-run families are not
+part of this registered group and require a separate adapter before they can
+be considered reasserted.
+
+Bahia-docs long-form topics (30023 with `t=bahia-docs`) are separately
+registered. Recovery uses the production topic builder with the accepted
+`published_at` tag and markdown, and fails if title, category, summary or
+content hash would drift. Notification channels and system discovery remain
+required but unregistered: notification `service_inner` is encrypted to the
+old service pubkey, while the system announcement is assembled from live
+configuration, capabilities and observations rather than a recoverable typed
+snapshot. Neither is silently copied or marked complete.
+
+`bahia-recover report-drafts --config FILE [--draft-report FILE]` writes an
+unsigned, mode-0600 JSON artifact without using a service signer or publishing
+an event. It enumerates projection identifiers in a read-only repeatable-read
+PostgreSQL snapshot, compares them with EOSE-complete accepted old-key and
+validated new-key canonical heads in the relay and durable store, and reports
+missing heads (including embedded deployment units and rows lacking an SBOM
+coordinate) as manual-review candidates. The artifact contains identifiers,
+not projection payloads or secrets. A changed SQL snapshot or incomplete relay
+read fails verification; absence is never inferred from a failed source.

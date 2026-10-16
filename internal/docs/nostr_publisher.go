@@ -169,23 +169,10 @@ func (p *NostrDocsPublisher) SyncToRelay(ctx context.Context) error {
 }
 
 func (p *NostrDocsPublisher) publishTopic(ctx context.Context, doc Document, hash string) error {
-	now := time.Now()
-
-	ev := &nostr.Event{
-		Kind:      kinds.LongFormContent,
-		Content:   doc.Markdown,
-		CreatedAt: nostr.Timestamp(now.Unix()),
-		Tags: nostr.Tags{
-			{"d", doc.Topic.Topic},
-			{"title", doc.Topic.Title},
-			{"t", doc.Topic.Category},
-			{"t", kinds.DocsTopic},
-			{"published_at", strconv.FormatInt(now.Unix(), 10)},
-			{"summary", fmt.Sprintf("Bahia documentation: %s", doc.Topic.Title)},
-			{"content-hash", hash},
-		},
+	ev := docsTopicEvent(doc, time.Now().Unix())
+	if hash != contentHash(doc.Markdown) {
+		return fmt.Errorf("documentation content hash changed during publish")
 	}
-
 	if err := p.publisher.PublishSignedEvent(ctx, ev); err != nil {
 		return fmt.Errorf("publishing NIP-23 event for %s: %w", doc.Topic.Topic, err)
 	}
@@ -196,6 +183,40 @@ func (p *NostrDocsPublisher) publishTopic(ctx context.Context, doc Document, has
 		zap.String("content_hash", hash),
 	)
 	return nil
+}
+
+func docsTopicEvent(doc Document, publishedAt int64) *nostr.Event {
+	return &nostr.Event{
+		Kind:      kinds.LongFormContent,
+		Content:   doc.Markdown,
+		CreatedAt: nostr.Timestamp(publishedAt),
+		Tags: nostr.Tags{
+			{"d", doc.Topic.Topic},
+			{"title", doc.Topic.Title},
+			{"t", doc.Topic.Category},
+			{"t", kinds.DocsTopic},
+			{"published_at", strconv.FormatInt(publishedAt, 10)},
+			{"summary", fmt.Sprintf("Bahia documentation: %s", doc.Topic.Title)},
+			{"content-hash", contentHash(doc.Markdown)},
+		},
+	}
+}
+
+// DocsRecoveryRecord rebuilds the production NIP-23 record without signing.
+// Recovery compares its tags and body byte-for-byte against the accepted head.
+func DocsRecoveryRecord(doc Document, publishedAt int64) *nostr.Event {
+	return docsTopicEvent(doc, publishedAt)
+}
+
+// PublishRecoveredTopic uses the normal docs publisher with the original
+// published_at tag, but a fresh NIP-01 timestamp under the new signer.
+func (p *NostrDocsPublisher) PublishRecoveredTopic(ctx context.Context, doc Document, publishedAt int64) error {
+	if p.publisher == nil {
+		return fmt.Errorf("documentation publisher unavailable")
+	}
+	ev := docsTopicEvent(doc, publishedAt)
+	ev.CreatedAt = nostr.Now()
+	return p.publisher.PublishSignedEvent(ctx, ev)
 }
 
 func (p *NostrDocsPublisher) fetchExistingHashes(ctx context.Context) map[string]string {

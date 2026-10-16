@@ -1,6 +1,10 @@
 package nostr
 
-import gonostr "fiatjaf.com/nostr"
+import (
+	"fmt"
+
+	gonostr "fiatjaf.com/nostr"
+)
 
 const (
 	SystemDiscoverySchema = "bahia.system-discovery.v1"
@@ -30,4 +34,16 @@ func relaySetTags(dTag string, relays []string) gonostr.Tags {
 		tags = append(tags, gonostr.Tag{"relay", relay})
 	}
 	return tags
+}
+
+// RelaySetRecoveryRecord exposes the production relay-set builder to recovery.
+// Only the four advertised set coordinates are service-owned here; transport
+// remains the separately configured controlled recovery relays.
+func RelaySetRecoveryRecord(dTag string, relays []string) (gonostr.Tags, string, error) {
+	switch dTag {
+	case BrowserRelaySetDTag, ContextVMRelaySetDTag, ServiceRelaySetDTag, NIP34RelaySetDTag:
+		return relaySetTags(dTag, relays), "", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported relay-set coordinate")
+	}
 }

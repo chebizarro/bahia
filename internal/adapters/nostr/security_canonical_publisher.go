@@ -167,6 +167,26 @@ func (p *SecurityCanonicalPublisher) publishConfidential(ctx context.Context, le
 	return p.projector.publishCanonicalFirst(ctx, legacyKind, dTag, deleted, extraTags, content, encrypted, entityType, entityID)
 }
 
+// PublishRecoveredCiphertext uses the canonical projector's relay-first
+// signing path for a previously accepted OCK envelope. Recovery validates
+// the typed public tags, AEAD associated-data coordinate, and absence of
+// service_inner before calling this method. Re-encrypting would randomize the
+// ciphertext and require recomputing the keyed state_hash, so both accepted
+// values are retained byte-for-byte while only the outer event is re-signed.
+func (p *SecurityCanonicalPublisher) PublishRecoveredCiphertext(ctx context.Context, legacyKind int, coordinate string, deleted bool, extraTags gonostr.Tags, ciphertext string, publisher PreCommitPublisher) error {
+	if p == nil || p.projector == nil || !p.projector.Enabled() || publisher == nil {
+		return fmt.Errorf("security recovery publisher unavailable")
+	}
+	switch legacyKind {
+	case KindSecurityTargetRecord, KindSecurityRunRecord, KindSecurityFindingRecord, KindSecurityFindingDetailRecord, KindSecurityScheduleRecord, KindSecurityAttributionRecord:
+	default:
+		return fmt.Errorf("unsupported security recovery family")
+	}
+	kind, base := controlStateEnvelope(legacyKind, coordinate, deleted)
+	_, err := p.projector.publishSignedRelayFirstRecord(ctx, kind, append(base, extraTags...), ciphertext, "security.recovery", nil, publisher)
+	return err
+}
+
 // SecurityFindingDetailDTag returns the d-tag for a finding's detail record.
 func SecurityFindingDetailDTag(findingKeyHash string) string {
 	return "security:finding-detail:" + findingKeyHash

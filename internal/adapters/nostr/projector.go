@@ -954,6 +954,15 @@ func (p *Projector) publishRelaySet(ctx context.Context, dTag string, relays []s
 	return p.publishSigned(ctx, kinds.RelaySetDiscovery, relaySetTags(dTag, relays), "", "system.discovery.relay_set", nil)
 }
 
+// PublishRecoveredRelaySet is the narrow recovery entry to the normal typed
+// relay-set publisher. It does not change or infer configured relay policy.
+func (p *Projector) PublishRecoveredRelaySet(ctx context.Context, dTag string, relays []string) error {
+	if _, _, err := RelaySetRecoveryRecord(dTag, relays); err != nil {
+		return err
+	}
+	return p.publishRelaySet(ctx, dTag, relays)
+}
+
 func discoveryVersions() map[string]any {
 	return map[string]any{
 		"backend":    version.Semantic(),

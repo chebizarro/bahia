@@ -263,6 +263,44 @@ func relaySettingsStateTags(status, requesterPubkey string) nostr.Tags {
 	return nostr.Tags{{kinds.CASControlStateTagD, RelaySettingsDTag}, {kinds.CASControlStateTagDomain, RelaySettingsDomain}, {"entity", "relay-policy"}, {kinds.CASControlStateTagSchema, RelaySettingsSchema}, {"t", kinds.RelaySettingsTopic}, {"status", status}, {"p", requesterPubkey}}
 }
 
+// RelaySettingsRecoveryRecord rebuilds an accepted policy through the same
+// typed state serializer and tag builder as publishState. It never applies a
+// policy, changes its authority metadata, or selects a publication relay.
+func RelaySettingsRecoveryRecord(old nostr.Event, static config.NostrConfig) (nostr.Tags, string, error) {
+	state, err := relayPolicyStateFromCanonicalEvent(&old, old.PubKey.Hex())
+	if err != nil {
+		return nil, "", err
+	}
+	if err := ValidateRelayPolicy(static, *state); err != nil {
+		return nil, "", err
+	}
+	status, requester := tagValueNostr(old.Tags, "status"), tagValueNostr(old.Tags, "p")
+	if status == "" || requester == "" {
+		return nil, "", fmt.Errorf("relay settings authority tags missing")
+	}
+	tags := relaySettingsStateTags(status, requester)
+	if request := old.Tags.FindWithValue("e", tagValueNostr(old.Tags, "e")); request != nil {
+		if len(request) != 4 || request[2] != "" || request[3] != "request" {
+			return nil, "", fmt.Errorf("relay settings request reference invalid")
+		}
+		tags = append(tags, nostr.Tag{"e", request[1], "", "request"})
+	}
+	content, err := json.Marshal(state)
+	return tags, string(content), err
+}
+
+// PublishRecoveredRelaySettings uses the normal settings projection publisher
+// with a recovery-only signer; its caller must first compare the rebuilt wire
+// record against the accepted head and bootstrap transport from controlled
+// recovery configuration, never from the old policy or relay-set body.
+func PublishRecoveredRelaySettings(ctx context.Context, signer nostr.Signer, publisher RelaySettingsEventPublisher, tags nostr.Tags, content string) error {
+	ev := &nostr.Event{Kind: kinds.CASControlState, CreatedAt: nostr.Now(), Tags: tags, Content: content}
+	if err := SignGoNostrEvent(ctx, signer, ev); err != nil {
+		return err
+	}
+	return publisher.PublishProjection(ctx, *ev, "relay-settings", nil)
+}
+
 func (h *RelaySettingsHandlers) publishState(ctx context.Context, req ContextVMRequest, state RelayPolicyState, status string) error {
 	if req.OuterEvent == nil && req.Event == nil {
 		return fmt.Errorf("relay settings request event is missing")
