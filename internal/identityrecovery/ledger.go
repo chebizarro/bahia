@@ -14,6 +14,7 @@ import (
 
 var stateBucket = []byte("recovery-state-v1")
 var stateKey = []byte("incident")
+var rotationBucket = []byte("rotation-work-v1")
 
 type Ledger struct{ db *bbolt.DB }
 
@@ -39,7 +40,14 @@ func OpenLedger(path, daemonStore string) (*Ledger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open recovery ledger: %w", err)
 	}
-	if err = db.Update(func(tx *bbolt.Tx) error { _, err := tx.CreateBucketIfNotExists(stateBucket); return err }); err != nil {
+	if err = db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists(stateBucket)
+		if err != nil {
+			return err
+		}
+		_, err = tx.CreateBucketIfNotExists(rotationBucket)
+		return err
+	}); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -97,4 +105,36 @@ func LoadStateReadOnly(path string) (State, error) {
 		return json.Unmarshal(raw, &s)
 	})
 	return s, err
+}
+
+func (l *Ledger) RotationItems() (map[string]RotationWorkItem, error) {
+	out := map[string]RotationWorkItem{}
+	err := l.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(rotationBucket)
+		if bucket == nil {
+			return errors.New("rotation ledger bucket missing")
+		}
+		return bucket.ForEach(func(k, v []byte) error {
+			var item RotationWorkItem
+			if err := json.Unmarshal(v, &item); err != nil {
+				return err
+			}
+			if item.Ref.ID != string(k) {
+				return errors.New("rotation work item id mismatch")
+			}
+			out[string(k)] = item
+			return nil
+		})
+	})
+	return out, err
+}
+func (l *Ledger) SaveRotationItem(item RotationWorkItem) error {
+	if item.Ref.ID == "" {
+		return errors.New("rotation work item id required")
+	}
+	raw, err := json.Marshal(item)
+	if err != nil {
+		return err
+	}
+	return l.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(rotationBucket).Put([]byte(item.Ref.ID), raw) })
 }
