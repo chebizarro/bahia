@@ -41,3 +41,5 @@ bahia-recover abort --config /etc/bahia/config.yaml --confirm-abort
 `plan` and `status` do not create a ledger or contact signers or relays. `apply` and `resume` require the exact next phase; a pending signed event is republished unchanged after interruption. Every controlled relay must acknowledge publication. Aborting is refused once an activated trust transition has been signed or observed, even if its phase receipt was interrupted. After cutover the workflow is forward-only.
 
 Containment, domain reassertion, secret rotation, purge receipts, and consumer acknowledgments require registered production adapters. Without them the relevant phase fails closed and no completion receipt is emitted. The operator must not interpret a signed `started` or `failed` receipt as completion. A `verify` failure lists consumers whose acknowledgment evidence is missing. Inspect signed receipts and the activated trust-epoch head before retirement.
+
+For the phase-by-phase operator checklist, purge evidence file, staging rehearsal, and live promotion gates, see [identity-compromise recovery](identity-compromise-recovery.md).

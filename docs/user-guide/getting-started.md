@@ -249,4 +249,4 @@ See the [service signer runbook](../runbooks/service-signer.md#frostr-threshold-
 
 ## Operator identity recovery
 
-Set a deployment-stable `nostr.service_id` (default `bahia-service-v1`) before identity rotation. The separate `identity_recovery` block is required only by `bahia-recover`; its operator signer must use NIP-46 or NIP-55L and a mounted NIP-46 client-key file. See the [operator runbook](../runbooks/identity-recovery.md).
+Set a deployment-stable `nostr.service_id` (default `bahia-service-v1`) before identity rotation. The separate `identity_recovery` block is required only by `bahia-recover`; its operator signer must use NIP-46 or NIP-55L and a mounted NIP-46 client-key file. The optional `identity_recovery.purge_evidence_path` names a protected, identifier-only JSON evidence file for archive, PostgreSQL backup, WAL, and controlled re-encryption receipts. See the [operator runbook](../runbooks/identity-compromise-recovery.md).
