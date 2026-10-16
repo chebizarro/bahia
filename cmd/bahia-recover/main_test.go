@@ -26,6 +26,7 @@ func TestPlanAndStatusDoNotCreateLedger(t *testing.T) {
 		return pub.Hex()
 	}
 	old, root, next := key(), key(), key()
+	sidecar, dns, loom, soulfactory, hiveci := key(), key(), key(), key(), key()
 	yaml := fmt.Sprintf(`nostr:
   service_id: bahia-service-v1
   operator_root_pubkey: %s
@@ -37,7 +38,17 @@ identity_recovery:
   old_pubkey: %s
   reason_code: compromised
   controlled_relays: ["wss://controlled.example"]
-  consumer_roster: [daemon]
+  consumer_roster: [daemon, sidecar, web, cli, dns, loom, soulfactory, hiveci, pinned-runtimes]
+  acknowledgment_authorities:
+    daemon: %s
+    sidecar: %s
+    web: %s
+    cli: %s
+    dns: %s
+    loom: %s
+    soulfactory: %s
+    hiveci: %s
+    pinned-runtimes: %s
   accepted_event_ids: []
   operator:
     public_key: %s
@@ -47,7 +58,8 @@ identity_recovery:
     public_key: %s
     signer:
       method: nip55l
-`, root, old, filepath.Join(dir, "daemon.bolt"), ledger, old, root, next)
+`, root, old, filepath.Join(dir, "daemon.bolt"), ledger, old,
+		next, sidecar, root, root, dns, loom, soulfactory, hiveci, root, root, next)
 	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}

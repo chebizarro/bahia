@@ -78,9 +78,16 @@ daemon -r -P /var/run/bahia-dns-agent.pid \
   --private-key-file /usr/local/etc/bahia/dns-agent.key \
   --relays wss://relay.example.net \
   --authorized-pubkey <bahia-service-pubkey-hex> \
+  --service-id <stable-bahia-deployment-id> \
+  --operator-root-pubkey <independent-operator-root-hex> \
+  --trust-epoch-inventory-path /var/db/bahia-dns-agent/accepted-inventory.json \
   --include-dir /usr/local/etc/dnsmasq.d \
   --allowed-zones example.internal \
   --reload-command "service dnsmasq reload" \
   --state-file /var/db/bahia-dns-agent/state.json \
   --require-encryption
 ```
+
+The DNS agent refuses startup without the stable service ID and independent
+operator root. The inventory artifact is required to admit inventoried old-key
+events after activation; without it, old-key replay is rejected.

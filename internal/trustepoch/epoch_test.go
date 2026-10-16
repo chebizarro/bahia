@@ -123,6 +123,30 @@ func TestInventoryAndHostility(t *testing.T) {
 	require.Equal(t, Accept, r.JudgeEvent(newEvent))
 }
 
+func TestJudgeServiceEventRejectsOldPostBarrierAndUnverifiableState(t *testing.T) {
+	ev, body, root, old, newKey := fixture(t)
+	state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	source := &testSource{event: &ev, present: true}
+	v := &Verifier{OperatorRoot: root.Public().Hex(), LegacyPubkey: old.Public().Hex(), Source: source, Persistence: state}
+	late := nostr.Event{Kind: 5100, CreatedAt: nostr.Timestamp(body.ActivationBarrier + 1), Content: "old"}
+	require.NoError(t, late.Sign(old))
+	decision, service, err := v.JudgeServiceEvent(t.Context(), "deployment-a", late)
+	require.NoError(t, err)
+	require.True(t, service)
+	require.Equal(t, Hostile, decision)
+	current := nostr.Event{Kind: 5100, CreatedAt: nostr.Timestamp(body.ActivationBarrier + 1), Content: "new"}
+	require.NoError(t, current.Sign(newKey))
+	decision, service, err = v.JudgeServiceEvent(t.Context(), "deployment-a", current)
+	require.NoError(t, err)
+	require.True(t, service)
+	require.Equal(t, Accept, decision)
+	source.err = errors.New("relay unavailable")
+	_, _, err = v.JudgeServiceEvent(t.Context(), "deployment-a", current)
+	require.Error(t, err)
+}
+
 func TestUnverifiableHeadFailsClosed(t *testing.T) {
 	ev, _, root, old, _ := fixture(t)
 	state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
@@ -156,6 +180,45 @@ func TestAckEnvelopeRoundTrip(t *testing.T) {
 	require.Error(t, VerifyAcknowledgment(ack, r, "daemon"))
 }
 
+func TestOperatorVerificationAcknowledgmentAuthority(t *testing.T) {
+	ev, body, root, _, newKey := fixture(t)
+	r := Resolution{ServiceID: "deployment-a", Pubkey: body.NewPubkey, Epoch: body.Epoch,
+		Record: &body, EventID: ev.ID.Hex()}
+	ack, err := NewAcknowledgmentForAuthority(r, "web", 200, root.Public().Hex())
+	require.NoError(t, err)
+	require.NoError(t, ack.Sign(root))
+	require.NoError(t, VerifyAcknowledgmentAuthority(ack, r, "web", root.Public().Hex(), true))
+	require.Error(t, VerifyAcknowledgmentAuthority(ack, r, "web", newKey.Public().Hex(), true))
+	ack, err = NewAcknowledgment(r, "web", 201)
+	require.NoError(t, err)
+	require.NoError(t, ack.Sign(root))
+	require.Error(t, VerifyAcknowledgmentAuthority(ack, r, "web", root.Public().Hex(), true))
+}
+
+func TestReadinessEnvelopeIsOperatorBoundAndByteStable(t *testing.T) {
+	_, body, root, _, newKey := fixture(t)
+	value := Readiness{ServiceID: "deployment-a", ConsumerID: "dns", Epoch: 1,
+		IncidentID: body.IncidentID, EnforcingPubkey: body.NewPubkey,
+		EvidenceIDs: []string{strings.Repeat("a", 64)}}
+	ev, err := NewReadiness(value, 199)
+	require.NoError(t, err)
+	require.Equal(t, `{"service_id":"deployment-a","consumer_id":"dns","epoch":1,"incident_id":"0199f4a6-3700-7000-8000-000000000001","enforcing_pubkey":"`+body.NewPubkey+`","waived":false,"evidence_ids":["`+strings.Repeat("a", 64)+`"]}`, ev.Content)
+	require.NoError(t, ev.Sign(root))
+	require.NoError(t, VerifyReadiness(ev, value, root.Public().Hex()))
+	require.Error(t, VerifyReadiness(ev, value, newKey.Public().Hex()))
+	waiver := value
+	waiver.EvidenceIDs = nil
+	waiver.Waived = true
+	waiver.ReasonCode = "component_unavailable"
+	ev, err = NewReadiness(waiver, 200)
+	require.NoError(t, err)
+	require.NoError(t, ev.Sign(root))
+	require.NoError(t, VerifyReadiness(ev, waiver, root.Public().Hex()))
+	waiver.ReasonCode = "contains secret"
+	_, err = NewReadiness(waiver, 201)
+	require.Error(t, err)
+}
+
 func mustJSON(t *testing.T, value any) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -168,7 +231,7 @@ func TestPendingConsumersAlwaysMissing(t *testing.T) {
 	for _, id := range ConsumerIDs() {
 		all[id] = true
 	}
-	require.Equal(t, []string{"dns", "loom", "soulfactory", "hiveci", "pinned-runtimes"}, MissingAcknowledgments(all))
+	require.Equal(t, []string{"soulfactory", "pinned-runtimes"}, MissingAcknowledgments(all))
 }
 
 func TestSharedEpochAndAckEnvelopeFixture(t *testing.T) {

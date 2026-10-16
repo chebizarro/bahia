@@ -347,6 +347,7 @@ type EncryptedRequestTransport struct {
 	subscriber             EncryptedRequestSubscriber
 	responder              *EncryptedResponder
 	authorizedPubkeys      []string
+	requestAdmission       func(context.Context, nostr.Event) error
 	handlers               map[string]EncryptedRequestHandler
 	contextVMHandlers      map[string]ContextVMHandler
 	contextVMOperatorGates map[string]*FleetOperatorGate
@@ -368,6 +369,13 @@ type EncryptedRequestTransport struct {
 }
 
 type EncryptedRequestTransportOption func(*EncryptedRequestTransport)
+
+// SetContextVMRequestAdmission applies a component-specific signed-event
+// authority decision after unwrapping and before dispatch. It replaces the
+// static requester list and must be set before the transport starts.
+func (t *EncryptedRequestTransport) SetContextVMRequestAdmission(admit func(context.Context, nostr.Event) error) {
+	t.requestAdmission = admit
+}
 
 func WithContextVMResponseStore(store repository.ContextVMResponseStore, ttl time.Duration) EncryptedRequestTransportOption {
 	return func(transport *EncryptedRequestTransport) {
@@ -726,7 +734,7 @@ func (t *EncryptedRequestTransport) handleContextVMEventSince(ctx context.Contex
 		t.dispatchContextVMResponse(ctx, response)
 		return
 	}
-	if !t.authorized(innerPubkey) {
+	if !t.authorized(ctx, *inner) {
 		t.logger.Warn("unauthorized ContextVM requester", zap.String("event_id", innerID), zap.String("requester_pubkey", innerPubkey))
 		t.publishContextVMResponse(ctx, outer, inner, encrypted, ContextVMJSONRPCResponse{JSONRPC: cascontextvm.JSONRPCVersion, ID: json.RawMessage("null"), Error: &JSONRPCError{Code: -32001, Message: "requester is not authorized for ContextVM Bahia requests"}}, "unauthorized")
 		return
@@ -1274,11 +1282,14 @@ func contextVMResponseID(id json.RawMessage) json.RawMessage {
 	return cascontextvm.NewResponse(id, nil).ID
 }
 
-func (t *EncryptedRequestTransport) authorized(pubkey string) bool {
+func (t *EncryptedRequestTransport) authorized(ctx context.Context, event nostr.Event) bool {
+	if t.requestAdmission != nil {
+		return t.requestAdmission(ctx, event) == nil
+	}
 	// An empty operator allowlist must never turn signature verification into
 	// authorization. ContextVM carries control-plane reads and mutations, so a
 	// missing authorization configuration fails closed.
-	return len(t.authorizedPubkeys) > 0 && slices.Contains(t.authorizedPubkeys, pubkey)
+	return len(t.authorizedPubkeys) > 0 && slices.Contains(t.authorizedPubkeys, event.PubKey.Hex())
 }
 
 func tagContains(tags nostr.Tags, name, value string) bool {

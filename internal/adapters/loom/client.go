@@ -30,6 +30,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
@@ -134,6 +135,8 @@ type Client struct {
 	signer          nostr.Keyer
 	clientPubkey    string
 	canonicalSigner CanonicalSigner
+	trustVerifier   *trustepoch.Verifier
+	serviceID       string
 
 	planeCapabilities VerifiedPlaneCapabilitySource
 
@@ -210,6 +213,46 @@ func WithVerifiedPlaneCapabilities(source VerifiedPlaneCapabilitySource) ClientO
 // Signet/NIP-46 client; raw-key signers are development-only compatibility.
 func WithCanonicalSigner(signer CanonicalSigner) ClientOption {
 	return func(c *Client) { c.canonicalSigner = signer }
+}
+
+// WithTrustEpoch pins every job dispatch and result wait to the current
+// operator-authorized service identity, not a stale process signer.
+func WithTrustEpoch(verifier *trustepoch.Verifier, serviceID string) ClientOption {
+	return func(c *Client) { c.trustVerifier, c.serviceID = verifier, serviceID }
+}
+
+func (c *Client) requireCurrentServiceIdentity(ctx context.Context) error {
+	if c.serviceID == "" {
+		return nil
+	}
+	if c.trustVerifier == nil {
+		return fmt.Errorf("loom trust epoch verifier unavailable")
+	}
+	resolved, err := c.trustVerifier.ServiceIdentity(ctx, c.serviceID)
+	if err != nil {
+		return err
+	}
+	if c.clientPubkey == "" || resolved.Pubkey != c.clientPubkey {
+		return fmt.Errorf("loom service signer differs from current trust epoch")
+	}
+	return nil
+}
+
+func (c *Client) admitJobEvent(ctx context.Context, ev nostr.Event) error {
+	if c.serviceID == "" {
+		return nil
+	}
+	if c.trustVerifier == nil {
+		return fmt.Errorf("loom trust epoch verifier unavailable")
+	}
+	decision, serviceEvent, err := c.trustVerifier.JudgeServiceEvent(ctx, c.serviceID, ev)
+	if err != nil {
+		return err
+	}
+	if serviceEvent && decision == trustepoch.Hostile {
+		return fmt.Errorf("loom event rejected by trust epoch")
+	}
+	return nil
 }
 
 // ProjectCanonicalStatus publishes the canonical projection for a Loom status
@@ -291,6 +334,9 @@ func (c *Client) SubmitJob(ctx context.Context, job JobRequest) (_ string, retEr
 	}()
 	if c.signer == nil {
 		return "", fmt.Errorf("loom client signer not configured")
+	}
+	if err := c.requireCurrentServiceIdentity(ctx); err != nil {
+		return "", err
 	}
 	dependencyTags, err := validatedBuildDependencyTags(job.BuildDependencies)
 	if err != nil {
@@ -526,6 +572,9 @@ func (c *Client) AwaitJobStatus(ctx context.Context, jobEventID string, callback
 func (c *Client) AwaitJobStatusFromWorker(ctx context.Context, jobEventID string, expectedWorkerPubkey string, callbacks ...StatusCallback) (*JobStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.jobTimeout)
 	defer cancel()
+	if err := c.requireCurrentServiceIdentity(ctx); err != nil {
+		return nil, err
+	}
 
 	if expectedWorkerPubkey == "" {
 		expectedWorkerPubkey = c.submittedWorker(jobEventID)
@@ -614,6 +663,13 @@ resubscribe:
 			}
 			if ev == nil {
 				c.logger.Warn("dropping nil Loom job event", zap.String("job_id", jobEventID))
+				continue
+			}
+			if err := c.requireCurrentServiceIdentity(ctx); err != nil {
+				return nil, err
+			}
+			if err := c.admitJobEvent(ctx, *ev); err != nil {
+				c.logger.Warn("dropping Loom event rejected by trust epoch", zap.String("event_id", nostrutil.EventIDHex(ev)), zap.Error(err))
 				continue
 			}
 			backoff = c.initialJobSubscriptionBackoff()

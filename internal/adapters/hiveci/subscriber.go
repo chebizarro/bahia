@@ -16,6 +16,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"go.uber.org/zap"
 )
 
@@ -73,8 +74,10 @@ type Subscriber struct {
 	// signed run, result and release attestation the subscriber admits
 	// Release admission and retry read it; no SQL mirror is
 	// consulted.
-	evidence EvidenceStore
-	now      func() time.Time
+	evidence      EvidenceStore
+	trustVerifier *trustepoch.Verifier
+	serviceID     string
+	now           func() time.Time
 }
 
 func (s *Subscriber) SetRunConsumer(consumer RunConsumer) { s.onRun = consumer }
@@ -115,6 +118,12 @@ func (s *Subscriber) SetReleaseAuditor(auditor ReleaseIngestAuditor) { s.release
 // the local event store before acting on it.
 func (s *Subscriber) SetEvidenceStore(events EvidenceStore) {
 	s.evidence = events
+}
+
+// SetTrustEpoch applies the operator-root service identity decision before a
+// workflow run or result can reach the canonical repository.
+func (s *Subscriber) SetTrustEpoch(verifier *trustepoch.Verifier, serviceID string) {
+	s.trustVerifier, s.serviceID = verifier, serviceID
 }
 
 func NewSubscriber(pool *nostrAdapter.RelayPool, repo repository.HiveCIRepository, trustedCIPubkeys []string, logger *zap.Logger, onResult ResultConsumer) *Subscriber {
@@ -163,6 +172,14 @@ func (s *Subscriber) Run(ctx context.Context) error {
 }
 
 func (s *Subscriber) subscribe(ctx context.Context) error {
+	if s.serviceID != "" {
+		if s.trustVerifier == nil {
+			return fmt.Errorf("Hive-CI trust epoch verifier unavailable")
+		}
+		if _, err := s.trustVerifier.ServiceIdentity(ctx, s.serviceID); err != nil {
+			return err
+		}
+	}
 	filters := s.subscriptionFilters()
 	if s.pool == nil {
 		return fmt.Errorf("hiveci relay pool is not configured")
@@ -176,12 +193,17 @@ func (s *Subscriber) subscribe(ctx context.Context) error {
 
 func (s *Subscriber) subscriptionFilters() []nostr.Filter {
 	authors := make([]nostr.PubKey, 0, len(s.trusted))
-	for raw := range s.trusted {
-		if author, err := nostr.PubKeyFromHex(raw); err == nil {
-			authors = append(authors, author)
+	if s.serviceID == "" {
+		for raw := range s.trusted {
+			if author, err := nostr.PubKeyFromHex(raw); err == nil {
+				authors = append(authors, author)
+			}
 		}
 	}
-	// 5401 authors are statically known. 5402 authors cannot be fully scoped:
+	// With an epoch, 5401 must include future service keys without polling or
+	// trusting a stale author filter. Each delivered run is independently
+	// judged and then checked against the trusted CI identities.
+	// 5402 authors cannot be fully scoped:
 	// grasp-gitea uses a per-run ephemeral publisher, while Bahia-dispatched
 	// jobs use configured Loom worker keys. Correlation is enforced after load.
 	filters := []nostr.Filter{
@@ -311,6 +333,17 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 		}
 		return
 	}
+	if s.serviceID != "" {
+		if s.trustVerifier == nil {
+			s.logger.Error("Hive-CI trust epoch verifier unavailable")
+			return
+		}
+		decision, serviceEvent, err := s.trustVerifier.JudgeServiceEvent(ctx, s.serviceID, *ev)
+		if err != nil || (serviceEvent && decision == trustepoch.Hostile) {
+			s.logger.Warn("Hive-CI service event rejected by trust epoch", zap.String("event_id", ev.ID.Hex()), zap.Error(err))
+			return
+		}
+	}
 
 	// Continue the release-spine trace carried by the inbound 5401/5402 so
 	// ingest, evidence resolution, and the downstream promotion all land in the
@@ -332,7 +365,14 @@ func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) {
 func (s *Subscriber) handleWorkflowRun(ctx context.Context, ev *nostr.Event) {
 	eventID := nostrutil.EventIDHex(ev)
 	pubkey := nostrutil.EventPubKeyHex(ev)
-	if _, ok := s.trusted[pubkey]; !ok {
+	_, ok := s.trusted[pubkey]
+	if !ok && s.serviceID != "" && s.trustVerifier != nil {
+		if _, legacyTrusted := s.trusted[s.trustVerifier.LegacyPubkey]; legacyTrusted {
+			resolved, err := s.trustVerifier.ServiceIdentity(ctx, s.serviceID)
+			ok = err == nil && resolved.Pubkey == pubkey
+		}
+	}
+	if !ok {
 		s.warnDecision("ignoring untrusted hiveci workflow run", "unauthorized_signer",
 			zap.String("event_id", eventID), zap.Int("kind", kinds.HiveCIWorkflowRun), zap.String("pubkey", pubkey))
 		return

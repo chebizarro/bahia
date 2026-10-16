@@ -20,6 +20,9 @@ ExecStart=/usr/local/bin/bahia-dns-agent \
   --private-key-file /etc/bahia/dns-agent.key \
   --relays wss://relay.example.net \
   --authorized-pubkey <bahia-service-pubkey-hex> \
+  --service-id <stable-bahia-deployment-id> \
+  --operator-root-pubkey <independent-operator-root-hex> \
+  --trust-epoch-inventory-path /var/lib/bahia-dns-agent/accepted-inventory.json \
   --include-dir /etc/dnsmasq.d \
   --allowed-zones example.internal \
   --state-file /var/lib/bahia-dns-agent/state.json \

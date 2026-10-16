@@ -237,7 +237,6 @@
 1	internal/domain.SigningPolicy.TrustsSigner
 1	internal/domain.ValidateServiceContinuityProfile
 1	internal/kinds.BackupRequestKinds
-1	internal/kinds.CPStateTopicIdentityIncident
 1	internal/kinds.DNSReadModelKinds
 1	internal/kinds.DNSRequestKinds
 1	internal/kinds.DNSResultKinds
@@ -374,5 +373,4 @@
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
 1	internal/soulfactory.VoiceProviderRegistry.SetCacheTTL
 1	internal/soulfactory.WithProvisioningEngine
-1	internal/trustepoch.MissingAcknowledgments
 1	internal/workflow.WithDeploymentLoomClient

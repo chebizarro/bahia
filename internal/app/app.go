@@ -434,6 +434,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 
 	loomClientOptions := []loom.ClientOption{loom.WithWorkerRepo(workerRepo)}
+	if cfg.Nostr.ServiceID != "" {
+		loomClientOptions = append(loomClientOptions, loom.WithTrustEpoch(trustVerifier, cfg.Nostr.ServiceID))
+	}
 	loomCanonicalSigner, loomSignetManager, err := newLoomCanonicalProjectionSigner(cfg, relayURLs, logger)
 	if err != nil {
 		return nil, fmt.Errorf("configuring Loom canonical projection signer: %w", err)
@@ -554,7 +557,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	// its readers, best effort.
 	auditEventRepo := nostrAdapter.NewLocalEventRepository(localEventStore, localOutboxAdmit)
 
-	hiveCIJobClient := loom.NewClient(cfg.Loom, serviceKeyer, controlPlanePool, logger, loom.WithWorkerRepo(workerRepo))
+	hiveCIJobOptions := []loom.ClientOption{loom.WithWorkerRepo(workerRepo)}
+	if cfg.Nostr.ServiceID != "" {
+		hiveCIJobOptions = append(hiveCIJobOptions, loom.WithTrustEpoch(trustVerifier, cfg.Nostr.ServiceID))
+	}
+	hiveCIJobClient := loom.NewClient(cfg.Loom, serviceKeyer, controlPlanePool, logger, hiveCIJobOptions...)
 	var continuityProjectionPublisher service.ContinuityNostrPublishFunc
 	if controlPlanePool != nil && serviceKeyer != nil {
 		continuityProjectionPublisher = func(ctx context.Context, kind int, tags nostr.Tags, content string) error {
@@ -2316,6 +2323,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 		hiveCanonical = nostrAdapter.NewHiveCICanonicalPublisher(nostrProjector, confidentialEncryptor, logger)
 		hiveRepo = hiveciAdapter.NewCanonicalRepository(localEventStore, hiveCanonical, hiveIndex, cfg.HiveCI.TrustedCIPubkeys, logger)
+		if cfg.Nostr.ServiceID != "" {
+			hiveRepo.SetTrustEpoch(trustVerifier, cfg.Nostr.ServiceID)
+		}
 		hiveRunLookup = hiveRepo
 		var hiveResultMu sync.Mutex
 		bridge := pipeline.NewBridge(
@@ -2348,6 +2358,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			}
 		}
 		hiveSub := hiveciAdapter.NewSubscriber(relayPool, hiveRepo, cfg.HiveCI.TrustedCIPubkeys, logger, onResult)
+		if cfg.Nostr.ServiceID != "" {
+			hiveSub.SetTrustEpoch(trustVerifier, cfg.Nostr.ServiceID)
+		}
 		hiveSub.SetTrustedResultPubkeys(cfg.HiveCI.TrustedLoomWorkerPubkeys)
 		hiveSub.SetEvidenceStore(localEventStore)
 		if len(cfg.HiveCI.TrustedLoomWorkerPubkeys) == 0 {

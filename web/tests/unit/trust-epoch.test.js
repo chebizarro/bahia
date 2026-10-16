@@ -21,7 +21,8 @@ describe('trust epoch envelopes and admission', () => {
     const epoch = parseTrustEpoch(fixture.epoch, 'deployment-a', fixture.root_pubkey);
     expect(JSON.stringify(epoch)).toBe(fixture.epoch.content);
     const ack = parseTrustEpochAck(fixture.ack, { serviceID: 'deployment-a', consumerID: 'daemon',
-      epoch: 1, epochEventID: fixture.epoch.id, newPubkey: fixture.new_pubkey });
+      epoch: 1, epochEventID: fixture.epoch.id,
+      incidentID: JSON.parse(fixture.epoch.content).incident_id, newPubkey: fixture.new_pubkey });
     expect(JSON.stringify(ack)).toBe(fixture.ack.content);
     expect(fixture.ack.tags).toEqual([['d', 'trust-epoch-ack:deployment-a:daemon'],
       ['t', 'identity-recovery-receipt'], ['domain', 'identity'], ['schema', 'bahia.trust-epoch-ack.v1'],

@@ -96,6 +96,20 @@ func (testPurge) Purge(context.Context, []nostr.ID) ([]string, error) {
 type testAcks struct{}
 
 func (testAcks) Missing(context.Context, int64, []string) ([]string, error) { return nil, nil }
+func (testAcks) Readiness(_ context.Context, _ int64, _, _ string, roster []string) (CutoverReadiness, error) {
+	proof := CutoverReadiness{}
+	for i := range roster {
+		proof.EvidenceIDs = append(proof.EvidenceIDs, fmt.Sprintf("%064x", i+1))
+	}
+	return proof, nil
+}
+
+type testWaiverAcks struct{ testAcks }
+
+func (testWaiverAcks) Readiness(_ context.Context, _ int64, _, _ string, _ []string) (CutoverReadiness, error) {
+	id := fmt.Sprintf("%064x", 42)
+	return CutoverReadiness{EvidenceIDs: []string{id}, Waivers: map[string]string{"daemon": id}}, nil
+}
 func signer(t *testing.T) nostr.Keyer {
 	t.Helper()
 	k, err := nostrutil.NewLocalKeyer(nostrutil.GeneratePrivateKeyHex())
@@ -200,6 +214,45 @@ func TestAbortBeforeAndAfterCutover(t *testing.T) {
 	}
 	if err := e2.Abort(ctx); !errors.Is(err, ErrForwardOnly) {
 		t.Fatalf("post-cut abort: %v", err)
+	}
+}
+
+func TestCutRefusesAbsentReadinessBeforePublishingEpoch(t *testing.T) {
+	e, src, _ := fixture(t)
+	for _, p := range Phases[:4] {
+		if err := e.Apply(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.Acks = nil
+	if err := e.Apply(t.Context(), CutActivateTrust); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("cut without readiness: %v", err)
+	}
+	for _, ev := range src.events {
+		if tag(ev, "t") == kinds.CPStateTopicTrustEpoch {
+			t.Fatal("trust activated without readiness")
+		}
+	}
+}
+
+func TestCutReceiptCarriesSignedWaiverEventID(t *testing.T) {
+	e, _, _ := fixture(t)
+	for _, p := range Phases[:4] {
+		if err := e.Apply(t.Context(), p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.Acks = testWaiverAcks{}
+	if err := e.Apply(t.Context(), CutActivateTrust); err != nil {
+		t.Fatal(err)
+	}
+	s, err := e.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, ok := s.Receipt(CutActivateTrust)
+	if !ok || receipt.WaiverEventIDs["daemon"] != fmt.Sprintf("%064x", 42) {
+		t.Fatalf("waiver absent from signed phase receipt: %+v", receipt)
 	}
 }
 func TestInventoryDigestDeterministic(t *testing.T) {

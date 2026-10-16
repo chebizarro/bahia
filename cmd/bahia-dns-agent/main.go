@@ -35,19 +35,22 @@ import (
 )
 
 type config struct {
-	ConfigFile        string   `json:"-"`
-	PrivateKeyFile    string   `json:"private_key_file"`
-	RelayURLs         []string `json:"relay_urls"`
-	AuthorizedPubkey  string   `json:"authorized_pubkey"`
-	IncludeDir        string   `json:"include_dir"`
-	AllowedZones      []string `json:"allowed_zones"`
-	FilePrefix        string   `json:"file_prefix"`
-	ReloadCommand     string   `json:"reload_command"`
-	PreReloadCheck    string   `json:"pre_reload_check"`
-	StateFilePath     string   `json:"state_file_path"`
-	StorePath         string   `json:"store_path"`
-	RequireEncryption bool     `json:"require_encryption"`
-	HealthAddr        string   `json:"health_addr"`
+	ConfigFile              string   `json:"-"`
+	PrivateKeyFile          string   `json:"private_key_file"`
+	RelayURLs               []string `json:"relay_urls"`
+	AuthorizedPubkey        string   `json:"authorized_pubkey"`
+	ServiceID               string   `json:"service_id"`
+	OperatorRootPubkey      string   `json:"operator_root_pubkey"`
+	TrustEpochInventoryPath string   `json:"trust_epoch_inventory_path"`
+	IncludeDir              string   `json:"include_dir"`
+	AllowedZones            []string `json:"allowed_zones"`
+	FilePrefix              string   `json:"file_prefix"`
+	ReloadCommand           string   `json:"reload_command"`
+	PreReloadCheck          string   `json:"pre_reload_check"`
+	StateFilePath           string   `json:"state_file_path"`
+	StorePath               string   `json:"store_path"`
+	RequireEncryption       bool     `json:"require_encryption"`
+	HealthAddr              string   `json:"health_addr"`
 }
 
 func main() {
@@ -117,12 +120,18 @@ func run(args []string) error {
 	}
 	pool := nostradapter.NewRelayPool(cfg.RelayURLs, logger, nostradapter.WithAuthSigner(agentKeyer))
 	defer pool.Close()
+	pool.Connect(ctx)
+	trust, err := startDNSTrustEpoch(ctx, cfg, pool, store, normalizedKey, logger)
+	if err != nil {
+		return err
+	}
+	defer trust.Close()
 	transport, err := newRequestTransport(pool, store, normalizedKey, cfg.AuthorizedPubkey, logger)
 	if err != nil {
 		return err
 	}
+	transport.SetContextVMRequestAdmission(trust.Judge)
 	service.RegisterHandlers(transport)
-	pool.Connect(ctx)
 
 	// Zone sync subscriber — subscribe to zone-sync events from
 	// the daemon's pubkey and apply them locally. Runs alongside the existing
@@ -135,18 +144,14 @@ func run(args []string) error {
 		ReconcileKinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)},
 	}
 	go func() {
-		authorPubKey, pkErr := nostrutil.PubKeyFromHex(cfg.AuthorizedPubkey)
-		if pkErr != nil {
-			logger.Error("invalid daemon pubkey for zone sync", zap.Error(pkErr))
-
-			return
-		}
-		filter := nostr.Filter{
-			Authors: []nostr.PubKey{authorPubKey},
-			Kinds:   []nostr.Kind{nostr.Kind(kinds.CASControlState)},
-			Tags:    nostr.TagMap{"t": []string{"dns-zone-sync"}},
-		}
 		for {
+			authors, currentErr := trust.CurrentAuthors()
+			if currentErr != nil {
+				logger.Error("DNS trust epoch unavailable", zap.Error(currentErr))
+				return
+			}
+			filter := nostr.Filter{Authors: authors, Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)},
+				Tags: nostr.TagMap{"t": []string{"dns-zone-sync"}}}
 			sub, err := zoneSyncSub.SubscribeAllWithEOSE(ctx, []nostr.Filter{filter})
 			if err != nil {
 				if ctx.Err() != nil {
@@ -156,15 +161,34 @@ func run(args []string) error {
 
 				return
 			}
-			for ev := range sub.Events {
-				if ev == nil {
-					continue
-				}
+			updated := false
+			updatedByEpoch := false
+			for !updated {
 				select {
-				case zoneSyncEvents <- *ev:
+				case ev, ok := <-sub.Events:
+					if !ok {
+						updated = true
+						continue
+					}
+					if ev != nil {
+						select {
+						case zoneSyncEvents <- *ev:
+						case <-ctx.Done():
+							sub.Close()
+							return
+						}
+					}
+				case <-trust.Updates():
+					updated = true
+					updatedByEpoch = true
 				case <-ctx.Done():
+					sub.Close()
 					return
 				}
+			}
+			sub.Close()
+			if updatedByEpoch {
+				continue
 			}
 			if gaveUp := sub.GaveUp(); gaveUp != nil {
 				logger.Error("zone sync subscription gave up — waiting for topology change", zap.Error(gaveUp))
@@ -174,10 +198,11 @@ func run(args []string) error {
 				}
 				continue
 			}
-			return // events channel closed normally
+			return
 		}
 	}()
 	zoneSubscriber := dnsagent.NewZoneSubscriber(service, cfg.AuthorizedPubkey, zoneSyncEvents, logger)
+	zoneSubscriber.SetEventAdmission(trust.Judge)
 	go func() {
 		if err := zoneSubscriber.Run(ctx); err != nil {
 			logger.Error("zone subscriber stopped", zap.Error(err))
@@ -313,6 +338,9 @@ func loadConfig(args []string) (config, error) {
 	flags.StringVar(&cfg.PrivateKeyFile, "private-key-file", cfg.PrivateKeyFile, "file containing the DNS agent Nostr private key")
 	flags.StringVar(&relays, "relays", relays, "comma-separated Nostr relay URLs")
 	flags.StringVar(&cfg.AuthorizedPubkey, "authorized-pubkey", cfg.AuthorizedPubkey, "Bahia service public key authorized to call the agent")
+	flags.StringVar(&cfg.ServiceID, "service-id", cfg.ServiceID, "stable Bahia service id for trust epochs")
+	flags.StringVar(&cfg.OperatorRootPubkey, "operator-root-pubkey", cfg.OperatorRootPubkey, "independent operator trust root")
+	flags.StringVar(&cfg.TrustEpochInventoryPath, "trust-epoch-inventory-path", cfg.TrustEpochInventoryPath, "verified accepted event inventory artifact")
 	flags.StringVar(&cfg.IncludeDir, "include-dir", cfg.IncludeDir, "dnsmasq include directory")
 	flags.StringVar(&zones, "allowed-zones", zones, "comma-separated DNS zone allowlist")
 	flags.StringVar(&cfg.FilePrefix, "file-prefix", cfg.FilePrefix, "prefix for Bahia-owned dnsmasq include files")
@@ -365,6 +393,9 @@ func applyEnvironment(cfg *config) error {
 	setStringEnv("BAHIA_DNS_AGENT_PRIVATE_KEY_FILE", &cfg.PrivateKeyFile)
 	setStringSliceEnv("BAHIA_DNS_AGENT_RELAYS", &cfg.RelayURLs)
 	setStringEnv("BAHIA_DNS_AGENT_AUTHORIZED_PUBKEY", &cfg.AuthorizedPubkey)
+	setStringEnv("BAHIA_DNS_AGENT_SERVICE_ID", &cfg.ServiceID)
+	setStringEnv("BAHIA_DNS_AGENT_OPERATOR_ROOT_PUBKEY", &cfg.OperatorRootPubkey)
+	setStringEnv("BAHIA_DNS_AGENT_TRUST_EPOCH_INVENTORY_PATH", &cfg.TrustEpochInventoryPath)
 	setStringEnv("BAHIA_DNS_AGENT_INCLUDE_DIR", &cfg.IncludeDir)
 	setStringSliceEnv("BAHIA_DNS_AGENT_ALLOWED_ZONES", &cfg.AllowedZones)
 	setStringEnv("BAHIA_DNS_AGENT_FILE_PREFIX", &cfg.FilePrefix)
@@ -406,6 +437,14 @@ func validateConfig(cfg config) (config, error) {
 		return cfg, fmt.Errorf("invalid authorized Bahia service pubkey: %w", err)
 	}
 	cfg.AuthorizedPubkey = pubkey.Hex()
+	if cfg.ServiceID == "" || strings.ContainsAny(cfg.ServiceID, " \t\r\n:") {
+		return cfg, fmt.Errorf("stable service id required for DNS trust epoch")
+	}
+	root, err := nostr.PubKeyFromHex(cfg.OperatorRootPubkey)
+	if err != nil || root == pubkey {
+		return cfg, fmt.Errorf("independent operator root required for DNS trust epoch")
+	}
+	cfg.OperatorRootPubkey = root.Hex()
 	if cfg.IncludeDir == "" {
 		return cfg, fmt.Errorf("--include-dir or BAHIA_DNS_AGENT_INCLUDE_DIR is required")
 	}

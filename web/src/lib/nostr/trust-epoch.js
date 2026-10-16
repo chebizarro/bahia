@@ -55,8 +55,8 @@ export function verifiedInventory(ids, digest, count) {
   return actual === digest ? new Set(sorted) : null;
 }
 
-export function parseTrustEpochAck(event, { serviceID, consumerID, epoch, epochEventID, newPubkey }) {
-  if (event?.kind !== CAS_CONTROL_STATE || event.pubkey !== newPubkey || !validateForIngestion(event).valid ||
+export function parseTrustEpochAck(event, { serviceID, consumerID, epoch, epochEventID, incidentID, newPubkey, authority = newPubkey, operatorAttested = false }) {
+  if (event?.kind !== CAS_CONTROL_STATE || event.pubkey !== authority || !validateForIngestion(event).valid ||
       !exactTag(event.tags, 'd', `trust-epoch-ack:${serviceID}:${consumerID}`) ||
       !exactTag(event.tags, 't', TRUST_EPOCH_ACK_TOPIC) || !exactTag(event.tags, 'domain', 'identity') ||
       !exactTag(event.tags, 'schema', TRUST_EPOCH_ACK_SCHEMA) ||
@@ -66,9 +66,13 @@ export function parseTrustEpochAck(event, { serviceID, consumerID, epoch, epochE
   }
   let body;
   try { body = JSON.parse(event.content); } catch { throw new Error('Unverifiable trust epoch acknowledgment content'); }
-  if (!body || Object.keys(body).sort().join('|') !== ['service_id', 'consumer_id', 'epoch', 'epoch_event_id'].sort().join('|') ||
+  const fields = ['service_id', 'consumer_id', 'epoch', 'incident_id', 'enforcing_pubkey', 'epoch_event_id'];
+  if (operatorAttested) fields.push('attested_by');
+  if (!body || Object.keys(body).sort().join('|') !== fields.sort().join('|') ||
       body.service_id !== serviceID || body.consumer_id !== consumerID ||
-      body.epoch !== epoch || body.epoch_event_id !== epochEventID) {
+      body.epoch !== epoch || body.epoch_event_id !== epochEventID ||
+      body.incident_id !== incidentID || body.enforcing_pubkey !== newPubkey ||
+      (operatorAttested && body.attested_by !== authority)) {
     throw new Error('Unverifiable trust epoch acknowledgment content');
   }
   return body;

@@ -20,6 +20,9 @@ start_service() {
 		--private-key-file /etc/bahia/dns-agent.key \
 		--relays wss://relay.example.net \
 		--authorized-pubkey "<bahia-service-pubkey-hex>" \
+		--service-id "<stable-bahia-deployment-id>" \
+		--operator-root-pubkey "<independent-operator-root-hex>" \
+		--trust-epoch-inventory-path /etc/bahia/accepted-inventory.json \
 		--include-dir /tmp/dnsmasq.d \
 		--allowed-zones example.internal \
 		--reload-command "/etc/init.d/dnsmasq reload" \

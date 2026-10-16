@@ -3,7 +3,9 @@ package relaysidecar
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -169,20 +171,32 @@ func (t *sidecarTrustEpoch) isVerifiedReplay(ev nostr.Event) bool {
 		t.resolution.JudgeEvent(ev) == trustepoch.PreEpochAccepted
 }
 
-func acknowledgeSidecarEpoch(ctx context.Context, trust *sidecarTrustEpoch, signer nostr.Signer,
+func acknowledgeSidecarEpoch(ctx context.Context, trust *sidecarTrustEpoch, ackKeyFile string,
 	store *eventStore, relay *khatru.Relay) error {
 	if trust == nil || trust.resolution.Record == nil || !trust.resolution.Record.Activated {
 		return nil
 	}
-	pubkey, err := nostr.PubKeyFromHex(trust.resolution.Pubkey)
+	if ackKeyFile == "" {
+		return fmt.Errorf("activated trust epoch requires a dedicated relay acknowledgment identity")
+	}
+	raw, err := os.ReadFile(ackKeyFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("read relay acknowledgment identity: %w", err)
+	}
+	key, err := nostr.SecretKeyFromHex(strings.TrimSpace(string(raw)))
+	if err != nil {
+		return fmt.Errorf("invalid relay acknowledgment identity")
+	}
+	pubkey := key.Public()
+	if pubkey.Hex() == trust.resolution.Pubkey || pubkey.Hex() == trust.resolution.Record.OldPubkey ||
+		pubkey.Hex() == trust.verifier.OperatorRoot {
+		return fmt.Errorf("relay acknowledgment identity must be independent")
 	}
 	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)},
 		Authors: []nostr.PubKey{pubkey},
 		Tags:    nostr.TagMap{"d": []string{"trust-epoch-ack:" + trust.resolution.ServiceID + ":sidecar"}}}
 	for ev := range store.Query(ctx, filter, 0) {
-		if trustepoch.VerifyAcknowledgment(ev, trust.resolution, "sidecar") == nil {
+		if trustepoch.VerifyAcknowledgmentAuthority(ev, trust.resolution, "sidecar", pubkey.Hex(), false) == nil {
 			return nil
 		}
 	}
@@ -190,10 +204,10 @@ func acknowledgeSidecarEpoch(ctx context.Context, trust *sidecarTrustEpoch, sign
 	if err != nil {
 		return err
 	}
-	if err := signer.SignEvent(ctx, &ack); err != nil {
+	if err := ack.Sign(key); err != nil {
 		return fmt.Errorf("sign sidecar trust epoch ack: %w", err)
 	}
-	if err := trustepoch.VerifyAcknowledgment(ack, trust.resolution, "sidecar"); err != nil {
+	if err := trustepoch.VerifyAcknowledgmentAuthority(ack, trust.resolution, "sidecar", pubkey.Hex(), false); err != nil {
 		return err
 	}
 	if _, err := relay.AddEvent(ctx, ack); err != nil {

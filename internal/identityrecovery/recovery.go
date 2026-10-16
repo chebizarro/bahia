@@ -92,6 +92,13 @@ type ContainmentAdapter interface {
 }
 type ConsumerAcknowledgments interface {
 	Missing(context.Context, int64, []string) ([]string, error)
+	Readiness(context.Context, int64, string, string, []string) (CutoverReadiness, error)
+}
+
+type CutoverReadiness struct {
+	EvidenceIDs []string
+	Waivers     map[string]string
+	Missing     []string
 }
 
 type Incident struct {
@@ -116,12 +123,13 @@ type TrustEpoch struct {
 	Activated         bool     `json:"activated"`
 }
 type Receipt struct {
-	IncidentID  string   `json:"incident_id"`
-	Phase       Phase    `json:"phase"`
-	Status      string   `json:"status"`
-	InputDigest string   `json:"input_digest"`
-	EvidenceIDs []string `json:"evidence_ids"`
-	CompletedAt string   `json:"completed_at"`
+	IncidentID     string            `json:"incident_id"`
+	Phase          Phase             `json:"phase"`
+	Status         string            `json:"status"`
+	InputDigest    string            `json:"input_digest"`
+	EvidenceIDs    []string          `json:"evidence_ids"`
+	WaiverEventIDs map[string]string `json:"waiver_event_ids,omitempty"`
+	CompletedAt    string            `json:"completed_at"`
 }
 type InventoryEvent struct {
 	ID        string `json:"id"`
@@ -129,21 +137,22 @@ type InventoryEvent struct {
 	CreatedAt int64  `json:"created_at"`
 }
 type State struct {
-	IncidentID        string                 `json:"incident_id"`
-	DeclaredAt        string                 `json:"declared_at"`
-	OldPubkey         string                 `json:"old_pubkey"`
-	OperatorPubkey    string                 `json:"operator_pubkey"`
-	NewPubkey         string                 `json:"new_pubkey"`
-	Inventory         []InventoryEvent       `json:"inventory"`
-	Observed          []InventoryEvent       `json:"observed"`
-	DeletionIDs       []string               `json:"deletion_ids"`
-	InventoryDigest   string                 `json:"inventory_digest"`
-	Epoch             int64                  `json:"epoch"`
-	ActivationBarrier int64                  `json:"activation_barrier"`
-	Aborted           bool                   `json:"aborted"`
-	LastTimestamp     int64                  `json:"last_timestamp"`
-	Records           map[string]nostr.Event `json:"records"`
-	Pending           []string               `json:"pending"`
+	IncidentID            string                 `json:"incident_id"`
+	DeclaredAt            string                 `json:"declared_at"`
+	OldPubkey             string                 `json:"old_pubkey"`
+	OperatorPubkey        string                 `json:"operator_pubkey"`
+	NewPubkey             string                 `json:"new_pubkey"`
+	Inventory             []InventoryEvent       `json:"inventory"`
+	Observed              []InventoryEvent       `json:"observed"`
+	DeletionIDs           []string               `json:"deletion_ids"`
+	InventoryDigest       string                 `json:"inventory_digest"`
+	Epoch                 int64                  `json:"epoch"`
+	ActivationBarrier     int64                  `json:"activation_barrier"`
+	CutoverWaiverEventIDs map[string]string      `json:"cutover_waiver_event_ids,omitempty"`
+	Aborted               bool                   `json:"aborted"`
+	LastTimestamp         int64                  `json:"last_timestamp"`
+	Records               map[string]nostr.Event `json:"records"`
+	Pending               []string               `json:"pending"`
 }
 
 func (s State) Receipt(p Phase) (Receipt, bool) {
