@@ -685,7 +685,6 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
-	ServiceID  string `koanf:"service_id" yaml:"service_id" secret:"false"`
 	PrivateKey string `koanf:"private_key" secret:"true"`
 	// PublicKey pins Bahia's service identity (64-char hex). Required with a
 	// remote nostr.signer.method; with a local key it is optional and, when
@@ -1780,7 +1779,6 @@ func Defaults() *Config {
 			JobTimeout: 30 * time.Minute,
 		},
 		Nostr: NostrConfig{
-			ServiceID:                  "bahia-service-v1",
 			ContextVMRelays:            []string{},
 			PublishEnabled:             true,
 			PublishQuorum:              PublishQuorumDefault,
