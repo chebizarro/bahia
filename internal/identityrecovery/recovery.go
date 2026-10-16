@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 )
 
 type Phase string
@@ -44,6 +45,7 @@ type Config struct {
 	OldPubkey        nostr.PubKey
 	ReasonCode       string
 	ControlledRelays []string
+	CleanupRelays    []string
 	ConsumerRoster   []string
 	OperatorPubkey   nostr.PubKey
 	LocalStorePath   string
@@ -51,11 +53,24 @@ type Config struct {
 }
 
 func (c Config) Validate() error {
-	if c.ServiceID == "" || c.OldPubkey == nostr.ZeroPK || c.OperatorPubkey == nostr.ZeroPK || c.OldPubkey == c.OperatorPubkey || c.ReasonCode == "" || !codePattern.MatchString(c.ReasonCode) || !codePattern.MatchString(c.ServiceID) || len(c.ControlledRelays) == 0 || len(c.ConsumerRoster) == 0 || c.LocalStorePath == "" {
+	if c.ServiceID == "" || c.OldPubkey == nostr.ZeroPK || c.OperatorPubkey == nostr.ZeroPK || c.OldPubkey == c.OperatorPubkey || c.ReasonCode == "" || !codePattern.MatchString(c.ReasonCode) || !codePattern.MatchString(c.ServiceID) || len(c.ControlledRelays) == 0 || len(c.CleanupRelays) == 0 || len(c.ConsumerRoster) == 0 || c.LocalStorePath == "" {
 		return errors.New("incomplete recovery configuration")
 	}
-	if slices.Contains(c.ControlledRelays, "") || slices.Contains(c.ConsumerRoster, "") {
+	if slices.Contains(c.ControlledRelays, "") || slices.Contains(c.CleanupRelays, "") || slices.Contains(c.ConsumerRoster, "") {
 		return errors.New("empty relay or consumer")
+	}
+	seen := make(map[string]bool, len(c.CleanupRelays))
+	for _, relay := range c.CleanupRelays {
+		url := relayguard.Normalize(relay)
+		if url == "" || seen[url] {
+			return errors.New("invalid or duplicate cleanup relay")
+		}
+		seen[url] = true
+	}
+	for _, relay := range c.ControlledRelays {
+		if !seen[relayguard.Normalize(relay)] {
+			return errors.New("cleanup relays must include controlled relays")
+		}
 	}
 	return nil
 }
@@ -137,22 +152,24 @@ type InventoryEvent struct {
 	CreatedAt int64  `json:"created_at"`
 }
 type State struct {
-	IncidentID            string                 `json:"incident_id"`
-	DeclaredAt            string                 `json:"declared_at"`
-	OldPubkey             string                 `json:"old_pubkey"`
-	OperatorPubkey        string                 `json:"operator_pubkey"`
-	NewPubkey             string                 `json:"new_pubkey"`
-	Inventory             []InventoryEvent       `json:"inventory"`
-	Observed              []InventoryEvent       `json:"observed"`
-	DeletionIDs           []string               `json:"deletion_ids"`
-	InventoryDigest       string                 `json:"inventory_digest"`
-	Epoch                 int64                  `json:"epoch"`
-	ActivationBarrier     int64                  `json:"activation_barrier"`
-	CutoverWaiverEventIDs map[string]string      `json:"cutover_waiver_event_ids,omitempty"`
-	Aborted               bool                   `json:"aborted"`
-	LastTimestamp         int64                  `json:"last_timestamp"`
-	Records               map[string]nostr.Event `json:"records"`
-	Pending               []string               `json:"pending"`
+	IncidentID            string                              `json:"incident_id"`
+	DeclaredAt            string                              `json:"declared_at"`
+	OldPubkey             string                              `json:"old_pubkey"`
+	OperatorPubkey        string                              `json:"operator_pubkey"`
+	NewPubkey             string                              `json:"new_pubkey"`
+	Inventory             []InventoryEvent                    `json:"inventory"`
+	Observed              []InventoryEvent                    `json:"observed"`
+	DeletionIDs           []string                            `json:"deletion_ids"`
+	CleanupInventory      map[string]RelayEvidence            `json:"cleanup_inventory,omitempty"`
+	CleanupDeletions      map[string]map[string]RelayEvidence `json:"cleanup_deletions,omitempty"`
+	InventoryDigest       string                              `json:"inventory_digest"`
+	Epoch                 int64                               `json:"epoch"`
+	ActivationBarrier     int64                               `json:"activation_barrier"`
+	CutoverWaiverEventIDs map[string]string                   `json:"cutover_waiver_event_ids,omitempty"`
+	Aborted               bool                                `json:"aborted"`
+	LastTimestamp         int64                               `json:"last_timestamp"`
+	Records               map[string]nostr.Event              `json:"records"`
+	Pending               []string                            `json:"pending"`
 }
 
 func (s State) Receipt(p Phase) (Receipt, bool) {

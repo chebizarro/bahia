@@ -244,10 +244,10 @@ func TestOperatorAcknowledgmentPublisherBindsWebAttestationToActivatedEpoch(t *t
 	}
 	old, _ := nostr.PubKeyFromHex(fixture.OldPubkey)
 	engine := &Engine{Config: Config{ServiceID: "deployment-a", OldPubkey: old,
-		ReasonCode: "compromised", ControlledRelays: []string{"wss://relay.example"},
+		ReasonCode: "compromised", ControlledRelays: []string{"wss://relay.example"}, CleanupRelays: []string{"wss://relay.example"},
 		ConsumerRoster: trustepoch.ConsumerIDs(), OperatorPubkey: root.Public(),
 		LocalStorePath: filepath.Join(t.TempDir(), "daemon.db")},
-		Ledger: ledger, Source: source, Local: testLocal{}, Operator: operator, Acks: reader}
+		Ledger: ledger, Source: source, Cleanup: source, Local: testLocal{}, Operator: operator, Acks: reader}
 	if err := engine.AttestAcknowledgment(t.Context(), "web"); err != nil {
 		t.Fatal(err)
 	}

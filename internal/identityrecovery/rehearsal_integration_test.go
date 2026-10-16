@@ -174,7 +174,7 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 	if err := os.WriteFile(purgePath, purgeRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{ServiceID: "rehearsal-service", OldPubkey: oldPub, ReasonCode: "compromised", ControlledRelays: []string{url}, ConsumerRoster: trustepoch.ConsumerIDs(), OperatorPubkey: pub(t, operator), LocalStorePath: daemonPath, AcceptedEventIDs: accepted}
+	cfg := Config{ServiceID: "rehearsal-service", OldPubkey: oldPub, ReasonCode: "compromised", ControlledRelays: []string{url}, CleanupRelays: []string{url}, ConsumerRoster: trustepoch.ConsumerIDs(), OperatorPubkey: pub(t, operator), LocalStorePath: daemonPath, AcceptedEventIDs: accepted}
 	open := func() *Ledger {
 		l, err := OpenLedger(ledgerPath, daemonPath)
 		if err != nil {
@@ -182,7 +182,7 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 		}
 		return l
 	}
-	engine := &Engine{Config: cfg, Ledger: open(), Source: source, Local: rehearsalLocal{path: daemonPath}, Operator: operator, NewSigner: func(context.Context) (nostr.Keyer, error) { return newKey, nil }, OldSigner: func(context.Context) (nostr.Keyer, error) { return old, nil }, Containment: testContain{}, Domains: domains, Purge: FilePurgeReceipts{Path: purgePath}, Acks: testAcks{}, Now: func() time.Time { return time.Unix(2000, 0).UTC() }}
+	engine := &Engine{Config: cfg, Ledger: open(), Source: source, Cleanup: rehearsalCleanup{source}, Local: rehearsalLocal{path: daemonPath}, Operator: operator, NewSigner: func(context.Context) (nostr.Keyer, error) { return newKey, nil }, OldSigner: func(context.Context) (nostr.Keyer, error) { return old, nil }, Containment: testContain{}, Domains: domains, Purge: FilePurgeReceipts{Path: purgePath}, Acks: testAcks{}, Now: func() time.Time { return time.Unix(2000, 0).UTC() }}
 	defer engine.Ledger.Close()
 	tracker := &LedgerRotationTracker{Ledger: engine.Ledger, Source: rotationSource{refs: []SecretRef{{Provider: "signet", Label: label, Credential: oldRef}}}, UpdatesPath: updatesPath}
 	engine.Rotation = tracker
@@ -294,4 +294,21 @@ func (l rehearsalLocal) Events(ctx context.Context, pub nostr.PubKey) ([]nostr.E
 		out = append(out, ev)
 	}
 	return out, nil
+}
+
+type rehearsalCleanup struct{ rehearsalRelay }
+
+func (r rehearsalCleanup) Scan(ctx context.Context, f nostr.Filter) ([]nostr.Event, map[string]RelayEvidence) {
+	events, err := r.Read(ctx, f)
+	if err != nil {
+		return nil, map[string]RelayEvidence{r.url: {Status: "incomplete", Reason: "closed"}}
+	}
+	return events, map[string]RelayEvidence{r.url: {Status: "eose"}}
+}
+func (r rehearsalCleanup) PublishDeletion(ctx context.Context, ev nostr.Event) map[string]RelayEvidence {
+	err := r.Publish(ctx, ev)
+	if err != nil {
+		return map[string]RelayEvidence{r.url: {Status: "incomplete", Reason: "refused"}}
+	}
+	return map[string]RelayEvidence{r.url: {Status: "ok"}}
 }

@@ -2,8 +2,6 @@ package identityrecovery
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -125,11 +123,6 @@ func (e *Engine) deleteAndPurge(ctx context.Context, s *State) ([]string, error)
 		}
 		evidence = append(evidence, proof...)
 	}
-	for _, id := range s.DeletionIDs {
-		for _, relay := range e.Config.ControlledRelays {
-			sum := sha256.Sum256([]byte(relay))
-			evidence = append(evidence, "delete-ok:"+hex.EncodeToString(sum[:])+":"+id)
-		}
-	}
+	evidence = append(evidence, cleanupEvidence(*s, DeleteAndPurge)...)
 	return append(evidence, receipts...), nil
 }

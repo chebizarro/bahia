@@ -64,7 +64,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	r := cfg.IdentityRecovery
-	engineCfg := identityrecovery.Config{ServiceID: cfg.Nostr.ServiceID, OldPubkey: old, ReasonCode: r.ReasonCode, ControlledRelays: r.ControlledRelays, ConsumerRoster: r.ConsumerRoster, OperatorPubkey: root, LocalStorePath: cfg.Nostr.LocalStore.Path, AcceptedEventIDs: r.AcceptedEventIDs}
+	engineCfg := identityrecovery.Config{ServiceID: cfg.Nostr.ServiceID, OldPubkey: old, ReasonCode: r.ReasonCode, ControlledRelays: r.ControlledRelays, CleanupRelays: r.CleanupRelays, ConsumerRoster: r.ConsumerRoster, OperatorPubkey: root, LocalStorePath: cfg.Nostr.LocalStore.Path, AcceptedEventIDs: r.AcceptedEventIDs}
 	if op == "status" || op == "plan" {
 		state, readErr := identityrecovery.LoadStateReadOnly(r.LedgerPath)
 		if readErr != nil {
@@ -129,9 +129,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	pool := adapter.NewRelayPool(r.ControlledRelays, zap.NewNop(), adapter.WithAuthSigner(operator), adapter.WithControlPlaneRelayGuard(guard), adapter.WithControlPlanePurpose())
 	defer pool.Close()
 	pool.Connect(ctx)
+	cleanupGuard, err := relayguard.NewRecoveryCleanup(root, r.ControlledRelays, r.CleanupRelays, old)
+	if err != nil {
+		_, _ = fmt.Fprintln(stderr, "invalid cleanup relay policy")
+		return 1
+	}
+	cleanupPool := adapter.NewRelayPool(r.CleanupRelays, zap.NewNop(), adapter.WithAuthSigner(operator), adapter.WithControlPlaneRelayGuard(cleanupGuard), adapter.WithControlPlanePurpose())
+	defer cleanupPool.Close()
+	cleanupPool.Connect(ctx)
+	engine.Cleanup = identityrecovery.CleanupRelaySource{Pool: cleanupPool, Relays: r.CleanupRelays}
 	engine.Operator = operator
-	engine.Source = relaySource{pool: pool, relays: r.ControlledRelays}
-	engine.Local = localSource{path: cfg.Nostr.LocalStore.Path}
+	engine.Source = identityrecovery.RelaySource{Pool: pool, Relays: r.ControlledRelays}
+	engine.Local = identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}
 	engine.Acks = &identityrecovery.AcknowledgmentReader{Source: engine.Source, Local: engine.Local,
 		Ledger: ledger, ServiceID: cfg.Nostr.ServiceID, OperatorRoot: root.Hex(), OldPubkey: old.Hex(),
 		Authorities: r.AcknowledgmentAuthorities}
@@ -150,25 +159,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.OldSigner.PublicKey, Signer: r.OldSigner.Signer}, servicesigner.Options{Logger: zap.NewNop()})
 	}
-	engine.Rotation = &identityrecovery.LedgerRotationTracker{Ledger: ledger, Source: identityrecovery.CanonicalCredentialSource{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor}, SystemKeys: cfg.SecretStore.SystemKeys, UpdatesPath: *rotationUpdates}
+	engine.Rotation = &identityrecovery.LedgerRotationTracker{Ledger: ledger, Source: identityrecovery.CanonicalCredentialSource{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor}, SystemKeys: cfg.SecretStore.SystemKeys, UpdatesPath: *rotationUpdates}
 	recoveryRelayPolicy := cfg.Nostr
 	recoveryRelayPolicy.ControlledRelays = append([]string(nil), r.ControlledRelays...)
 	if *draftPath == "" {
 		*draftPath = r.LedgerPath + ".sql-review-drafts.json"
 	}
-	sqlDrafts := &identityrecovery.SQLReviewDraftAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Rows: identityrecovery.PGReviewRows{DB: cfg.DB, OldPubkey: old.Hex()}, ArtifactPath: *draftPath}
+	sqlDrafts := &identityrecovery.SQLReviewDraftAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Rows: identityrecovery.PGReviewRows{DB: cfg.DB, OldPubkey: old.Hex()}, ArtifactPath: *draftPath}
 	engine.Domains = map[string]identityrecovery.DomainRecoveryAdapter{
-		"cp-state/service-registry":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindServiceRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"cp-state/environment-registry":      &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindEnvironmentRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"cp-state/adoption-binding":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindAdoptionBindingRecord, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"relay-settings-and-sets":            &identityrecovery.RelayRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Static: recoveryRelayPolicy},
-		"hostname-reservations-and-recovery": &identityrecovery.HostnameRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"sbom-references-and-availability":   &identityrecovery.SBOMRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"notification-channels":              &identityrecovery.NotificationRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor, NewSigner: engine.NewSigner},
-		"discovery-system":                   &identityrecovery.DiscoveryRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Config: cfg, MCPTransportEnabled: true},
-		"bahia-docs":                         &identityrecovery.DocsRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"cp-state/service-registry":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindServiceRegistry, OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"cp-state/environment-registry":      &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindEnvironmentRegistry, OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"cp-state/adoption-binding":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindAdoptionBindingRecord, OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"relay-settings-and-sets":            &identityrecovery.RelayRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Static: recoveryRelayPolicy},
+		"hostname-reservations-and-recovery": &identityrecovery.HostnameRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"sbom-references-and-availability":   &identityrecovery.SBOMRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"notification-channels":              &identityrecovery.NotificationRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor, NewSigner: engine.NewSigner},
+		"discovery-system":                   &identityrecovery.DiscoveryRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Config: cfg, MCPTransportEnabled: true},
+		"bahia-docs":                         &identityrecovery.DocsRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: identityrecovery.LocalStoreSource{Path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"sql-only-review-drafts":             sqlDrafts,
 	}
 	engine.RequiredDomains = []string{

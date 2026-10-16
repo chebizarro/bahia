@@ -1,6 +1,7 @@
 package relayguard
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -142,4 +143,58 @@ func TestRefusalsAreCountedAndReportedOncePerRelayKind(t *testing.T) {
 	if guard.Refusals() != 4 {
 		t.Fatalf("Refusals() = %d, want 4", guard.Refusals())
 	}
+}
+
+func TestRecoveryCleanupCarveOutOnlyQuarantinedDeletion(t *testing.T) {
+	ctx := context.Background()
+	old, operator, other := nostr.Generate(), nostr.Generate(), nostr.Generate()
+	controlled, public := "wss://controlled.example", "wss://relay.damus.io"
+	ordinary, err := New(operator.Public(), []string{controlled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup, err := NewRecoveryCleanup(operator.Public(), []string{controlled}, []string{controlled, public}, old.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deletion := nostr.Event{Kind: nostr.KindDeletion, CreatedAt: 1, Tags: nostr.Tags{{"e", strings.Repeat("a", 64)}, {"k", "30900"}}}
+	if err := deletion.Sign(old); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanup.CheckControlPlanePool(public, deletion); err != nil {
+		t.Fatalf("quarantined deletion refused: %v", err)
+	}
+	cases := []struct {
+		name  string
+		event nostr.Event
+	}{
+		{"other signer", func() nostr.Event { e := deletion; _ = e.Sign(other); return e }()},
+		{"operator signer", func() nostr.Event { e := deletion; _ = e.Sign(operator); return e }()},
+		{"other kind", func() nostr.Event {
+			e := nostr.Event{Kind: kinds.CASControlState, CreatedAt: 1}
+			_ = e.Sign(old)
+			return e
+		}()},
+		{"coordinate deletion", func() nostr.Event {
+			e := nostr.Event{Kind: nostr.KindDeletion, CreatedAt: 1, Tags: nostr.Tags{{"a", "30900:bad:coord"}}}
+			_ = e.Sign(old)
+			return e
+		}()},
+		{"unsigned", nostr.Event{Kind: nostr.KindDeletion, PubKey: old.Public(), Tags: deletion.Tags}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := cleanup.CheckControlPlanePool(public, tc.event); err == nil {
+				t.Fatal("cleanup carve-out reached")
+			}
+		})
+	}
+	if err := ordinary.CheckControlPlanePool(public, func() nostr.Event {
+		e := nostr.Event{Kind: kinds.CASControlState, CreatedAt: 1}
+		_ = e.Sign(operator)
+		return e
+	}()); err == nil {
+		t.Fatal("ordinary public-relay denylist weakened")
+	}
+	_ = ctx
 }

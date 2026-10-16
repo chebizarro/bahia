@@ -273,3 +273,21 @@ missing heads (including embedded deployment units and rows lacking an SBOM
 coordinate) as manual-review candidates. The artifact contains identifiers,
 not projection payloads or secrets. A changed SQL snapshot or incomplete relay
 read fails verification; absence is never inferred from a failed source.
+
+## Historical cleanup relays
+
+`identity_recovery.cleanup_relays` includes every controlled relay and each
+historical relay that may retain old-key events; it may include public relays
+such as `wss://relay.damus.io`. The cleanup set is not a publish/quorum set.
+Only old-key inventory REQs and quarantined, inventory-scoped kind-5 e-tag
+EVENTs use it. Operator records, trust epochs, reasserted state, readiness and
+acknowledgment publications use controlled relays only. The dedicated cleanup
+pool rejects every other kind and signer, even on a cleanup relay that is also
+controlled. The normal public-relay control-plane denylist is unchanged.
+
+The ledger records EOSE or an incomplete outcome for every cleanup relay's
+inventory scan, and OK, OK-false, or incomplete outcome for every cleanup
+relay and signed deletion batch. Signed phase receipts carry relay-URL digests
+and outcome classes, not relay-provided text or secrets. An incomplete relay
+blocks inventory/deletion phase completion; EOSE is a catch-up boundary, not
+proof of absence.

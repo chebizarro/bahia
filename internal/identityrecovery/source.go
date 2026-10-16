@@ -1,4 +1,4 @@
-package main
+package identityrecovery
 
 import (
 	"context"
@@ -12,15 +12,15 @@ import (
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 )
 
-type relaySource struct {
-	pool   *adapter.RelayPool
-	relays []string
+type RelaySource struct {
+	Pool   *adapter.RelayPool
+	Relays []string
 }
 
-func (s relaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
+func (s RelaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
 	seen := map[nostr.ID]nostr.Event{}
-	for _, url := range s.relays {
-		sub, err := s.pool.SubscribeWithOptions(ctx, []nostr.Filter{filter}, adapter.SubscribeOptions{Relays: []string{url}, AwaitUnavailableRelays: true, ValidateEvent: func(ev *nostr.Event) bool { return ev.CheckID() && ev.VerifySignature() }})
+	for _, url := range s.Relays {
+		sub, err := s.Pool.SubscribeWithOptions(ctx, []nostr.Filter{filter}, adapter.SubscribeOptions{Relays: []string{url}, AwaitUnavailableRelays: true, ValidateEvent: func(ev *nostr.Event) bool { return ev.CheckID() && ev.VerifySignature() }})
 		if err != nil {
 			return nil, errors.New("audited relay subscription failed")
 		}
@@ -66,16 +66,16 @@ func (s relaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Eve
 	slices.SortFunc(out, func(a, b nostr.Event) int { return slices.Compare(a.ID[:], b.ID[:]) })
 	return out, nil
 }
-func (s relaySource) Publish(ctx context.Context, ev nostr.Event) error {
-	results, err := s.pool.PublishToRelaysWithResults(ctx, ev, s.relays)
+func (s RelaySource) Publish(ctx context.Context, ev nostr.Event) error {
+	results, err := s.Pool.PublishToRelaysWithResults(ctx, ev, s.Relays)
 	if err != nil {
 		return errors.New("recovery publish failed")
 	}
-	if len(results) != len(s.relays) {
+	if len(results) != len(s.Relays) {
 		return errors.New("recovery publish omitted controlled relay")
 	}
-	want := make(map[string]struct{}, len(s.relays))
-	for _, relay := range s.relays {
+	want := make(map[string]struct{}, len(s.Relays))
+	for _, relay := range s.Relays {
 		want[relay] = struct{}{}
 	}
 	for _, r := range results {
@@ -93,13 +93,13 @@ func (s relaySource) Publish(ctx context.Context, ev nostr.Event) error {
 	return nil
 }
 
-type localSource struct{ path string }
+type LocalStoreSource struct{ Path string }
 
-func (s localSource) Events(ctx context.Context, pub nostr.PubKey) ([]nostr.Event, error) {
-	if _, err := os.Stat(s.path); err != nil {
+func (s LocalStoreSource) Events(ctx context.Context, pub nostr.PubKey) ([]nostr.Event, error) {
+	if _, err := os.Stat(s.Path); err != nil {
 		return nil, errors.New("daemon local store file missing")
 	}
-	store, err := localstore.Open(s.path)
+	store, err := localstore.Open(s.Path)
 	if err != nil {
 		return nil, errors.New("daemon local store unavailable (run operator recovery with daemon stopped)")
 	}
@@ -114,17 +114,17 @@ func (s localSource) Events(ctx context.Context, pub nostr.PubKey) ([]nostr.Even
 	return out, nil
 }
 
-func (s localSource) StoreEvent(ctx context.Context, ev nostr.Event) error {
+func (s LocalStoreSource) StoreEvent(ctx context.Context, ev nostr.Event) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if !ev.CheckID() || !ev.VerifySignature() {
 		return errors.New("invalid recovery event for local store")
 	}
-	if _, err := os.Stat(s.path); err != nil {
+	if _, err := os.Stat(s.Path); err != nil {
 		return errors.New("daemon local store file missing")
 	}
-	store, err := localstore.Open(s.path)
+	store, err := localstore.Open(s.Path)
 	if err != nil {
 		return errors.New("daemon local store unavailable (run operator recovery with daemon stopped)")
 	}
