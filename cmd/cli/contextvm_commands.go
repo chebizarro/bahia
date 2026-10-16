@@ -31,6 +31,10 @@ func fetchCLIRunLogs(cmd *cobra.Command, runID string, tail int, stream string, 
 	if service == "" {
 		return fmt.Errorf("--service-pubkey or BAHIA_NOSTR_SERVICE_PUBKEY is required for ContextVM")
 	}
+	service, err = resolveCLIServiceIdentity(cmd, relays, service)
+	if err != nil {
+		return fmt.Errorf("resolve ContextVM service trust epoch: %w", err)
+	}
 	pubkey, err := signer.GetPublicKey(cmd.Context())
 	if err != nil {
 		return err

@@ -92,6 +92,10 @@ func readCLIConfidentialRecords[T any](cmd *cobra.Command, family int, include .
 		return nil, 0, fmt.Errorf("connect to relays: %w", err)
 	}
 	defer closePool()
+	servicePubkey, err = resolveCLITrustedPubkey(cmd, servicePubkey, storePath, pool, timeout)
+	if err != nil {
+		return nil, 0, fmt.Errorf("resolve service trust epoch: %w", err)
+	}
 	nc, err := client.NewNostrClient(client.NostrClientConfig{
 		StorePath: storePath, ServicePubkey: servicePubkey, Pool: pool, EOSETimeout: timeout,
 	})

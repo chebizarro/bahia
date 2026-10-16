@@ -73,6 +73,9 @@ auth:
 
 nostr:
   private_key: "<service-hex-key>"
+  service_id: "bahia-deployment-1"                  # stable across signer rotation
+  operator_root_pubkey: "<independent-fleetops-root-hex>"
+  # trust_epoch_inventory_path: "/var/lib/bahia/accepted-inventory.json"
   service_relays: ["wss://relay.example.com"]   # Bahia-controlled relays only; never a public relay
   browser_relays: ["wss://relay.example.com"]
   publish_quorum: 1                               # at most the number of service relays
@@ -88,6 +91,12 @@ nostr:
 ```
 
 Everything a client can read or change goes through the relays, so the two values that matter most are `nostr.private_key` (the service identity) and the relay list. `nostr.authorized_pubkeys` names the fleet operators who may act outside any organization (policies, DNS, workers, ML, tool decisions, fleet rekeys, MCP over HTTP). See [Nostr Integration](nostr-integration.md#relays) for the full relay and sidecar reference, and each feature page for its own section (`adoption`, `direct_runtime_actions`, `dns`, `hiveci`, `llm`, `soul_factory`, `assistant`, `supervision`, `route_canaries`, `virtualization`).
+
+`nostr.service_id` and `nostr.operator_root_pubkey` enable trust-epoch
+verification. Both must be configured together; the root must be independent
+of the service signer. An activated operator-root-signed epoch supersedes the
+static service pubkey. An optional full accepted-inventory export permits only
+its exact-digest, pre-barrier old-key events to be replayed.
 
 For managed routes, `route_canaries.overrides.<hostname>` tunes per-route probe expectations, thresholds, catch-all policy, and post-deploy gate timing without changing signed route state. See [Route Canaries](features/route-canaries.md#configuration) for the keys, defaults, and unmatched-hostname warning.
 
