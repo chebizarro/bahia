@@ -367,7 +367,13 @@ const (
 // effects. The PostgreSQL archive is written best effort and decides nothing,
 // so a database outage does not make the daemon deaf to its relays.
 func (s *Subscriber) handleEvent(ctx context.Context, ev *nostr.Event) ingestOutcome {
-	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil {
+	if err := ValidateInboundEvent(ev, s.now(), InboundEventMaxFutureSkew); err != nil &&
+		(ev == nil || s.store == nil || !s.store.AllowsHistoricalReplay(*ev)) {
+		if ev != nil && s.store != nil {
+			if trustErr := s.store.ObserveRejected(*ev); trustErr != nil {
+				s.logger.Error("rejected inbound event also failed trust epoch admission", zap.Error(trustErr))
+			}
+		}
 		eventID := ""
 		if ev != nil {
 			eventID = eventIDHex(ev)

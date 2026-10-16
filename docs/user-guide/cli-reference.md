@@ -24,6 +24,8 @@ Fleet-state reads (`services`, `environments`, `state`, `policies`, `workers`, `
 | `--relay` | `BAHIA_NOSTR_RELAYS` | Relay URL (repeatable; highest priority) |
 | `--bootstrap-relay` | `BAHIA_NOSTR_BOOTSTRAP_RELAYS` | Bootstrap relay for discovery when no `--relay` is given |
 | `--service-pubkey` | `BAHIA_NOSTR_SERVICE_PUBKEY` | Bahia service pubkey (status subscription, run-log fetch, single-service discovery trust) |
+| `--service-id` | `BAHIA_NOSTR_SERVICE_ID` | Stable deployment identity for trust-epoch reads |
+| `--operator-root-pubkey` | `BAHIA_NOSTR_OPERATOR_ROOT_PUBKEY` | Independent operator root that signs trust epochs; never the service key |
 | `--trusted-service-pubkey` | `BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS` | Trusted service pubkeys for bootstrap discovery (repeatable) |
 | `--org` | `BAHIA_ORG_ID` | Organization UUID for organization-scoped intents |
 | `--eose-timeout` | `BAHIA_EOSE_TIMEOUT` | Wait for relay EOSE on reads (default `5s`) |
@@ -35,6 +37,11 @@ Fleet-state reads (`services`, `environments`, `state`, `policies`, `workers`, `
 The CLI refuses a configuration that sets both a local key and a bunker, and never generates a throwaway NIP-46 identity. `bahia auth inspect` prints the configured signer's pubkey and npub.
 
 Relay resolution is ordered: `--relay`, then `BAHIA_NOSTR_RELAYS`, then trusted bootstrap discovery, which needs at least one bootstrap relay and one trusted service pubkey (`--trusted-service-pubkey` or `--service-pubkey`).
+With `--service-id` and `--operator-root-pubkey`, pass explicit `--relay` URLs
+or `BAHIA_NOSTR_RELAYS`; old-key relay discovery is refused. The CLI verifies
+the root-signed trust epoch and persists the accepted high-water mark before
+subscribing to service-authored fleet state. A missing or invalid head after an
+accepted epoch, or a trust query that does not complete, fails closed.
 
 ## How reads work
 

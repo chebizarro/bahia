@@ -8,6 +8,7 @@ const bridge = vi.hoisted(() => ({
   handlers: null,
   active: false,
   boot: vi.fn(async () => undefined),
+  refresh: null,
   init: vi.fn((handlers) => { bridge.handlers = handlers; bridge.active = true; return { unsubscribe: vi.fn() }; }),
   teardown: vi.fn(() => { bridge.active = false; bridge.handlers = null; })
 }));
@@ -16,7 +17,8 @@ vi.mock('../../src/lib/nostr/boot.js', () => ({
   getEventStore: () => bridge.store,
   getPool: () => bridge.pool,
   getRelayUrls: () => bridge.relays,
-  getServicePubkey: () => bridge.pubkey
+  getServicePubkey: () => bridge.pubkey,
+  onStoreRefresh: (callback) => { bridge.refresh = callback; return () => { bridge.refresh = null; }; }
 }));
 vi.mock('../../src/lib/stores/collections/store-first-subscriptions.js', () => ({
   initStoreFirstSubscriptions: bridge.init,
@@ -32,6 +34,7 @@ beforeEach(() => {
   bridge.pubkey = 'b'.repeat(64);
   bridge.handlers = null;
   bridge.active = false;
+  bridge.refresh = null;
   bridge.boot.mockResolvedValue(undefined);
   bridge.pool.getConnectedRelays.mockReturnValue([]);
   controlplane.resetControlplaneStore();
@@ -81,6 +84,21 @@ describe('store-first controlplane bootstrap', () => {
     expect(controlplane.controlplaneConnection.ready).toBe(false);
     await controlplane.bootstrapControlplane();
     expect(bridge.init).toHaveBeenCalledTimes(2);
+  });
+
+  it('restarts trusted subscriptions on a verified identity change and waits for new EOSE', async () => {
+    await controlplane.bootstrapControlplane();
+    bridge.handlers.onEose('wss://relay.example', 'public');
+    expect(controlplane.controlplaneConnection.bootstrapComplete).toBe(true);
+    bridge.pubkey = 'c'.repeat(64);
+    bridge.refresh();
+    expect(bridge.teardown).toHaveBeenCalledOnce();
+    expect(bridge.init).toHaveBeenCalledTimes(2);
+    expect(controlplane.controlplaneConnection).toMatchObject({
+      servicePubkey: 'c'.repeat(64), status: 'syncing', bootstrapComplete: false
+    });
+    bridge.handlers.onEose('wss://relay.example', 'public');
+    expect(controlplane.controlplaneConnection.bootstrapComplete).toBe(true);
   });
 
   it('fails closed when the trusted service pubkey or relays are absent', async () => {

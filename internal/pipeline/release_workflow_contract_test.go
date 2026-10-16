@@ -154,8 +154,8 @@ func TestWebBootstrapEntrypoint(t *testing.T) {
 	key := strings.Repeat("c", 64)
 	widget := strings.Repeat("d", 64)
 	for _, tc := range []struct {
-		name, relays, keys, widgets string
-		want                        string // empty: startup must fail and leave the seed untouched
+		name, relays, keys, widgets, serviceID, root, inventory string
+		want                                                    string // empty: startup must fail and leave the seed untouched
 	}{
 		{name: "no runtime env fails closed"},
 		{name: "missing explicit identity", relays: "wss://relay.example"},
@@ -163,10 +163,14 @@ func TestWebBootstrapEntrypoint(t *testing.T) {
 		{name: "invalid relay URL", relays: "wss://relay.example/path|3", keys: key},
 		{name: "invalid service pubkey", relays: "wss://relay.example", keys: "not-a-pubkey"},
 		{name: "invalid widget pubkey", relays: "wss://relay.example", keys: key, widgets: "not-a-pubkey"},
+		{name: "trust epoch missing root", relays: "wss://relay.example", keys: key, serviceID: "deployment-a"},
+		{name: "operator root equals service key", relays: "wss://relay.example", keys: key, serviceID: "deployment-a", root: key},
 		{name: "runtime seed", relays: "wss://relay.example/path?a=1&b=2,ws://localhost:3334/relay", keys: key,
-			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example/path?a=1&b=2","ws://localhost:3334/relay"],service_pubkeys:["` + key + `"],widget_pubkeys:[]};` + "\n"},
+			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example/path?a=1&b=2","ws://localhost:3334/relay"],service_pubkeys:["` + key + `"],widget_pubkeys:[],service_id:"",operator_root_pubkey:"",accepted_inventory_ids:[]};` + "\n"},
 		{name: "runtime seed with widget publishers", relays: "wss://relay.example", keys: key, widgets: widget,
-			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example"],service_pubkeys:["` + key + `"],widget_pubkeys:["` + widget + `"]};` + "\n"},
+			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example"],service_pubkeys:["` + key + `"],widget_pubkeys:["` + widget + `"],service_id:"",operator_root_pubkey:"",accepted_inventory_ids:[]};` + "\n"},
+		{name: "runtime trust epoch seed", relays: "wss://relay.example", keys: key, serviceID: "deployment-a", root: widget, inventory: strings.Repeat("a", 64),
+			want: `window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:["wss://relay.example"],service_pubkeys:["` + key + `"],widget_pubkeys:[],service_id:"deployment-a",operator_root_pubkey:"` + widget + `",accepted_inventory_ids:["` + strings.Repeat("a", 64) + `"]};` + "\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "bahia-bootstrap.js")
@@ -176,9 +180,12 @@ func TestWebBootstrapEntrypoint(t *testing.T) {
 			cmd := exec.Command("sh", script)
 			cmd.Env = []string{"PATH=/usr/bin:/bin:" + filepath.Dir(envsubst), "BAHIA_BOOTSTRAP_SCRIPT_PATH=" + path}
 			for name, value := range map[string]string{
-				"PUBLIC_BAHIA_BOOTSTRAP_RELAYS":     tc.relays,
-				"PUBLIC_BAHIA_SERVICE_PUBKEYS":      tc.keys,
-				"PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS": tc.widgets,
+				"PUBLIC_BAHIA_BOOTSTRAP_RELAYS":       tc.relays,
+				"PUBLIC_BAHIA_SERVICE_PUBKEYS":        tc.keys,
+				"PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS":   tc.widgets,
+				"PUBLIC_BAHIA_SERVICE_ID":             tc.serviceID,
+				"PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY":   tc.root,
+				"PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS": tc.inventory,
 			} {
 				if value != "" {
 					cmd.Env = append(cmd.Env, name+"="+value)

@@ -6,7 +6,8 @@ const bridge = vi.hoisted(() => ({ events: [], handlers: null, pool: { subscribe
 vi.mock('../../src/lib/nostr/boot.js', () => ({
   boot: bridge.boot,
   getEventStore: () => ({ query: () => [...bridge.events] }),
-  getPool: () => bridge.pool
+  getPool: () => bridge.pool,
+  getServicePubkeys: () => [trustedPubkey]
 }));
 
 const discovery = await import('../../src/lib/stores/discovery.svelte.js');

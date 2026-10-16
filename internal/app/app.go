@@ -68,6 +68,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/secretstore"
 	"github.com/openagentsinc/bahia/internal/service"
 	"github.com/openagentsinc/bahia/internal/soulfactory"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"github.com/openagentsinc/bahia/internal/workflow"
 	"go.uber.org/zap"
 )
@@ -104,6 +105,7 @@ type App struct {
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
 	localOutbox               *localstore.Outbox
+	trustEpochState           *trustepoch.BoltPersistence
 	runtimeResolver           *runtime.ConfigRuntimeResolver
 	reloadMu                  sync.Mutex
 
@@ -192,6 +194,19 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configuring nostr outbound admission: %w", err)
 	}
+	trustVerifier, trustResolution, trustState, err := preflightTrustEpoch(ctx, cfg, outboundAdmission, logger)
+	if err != nil {
+		return nil, fmt.Errorf("bootstrap service trust epoch: %w", err)
+	}
+	trustStateOwned := false
+	defer func() {
+		if trustState != nil && !trustStateOwned {
+			_ = trustState.Close()
+		}
+	}()
+	if trustVerifier != nil && trustResolution.Record != nil && trustResolution.Record.Activated {
+		cfg.Nostr.PublicKey = trustResolution.Pubkey
+	}
 
 	signerSession, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger, runningSigner)
 	if err != nil {
@@ -212,6 +227,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 			return nil, fmt.Errorf("resolving service signer pubkey: %w", err)
 		}
 		servicePubkey = pubkey.Hex()
+		if trustVerifier != nil && servicePubkey != trustResolution.Pubkey {
+			return nil, fmt.Errorf("service signer does not match resolved trust epoch")
+		}
 		controlPlaneRelayGuard, err = relayguard.New(pubkey, cfg.Nostr.ControlledRelaySet())
 		if err != nil {
 			return nil, fmt.Errorf("configuring control-plane relay guard: %w", err)
@@ -354,6 +372,13 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening local Nostr event store: %w", err)
 	}
+	if trustVerifier != nil {
+		trustVerifier.Source = trustepoch.LocalSource{Events: localEventStore}
+		admission := &trustEpochAdmission{verifier: trustVerifier, resolution: trustResolution,
+			serviceSignerPubkey: servicePubkey, logger: logger}
+		localEventStore.SetAdmission(admission.admit)
+		localEventStore.SetHistoricalReplay(admission.allowsHistoricalReplay)
+	}
 	localOutbox, err := localstore.OpenOutbox(cfg.Nostr.LocalStore.ResolvedOutboxPath())
 	if err != nil {
 		_ = localEventStore.Close()
@@ -485,6 +510,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		nostrAdapter.WithPublishTarget(repository.NostrPublishTargetControlPlane),
 		nostrAdapter.WithPublisherSigner(serviceKeyer),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
+	if trustVerifier != nil {
+		if err := enqueueDaemonEpochAck(ctx, trustResolution, serviceKeyer, localEventStore, controlPlanePub); err != nil {
+			return nil, fmt.Errorf("record daemon trust epoch acknowledgment: %w", err)
+		}
+	}
 	// nostr_events for its readers: PostgreSQL when available, else the
 	// local event store. An event a producer records there as pending
 	// delivery goes to the outbox of its publish target.
@@ -1013,7 +1043,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		bahiaStatusProjector = service.NewBahiaStatusProjector(nostrPub, logger, servicePubkey)
 	}
 
-	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
+	controlPlaneAuthors := compactBootstrapAuthors([]string{servicePubkey, cfg.Nostr.OperatorRootPubkey}, cfg.Nostr.AuthorizedPubkeys, cfg.Auth.BootstrapOwnerPubkeys)
 	bootstrapper := nostrAdapter.NewBootstrapper(relayPool, catalog, localEventStore, bootstrapCache, logger, nostrAdapter.BootstrapConfig{
 		ProjectionAuthors:   compactBootstrapAuthors([]string{servicePubkey}),
 		ControlPlaneAuthors: controlPlaneAuthors,
@@ -3358,12 +3388,14 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
 		localOutbox:               localOutbox,
+		trustEpochState:           trustState,
 		runtimeResolver:           runtimeResolver,
 		secretStore:               secretStore,
 		systemKeys:                systemKeys,
 	}
 	soulFactoryRuntimeReleased = true
 	localNostrReleased = true
+	trustStateOwned = true
 	serviceKeyerOwned = true
 	configFabricSignerOwned = true
 	secretStoreOwned = true
@@ -4199,6 +4231,11 @@ func (a *App) RunContext(ctx context.Context) error {
 	if a.localOutbox != nil {
 		if err := a.localOutbox.Close(); err != nil {
 			a.Logger.Warn("local Nostr publish outbox close failed", zap.Error(err))
+		}
+	}
+	if a.trustEpochState != nil {
+		if err := a.trustEpochState.Close(); err != nil {
+			a.Logger.Warn("trust epoch state close failed", zap.Error(err))
 		}
 	}
 	// The service signer is released after every component that signs with

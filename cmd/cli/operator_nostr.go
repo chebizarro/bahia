@@ -181,6 +181,9 @@ func resolveOperatorRelays(cmd *cobra.Command) ([]string, error) {
 	if envRelays := normalizeRelayList(strings.Split(os.Getenv("BAHIA_NOSTR_RELAYS"), ",")); len(envRelays) > 0 {
 		return envRelays, nil
 	}
+	if operatorServiceID != "" || operatorRootPubkey != "" {
+		return nil, fmt.Errorf("trust-epoch CLI reads require explicit --relay or BAHIA_NOSTR_RELAYS; old-key relay discovery is not trusted")
+	}
 
 	bootstrapRelays := resolveOperatorBootstrapRelays(cmd)
 	trustedPubkeys := resolveOperatorTrustedServicePubkeys(cmd)

@@ -176,6 +176,7 @@ var publicKindRanges = [][2]nostr.Kind{
 //	assistant-session — PROTECTED:
 //	  Session recovery data, private.
 var publicCPStateTopics = map[string]bool{
+	"trust-epoch": true, // operator-root-signed bootstrap trust transition
 	// DNS — anonymous readers (FIPS bridge, pkg/discovery). dns-zone-sync is
 	// the per-zone record set the DNS agent subscribes to with its own key
 	// (cmd/bahia-dns-agent, dns_canonical_publisher.PublishZoneSync); it
@@ -338,8 +339,14 @@ func (r *readAuthPolicy) checkReadAuth(ctx context.Context, filter nostr.Filter)
 // empty, read auth requires the pubkey to be explicitly listed in one of the
 // allowed sets.
 func (r *readAuthPolicy) isAllowedReader(pubkey string) bool {
+	if r.admission.trust != nil {
+		if r.admission.trust.isPoisoned() { return false }
+		if known, allowed := r.admission.trust.readDecision(pubkey); known {
+			return allowed
+		}
+	}
 	// Service pubkey is always allowed.
-	if r.servicePubkey != "" && pubkey == r.servicePubkey {
+	if r.servicePubkey != "" && pubkey == r.servicePubkey && r.admission.trust == nil {
 		return true
 	}
 	// Admin/operator: administrators and explicitly allowed pubkeys.

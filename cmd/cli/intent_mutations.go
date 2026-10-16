@@ -50,6 +50,10 @@ func buildCLIIntentPublisher(cmd *cobra.Command) (*client.IntentPublisher, []str
 	if servicePubkey == "" {
 		return nil, nil, fmt.Errorf("--service-pubkey or BAHIA_NOSTR_SERVICE_PUBKEY is required for intent status")
 	}
+	servicePubkey, err = resolveCLIServiceIdentity(cmd, relays, servicePubkey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve intent service trust epoch: %w", err)
+	}
 	timeout := operatorResultTimeout
 	if !cmd.Root().PersistentFlags().Changed("result-timeout") {
 		if raw := strings.TrimSpace(os.Getenv("BAHIA_RESULT_TIMEOUT")); raw != "" {

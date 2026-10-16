@@ -67,6 +67,10 @@ func readCLIStateEvents(cmd *cobra.Command, domain string) ([]nostr.Event, error
 		return nil, fmt.Errorf("connect to relays: %w", err)
 	}
 	defer closePool()
+	pubkey, err = resolveCLITrustedPubkey(cmd, pubkey, storePath, pool, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("resolve service trust epoch: %w", err)
+	}
 	nc, err := client.NewNostrClient(client.NostrClientConfig{
 		StorePath: storePath, ServicePubkey: pubkey, Pool: pool, EOSETimeout: timeout,
 	})

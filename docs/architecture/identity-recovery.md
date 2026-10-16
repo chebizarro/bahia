@@ -3,10 +3,11 @@
 Fleet task: `bahia-identity-compromise-recovery-workflow-20261015`. This document is
 the shared contract for the recovery engine (`internal/identityrecovery`,
 `cmd/bahia-recover`), daemon containment, and consumer trust-epoch enforcement.
-Nothing here is signed by the service key: **every record below is authored by the
-independent operator trust root** (the FleetOps root the daemon and sidecar already
-configure). An event signed only by a compromised service key never authorizes any
-part of recovery.
+The three recovery records below are authored by the **independent operator
+trust root** (the FleetOps root the daemon and sidecar configure). Consumer
+acknowledgments are the sole service-signed exception and never authorize a
+trust transition. An event signed only by a compromised service key never
+authorizes any part of recovery.
 
 ## Records (kind 30900, CASControlState envelope, operator-root-signed)
 
@@ -34,7 +35,9 @@ part of recovery.
   list), `inventory_count`, `consumer_roster[]` (stable consumer ids),
   `activated` (bool).
 - Consumers persist the last accepted epoch and REFUSE regressions or replays
-  with a lower epoch. Epoch verification = operator-root signature + monotonicity.
+  with a lower epoch, or a different event at the same epoch. Verification
+  includes the independent operator-root signature, exact tags and schema,
+  service-id coordinate, key chain, and monotonicity.
 
 ### 3. Phase receipt — family 32053, topic `identity-recovery-receipt`
 - `d` = `identity-incident:<incident-id>:phase:<phase>`.
@@ -59,11 +62,38 @@ part of recovery.
 - With an activated trust-epoch for their service-id, consumers accept the new
   pubkey as the service identity and treat old-key events as hostile unless the
   event id is in the accepted inventory AND created_at ≤ activation_barrier.
-- Missing/garbled epoch state fails CLOSED (no fallback to the old key).
+- When no epoch has ever been accepted and the configured source has no epoch
+  record, the configured service pubkey remains in legacy mode. A relay EOSE
+  alone is not proof that no epoch exists. Once an epoch has been accepted, a
+  missing head is a regression and fails closed. A PRESENT but unverifiable
+  record fails closed, including malformed tags, content, author, signature,
+  or a broken key chain. Absent or invalid inventory fails closed for old-key
+  replay admission.
+- The digest and count do not authorize old-key replay. A consumer needs the
+  full engine-exported inventory artifact, checks the exact digest and count,
+  then accepts only listed event IDs at or before the activation barrier.
+- `nostr.service_id` and `nostr.operator_root_pubkey` are explicit deployment
+  settings; `nostr.public_key` explicitly pins the legacy identity even when
+  the signer has already rotated. The root never defaults to the service key. The web deployment
+  bootstrap carries the same pair; CLI reads use `--service-id` and
+  `--operator-root-pubkey` with explicit relay URLs when epoch mode is enabled.
 - Registered consumers: daemon bootstrap trust, relay sidecar read-auth/NIP-42,
   web bootstrap seed, CLI fleet pools, DNS, Loom, SoulFactory, HiveCI, pinned
-  runtimes. Each either publishes an acknowledgment or is verified fail-closed
-  by the `verify` phase.
+  runtimes. The last five are registered as `enforcement=pending` and verify
+  enumerates each as missing; no acknowledgment is fabricated for them.
+
+## Acknowledgments
+- Kind `30900`, receipt family `32053`, `t=identity-recovery-receipt`,
+  `domain=identity`, `schema=bahia.trust-epoch-ack.v1`, `legacy_kind=32053`,
+  `epoch=<int>`, `deleted=false`.
+- `d=trust-epoch-ack:<service-id>:<consumer-id>` is stable per consumer.
+  Content is `service_id`, `consumer_id`, `epoch`, `epoch_event_id`. The daemon
+  and sidecar sign their acknowledgment with the **new** service identity only
+  after they start under the activated epoch. The verifier checks the signed
+  new-key envelope and exact epoch event ID; enqueue or an unsigned receipt is
+  not evidence of relay acceptance. Web and CLI have no service signer and
+  therefore do not fake one: verify must prove their enforcement separately or
+  report them missing.
 
 ## Sources of truth during recovery
 Audited relay events, the durable local Nostr store, and verified pre-compromise

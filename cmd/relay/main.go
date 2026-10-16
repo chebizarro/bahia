@@ -139,6 +139,13 @@ func (s *runtimeSupervisor) prepare(cfg *config.Config) (sidecarRuntime, *servic
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.Nostr.ServiceID != "" {
+		resolved, err := relaysidecar.PreflightTrustEpoch(s.rootCtx, cfg.Nostr, s.logger)
+		if err != nil {
+			return nil, nil, fmt.Errorf("preflight sidecar trust epoch: %w", err)
+		}
+		signerCfg.PublicKey = resolved
+	}
 	signer := s.signer
 	if signer == nil || !servicesigner.SameSigner(signer.cfg, signerCfg) {
 		opened, err := s.openSigner(s.rootCtx, signerCfg, admission, s.logger)

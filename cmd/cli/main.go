@@ -35,6 +35,8 @@ var (
 	operatorRelays                []string
 	operatorBootstrapRelays       []string
 	operatorServicePubkey         string
+	operatorServiceID             string
+	operatorRootPubkey            string
 	operatorIntentOrg             string
 	operatorTrustedServicePubkeys []string
 	operatorEncrypted             bool
@@ -71,6 +73,8 @@ func newRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().StringArrayVar(&operatorBootstrapRelays, "bootstrap-relay", nil, "Bootstrap relay URL for trusted operator relay discovery when --relay/BAHIA_NOSTR_RELAYS are absent (repeatable; env BAHIA_NOSTR_BOOTSTRAP_RELAYS)")
 	rootCmd.PersistentFlags().StringVar(&operatorIntentOrg, "org", getEnvOrDefault("BAHIA_ORG_ID", ""), "Organization UUID for signed mutation intents (env BAHIA_ORG_ID)")
 	rootCmd.PersistentFlags().StringVar(&operatorServicePubkey, "service-pubkey", getEnvOrDefault("BAHIA_NOSTR_SERVICE_PUBKEY", ""), "Bahia service pubkey for intent status, run-log fetch, and single-service discovery trust (env BAHIA_NOSTR_SERVICE_PUBKEY)")
+	rootCmd.PersistentFlags().StringVar(&operatorServiceID, "service-id", getEnvOrDefault("BAHIA_NOSTR_SERVICE_ID", ""), "Stable service ID for trust-epoch verification (env BAHIA_NOSTR_SERVICE_ID)")
+	rootCmd.PersistentFlags().StringVar(&operatorRootPubkey, "operator-root-pubkey", getEnvOrDefault("BAHIA_NOSTR_OPERATOR_ROOT_PUBKEY", ""), "Independent operator trust root (env BAHIA_NOSTR_OPERATOR_ROOT_PUBKEY)")
 	rootCmd.PersistentFlags().StringArrayVar(&operatorTrustedServicePubkeys, "trusted-service-pubkey", nil, "Trusted Bahia service pubkey for operator bootstrap discovery (repeatable; env BAHIA_NOSTR_TRUSTED_SERVICE_PUBKEYS)")
 	rootCmd.PersistentFlags().BoolVar(&operatorEncrypted, "encrypted", false, "Encrypt logs run ContextVM request and response with NIP-59/NIP-44 (requires --service-pubkey)")
 	rootCmd.PersistentFlags().DurationVar(&operatorResultTimeout, "result-timeout", client.DefaultOperatorResultTimeout, "Maximum time to await a 30315 intent status or logs run ContextVM result (BAHIA_RESULT_TIMEOUT for intents)")

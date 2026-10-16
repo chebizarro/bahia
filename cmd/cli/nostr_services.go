@@ -25,14 +25,15 @@ var newCLIReadPool = func(ctx context.Context, relays []string, signer nostr.Key
 }
 
 func readNostrEvents(cmd *cobra.Command, domainName string, legacyKind int) ([]nostr.Event, error) {
-	if strings.TrimSpace(operatorServicePubkey) == "" {
+	legacy := resolveOperatorServicePubkey(cmd)
+	if strings.TrimSpace(legacy) == "" {
 		return nil, fmt.Errorf("--service-pubkey or BAHIA_NOSTR_SERVICE_PUBKEY is required for Nostr reads")
 	}
 	relays, err := resolveOperatorRelays(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("resolve relays: %w", err)
 	}
-	storePath, err := nostrServiceStorePath(operatorServicePubkey)
+	storePath, err := nostrServiceStorePath(legacy)
 	if err != nil {
 		return nil, err
 	}
@@ -52,8 +53,12 @@ func readNostrEvents(cmd *cobra.Command, domainName string, legacyKind int) ([]n
 		return nil, fmt.Errorf("connect to relays: %w", err)
 	}
 	defer closePool()
+	servicePubkey, err := resolveCLITrustedPubkey(cmd, legacy, storePath, pool, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("resolve service trust epoch: %w", err)
+	}
 	nc, err := client.NewNostrClient(client.NostrClientConfig{
-		StorePath: storePath, ServicePubkey: operatorServicePubkey, Pool: pool, EOSETimeout: timeout,
+		StorePath: storePath, ServicePubkey: servicePubkey, Pool: pool, EOSETimeout: timeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create Nostr client: %w", err)

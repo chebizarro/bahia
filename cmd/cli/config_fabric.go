@@ -136,6 +136,11 @@ func openConfigCLIState(cmd *cobra.Command, signer nostr.Signer) (*configCLIStat
 	}
 	pool := nostrpool.NewRelayPool(relays, zap.NewNop(), options...)
 	pool.Connect(cmd.Context())
+	servicePubkey, err = resolveCLITrustedPubkey(cmd, servicePubkey, storePath, client.WrapRelayPool(pool), timeout)
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("resolve service trust epoch: %w", err)
+	}
 	state := &configCLIState{pool: pool, relays: relays}
 	state.store, err = client.NewNostrClient(client.NostrClientConfig{
 		StorePath: storePath, ServicePubkey: servicePubkey, Pool: client.WrapRelayPool(pool), EOSETimeout: timeout,

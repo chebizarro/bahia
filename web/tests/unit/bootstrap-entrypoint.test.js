@@ -9,7 +9,7 @@ const script = resolve('docker-entrypoint.d/40-bahia-bootstrap-env.sh');
 let dir;
 let output;
 
-function run(relays, pubkeys, widgets) {
+function run(relays, pubkeys, widgets, trust = {}) {
   return spawnSync('sh', [script], {
     encoding: 'utf8',
     env: {
@@ -17,7 +17,10 @@ function run(relays, pubkeys, widgets) {
       BAHIA_BOOTSTRAP_SCRIPT_PATH: output,
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: relays,
       PUBLIC_BAHIA_SERVICE_PUBKEYS: pubkeys,
-      ...(widgets !== undefined ? { PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS: widgets } : {})
+      ...(widgets !== undefined ? { PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS: widgets } : {}),
+      ...(trust.serviceID ? { PUBLIC_BAHIA_SERVICE_ID: trust.serviceID } : {}),
+      ...(trust.root ? { PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY: trust.root } : {}),
+      ...(trust.inventoryIDs ? { PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS: trust.inventoryIDs } : {})
     }
   });
 }
@@ -78,5 +81,20 @@ describe('web runtime bootstrap entrypoint', () => {
       expect(result.status, result.stderr).not.toBe(0);
       expect(readFileSync(output, 'utf8')).toBe('// old build output\n');
     }
+  });
+
+  it('injects an independent trust-epoch root and inventory IDs atomically', () => {
+    const service = 'a'.repeat(64);
+    const root = 'b'.repeat(64);
+    const id = 'c'.repeat(64);
+    expect(run('wss://relay.example', service, undefined,
+      { serviceID: 'deployment-a', root, inventoryIDs: id }).status).toBe(0);
+    const seed = readFileSync(output, 'utf8');
+    expect(seed).toContain('service_id:"deployment-a"');
+    expect(seed).toContain(`operator_root_pubkey:"${root}"`);
+    expect(seed).toContain(`accepted_inventory_ids:["${id}"]`);
+    expect(run('wss://relay.example', service, undefined,
+      { serviceID: 'deployment-a', root: service }).status).not.toBe(0);
+    expect(readFileSync(output, 'utf8')).toBe(seed);
   });
 });

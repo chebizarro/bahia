@@ -43,6 +43,10 @@ func readCLIWorkerEvents(cmd *cobra.Command, extraAuthor string) ([]nostr.Event,
 		return nil, nil, fmt.Errorf("connect to relays: %w", err)
 	}
 	defer closePool()
+	pubkey, err = resolveCLITrustedPubkey(cmd, pubkey, path, pool, timeout)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve service trust epoch: %w", err)
+	}
 	nc, err := client.NewNostrClient(client.NostrClientConfig{StorePath: path, ServicePubkey: pubkey, Pool: pool, EOSETimeout: timeout})
 	if err != nil {
 		return nil, nil, fmt.Errorf("create Nostr client: %w", err)

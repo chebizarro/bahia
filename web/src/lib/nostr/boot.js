@@ -162,11 +162,27 @@ async function _bootInternal({ store: injectedStore, pool: injectedPool, seed: i
   // Open the IndexedDB event store (step 2).
   // After this, all persisted events are in memory and queryable.
   const prefix = _servicePubkey.slice(0, 8);
-  _store = injectedStore || createBahiaEventStore({ servicePubkeyPrefix: prefix });
+  _store = injectedStore || createBahiaEventStore({ servicePubkeyPrefix: prefix,
+    ...(seed.service_id ? { trustEpoch: { serviceID: seed.service_id,
+      operatorRoot: seed.operator_root_pubkey, legacyPubkeys: _servicePubkeys,
+      inventoryIDs: seed.accepted_inventory_ids,
+      storage: globalThis.localStorage } } : {}) });
   if (!injectedStore) {
     await _store.open();
   }
-  _storeUnsubscribe = _store.subscribe?.({}, scheduleRefresh) || null;
+  const resolved = _store.getTrustIdentity?.();
+  if (resolved) {
+    _servicePubkeys = resolved.pubkeys;
+    _servicePubkey = _servicePubkeys[0];
+  }
+  _storeUnsubscribe = _store.subscribe?.({}, () => {
+    const identity = _store?.getTrustIdentity?.();
+    if (identity) {
+      _servicePubkeys = identity.pubkeys;
+      _servicePubkey = identity.pubkeys[0];
+    }
+    scheduleRefresh();
+  }) || null;
 
   // Create the pool (but don't connect yet — bootstrap does that). The pool
   // answers NIP-42 challenges with the signed-in operator's signer: the relay
