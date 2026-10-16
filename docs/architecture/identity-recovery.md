@@ -5,7 +5,7 @@ the shared contract for the recovery engine (`internal/identityrecovery`,
 `cmd/bahia-recover`), daemon containment, and consumer trust-epoch enforcement.
 The three recovery records below are authored by the **independent operator
 trust root** (the FleetOps root the daemon and sidecar configure). Consumer
-acknowledgments are the sole service-signed exception and never authorize a
+acknowledgments use their consumer-specific authorities and never authorize a
 trust transition. An event signed only by a compromised service key never
 authorizes any part of recovery.
 
@@ -46,7 +46,9 @@ authorizes any part of recovery.
   `incident=<incident-id>`, `deleted=false`.
 - content: `incident_id`, `phase`, `status` (`started|completed|failed`),
   `input_digest`, `evidence_ids[]` (event ids / commit SHAs / artifact digests),
-  `completed_at`. Latest-wins; a resumed phase reuses the same `d`.
+  `completed_at`. A completed cut receipt also carries `waiver_event_ids`, a
+  consumer-id to operator-signed waiver-event-id map. Latest-wins; a resumed
+  phase reuses the same `d`.
 
 ## Phases (ordered; each restart-safe, idempotent, receipt-bearing)
 `declare` → `contain` → `inventory` → `provision-new-identity` →
@@ -92,21 +94,62 @@ authorizes any part of recovery.
   identity instead.
 - Registered consumers: daemon bootstrap trust, relay sidecar read-auth/NIP-42,
   web bootstrap seed, CLI fleet pools, DNS, Loom, SoulFactory, HiveCI, pinned
-  runtimes. The last five are registered as `enforcement=pending` and verify
-  enumerates each as missing; no acknowledgment is fabricated for them.
+  runtimes. DNS, Loom and HiveCI now have production epoch guards. SoulFactory
+  remains `enforcement=pending`: its CLI Nostr client still uses an optional
+  static factory-author pin and does not maintain an operator-root epoch
+  subscription across its result waits. Pinned runtimes remain pending: the
+  edge image-admission script pins Git/image provenance but has no Nostr epoch
+  source, durable high-water mark, or service-key rejection at the image floor.
+  Neither pending consumer is counted as acknowledged by verify.
+
+Before `cut-activate-trust`, `bahia-recover attest-readiness --consumer ID
+--evidence-ids ID[,ID]` publishes a per-consumer operator-root-signed
+`bahia.trust-epoch-readiness.v1` verification record binding service-id,
+consumer-id, incident-id, epoch and enforcing pubkey. If capability cannot be
+proved, `--waiver-reason CODE` publishes an explicit per-consumer waiver in
+the same signed envelope. Cutover re-reads all records through controlled
+relays and the local store; every consumer must have a valid verification
+attestation or waiver, and waiver IDs enter the signed completed phase
+receipt. A pending roster entry still blocks the post-cut verify phase even
+when a waiver authorized activation.
 
 ## Acknowledgments
 - Kind `30900`, receipt family `32053`, `t=identity-recovery-receipt`,
   `domain=identity`, `schema=bahia.trust-epoch-ack.v1`, `legacy_kind=32053`,
   `epoch=<int>`, `deleted=false`.
 - `d=trust-epoch-ack:<service-id>:<consumer-id>` is stable per consumer.
-  Content is `service_id`, `consumer_id`, `epoch`, `epoch_event_id`. The daemon
-  and sidecar sign their acknowledgment with the **new** service identity only
-  after they start under the activated epoch. The verifier checks the signed
-  new-key envelope and exact epoch event ID; enqueue or an unsigned receipt is
-  not evidence of relay acceptance. Web and CLI have no service signer and
-  therefore do not fake one: verify must prove their enforcement separately or
-  report them missing.
+  Content binds `service_id`, `consumer_id`, `epoch`, `incident_id`,
+  `enforcing_pubkey`, and the exact `epoch_event_id`. Operator verification
+  attestations also bind `attested_by` to the operator pubkey. The authority
+  for every consumer is pinned by `identity_recovery.acknowledgment_authorities`;
+  an unknown, absent, shared component, or mismatched authority fails closed.
+
+| Consumer | Acknowledgment authority |
+|---|---|
+| daemon | Activated **new** service key, after its trust guard starts |
+| sidecar | Dedicated relay acknowledgment key from `nostr.sidecar.ack_private_key_file`, distinct from the service and operator keys |
+| CLI | Operator signer, after verifying CLI enforcement |
+| DNS | DNS agent's own configured signing identity |
+| Loom | Loom component's configured signing identity |
+| SoulFactory | SoulFactory component's configured signing identity |
+| HiveCI | HiveCI component's configured signing identity |
+| web | Operator-signed verification attestation (`attested_by`) |
+| pinned-runtimes | Operator-signed verification attestation (`attested_by`) |
+
+The operator publishes CLI, web and pinned-runtime post-cut receipts with
+`bahia-recover attest-ack --config FILE --consumer ID` only after verifying
+their enforcement. The command refuses a non-operator authority or a missing
+activated epoch. DNS, Loom, SoulFactory and HiveCI must publish their own
+receipts under their configured component signing keys; the recovery CLI
+cannot impersonate those identities.
+
+The recovery acknowledgment reader queries scoped subscriptions on **every**
+controlled relay and the durable local store, verifies the exact signed
+envelope against the authority table, and reports missing consumers through
+`trustepoch.MissingAcknowledgments`. EOSE completes a backfill; it is not
+evidence that a missing event never existed. The Go and web fixture asserts
+the daemon acknowledgment byte-for-byte; web verifies this envelope, while
+web and pinned-runtime readiness is operator-attested rather than self-signed.
 
 ## Sources of truth during recovery
 Audited relay events, the durable local Nostr store, and verified pre-compromise

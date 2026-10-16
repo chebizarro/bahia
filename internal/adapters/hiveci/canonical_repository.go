@@ -16,6 +16,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/repository"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"go.uber.org/zap"
 )
 
@@ -50,10 +51,12 @@ const evidenceQueryLimit = 1000
 // subscriber and the pipeline bridge speak, and of ReleaseStore because that
 // is what the release ingestor commits through.
 type CanonicalRepository struct {
-	events    EvidenceStore
-	canonical CanonicalState
-	index     repository.HiveCIRepository
-	trusted   map[string]struct{}
+	events        EvidenceStore
+	canonical     CanonicalState
+	index         repository.HiveCIRepository
+	trusted       map[string]struct{}
+	trustVerifier *trustepoch.Verifier
+	serviceID     string
 	// mu serializes read-check-publish sequences on this process.
 	mu     sync.Mutex
 	logger *zap.Logger
@@ -82,6 +85,11 @@ func NewCanonicalRepository(events EvidenceStore, canonical CanonicalState, inde
 		events: events, canonical: canonical, index: index, trusted: trusted,
 		logger: logger.Named("hiveci-canonical-store"), now: func() time.Time { return time.Now().UTC() },
 	}
+}
+
+// SetTrustEpoch fences canonical reads as well as subscriber admission.
+func (r *CanonicalRepository) SetTrustEpoch(verifier *trustepoch.Verifier, serviceID string) {
+	r.trustVerifier, r.serviceID = verifier, serviceID
 }
 
 func (r *CanonicalRepository) available() error {
@@ -113,21 +121,43 @@ func (r *CanonicalRepository) UpsertWorkflowRun(ctx context.Context, run domain.
 	return nil
 }
 
-func (r *CanonicalRepository) runFromEvent(ev *nostr.Event) *domain.HiveCIWorkflowRun {
+func (r *CanonicalRepository) runFromEvent(ctx context.Context, ev *nostr.Event) (*domain.HiveCIWorkflowRun, error) {
 	if ev == nil {
-		return nil
+		return nil, nil
 	}
-	if _, ok := r.trusted[ev.PubKey.Hex()]; !ok {
-		return nil
+	if r.serviceID != "" {
+		if r.trustVerifier == nil {
+			return nil, fmt.Errorf("Hive-CI trust epoch verifier unavailable")
+		}
+		decision, serviceEvent, err := r.trustVerifier.JudgeServiceEvent(ctx, r.serviceID, *ev)
+		if err != nil {
+			return nil, err
+		}
+		if serviceEvent && decision == trustepoch.Hostile {
+			return nil, nil
+		}
+	}
+	_, trusted := r.trusted[ev.PubKey.Hex()]
+	if !trusted && r.serviceID != "" && r.trustVerifier != nil {
+		if _, legacyTrusted := r.trusted[r.trustVerifier.LegacyPubkey]; legacyTrusted {
+			resolved, err := r.trustVerifier.ServiceIdentity(ctx, r.serviceID)
+			if err != nil {
+				return nil, err
+			}
+			trusted = ev.PubKey.Hex() == resolved.Pubkey
+		}
+	}
+	if !trusted {
+		return nil, nil
 	}
 	run, err := parseWorkflowRunEvent(ev)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return &run
+	return &run, nil
 }
 
-func (r *CanonicalRepository) GetRunByEventID(_ context.Context, eventID string) (*domain.HiveCIWorkflowRun, error) {
+func (r *CanonicalRepository) GetRunByEventID(ctx context.Context, eventID string) (*domain.HiveCIWorkflowRun, error) {
 	if err := r.available(); err != nil {
 		return nil, err
 	}
@@ -135,19 +165,22 @@ func (r *CanonicalRepository) GetRunByEventID(_ context.Context, eventID string)
 	if err != nil {
 		return nil, err
 	}
-	return r.runFromEvent(ev), nil
+	return r.runFromEvent(ctx, ev)
 }
 
 // FindWorkflowRun returns the newest trusted run for the hive-ci-protocol
 // identity tuple, or nil.
-func (r *CanonicalRepository) FindWorkflowRun(_ context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error) {
+func (r *CanonicalRepository) FindWorkflowRun(ctx context.Context, repoCoordinate, commitSHA, workflowPath string) (*domain.HiveCIWorkflowRun, error) {
 	if err := r.available(); err != nil {
 		return nil, err
 	}
 	filter := workflowRunsForRepoFilter(repoCoordinate)
 	for ev := range r.events.QueryEvents(filter) {
 		candidate := ev
-		run := r.runFromEvent(&candidate)
+		run, err := r.runFromEvent(ctx, &candidate)
+		if err != nil {
+			return nil, err
+		}
 		if run == nil || !strings.EqualFold(run.CommitSHA, commitSHA) || run.WorkflowPath != workflowPath {
 			continue
 		}

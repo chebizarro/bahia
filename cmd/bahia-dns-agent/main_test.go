@@ -34,10 +34,12 @@ func TestMain(m *testing.M) {
 func TestDNSAgentEventStoreDefaultsNextToDurableState(t *testing.T) {
 	state := filepath.Join(t.TempDir(), "state", "serials.json")
 	cfg, err := validateConfig(config{
-		PrivateKeyFile:   "/keys/dns-agent.key",
-		RelayURLs:        []string{"ws://relay.example.test"},
-		AuthorizedPubkey: "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
-		IncludeDir:       t.TempDir(), AllowedZones: []string{"example.internal"},
+		PrivateKeyFile:     "/keys/dns-agent.key",
+		RelayURLs:          []string{"ws://relay.example.test"},
+		AuthorizedPubkey:   "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+		ServiceID:          "deployment-a",
+		OperatorRootPubkey: "c6047f9441ed7d6d3045406e95c07cd85a1444b4bd9b8f9f6e66d2cdb7e4d6d5",
+		IncludeDir:         t.TempDir(), AllowedZones: []string{"example.internal"},
 		StateFilePath: state,
 	})
 	require.NoError(t, err)

@@ -6,6 +6,7 @@ package trustepoch
 type Consumer struct {
 	ID          string
 	Enforcement string
+	Reason      string // non-empty only when enforcement remains pending
 }
 
 var roster = []Consumer{
@@ -13,11 +14,11 @@ var roster = []Consumer{
 	{ID: "sidecar", Enforcement: "enforced"},
 	{ID: "web", Enforcement: "enforced"},
 	{ID: "cli", Enforcement: "enforced"},
-	{ID: "dns", Enforcement: "pending"},
-	{ID: "loom", Enforcement: "pending"},
-	{ID: "soulfactory", Enforcement: "pending"},
-	{ID: "hiveci", Enforcement: "pending"},
-	{ID: "pinned-runtimes", Enforcement: "pending"},
+	{ID: "dns", Enforcement: "enforced"},
+	{ID: "loom", Enforcement: "enforced"},
+	{ID: "soulfactory", Enforcement: "pending", Reason: "cli_nostr_client_has_no_live_operator_epoch_subscription_or_inventory_seam"},
+	{ID: "hiveci", Enforcement: "enforced"},
+	{ID: "pinned-runtimes", Enforcement: "pending", Reason: "edge_image_admission_has_no_signed_epoch_source_or_durable_high_water_mark"},
 }
 
 func Consumers() []Consumer { return append([]Consumer(nil), roster...) }

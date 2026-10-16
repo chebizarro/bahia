@@ -38,6 +38,13 @@ type ZoneSubscriber struct {
 	daemonPubkey string
 	events       <-chan nostr.Event
 	logger       *zap.Logger
+	admit        func(context.Context, nostr.Event) error
+}
+
+// SetEventAdmission uses the live trust-epoch decision for each signed zone
+// event instead of relying on a startup-only daemon pubkey.
+func (s *ZoneSubscriber) SetEventAdmission(admit func(context.Context, nostr.Event) error) {
+	s.admit = admit
 }
 
 // NewZoneSubscriber creates a subscriber that feeds zone sync events to the
@@ -77,8 +84,12 @@ func (s *ZoneSubscriber) Run(ctx context.Context) error {
 
 func (s *ZoneSubscriber) handleEvent(ctx context.Context, ev nostr.Event) error {
 	// Verify the event is from the daemon.
-	if ev.PubKey.Hex() != s.daemonPubkey {
-		return nil // ignore events from other authors
+	if s.admit != nil {
+		if err := s.admit(ctx, ev); err != nil {
+			return err
+		}
+	} else if ev.PubKey.Hex() != s.daemonPubkey {
+		return nil
 	}
 
 	// Check NIP-40 expiration.

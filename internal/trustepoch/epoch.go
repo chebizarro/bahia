@@ -300,3 +300,22 @@ func (v *Verifier) JudgeEvent(ctx context.Context, serviceID string, ev nostr.Ev
 	}
 	return r.JudgeEvent(ev), nil
 }
+
+// JudgeServiceEvent resolves the current epoch before admitting an event from
+// any known generation of the service identity. Unrelated component authors
+// remain subject to the caller's own authority policy.
+func (v *Verifier) JudgeServiceEvent(ctx context.Context, serviceID string, ev nostr.Event) (Decision, bool, error) {
+	r, err := v.ServiceIdentity(ctx, serviceID)
+	if err != nil {
+		return Hostile, true, err
+	}
+	author := ev.PubKey.Hex()
+	old := v.LegacyPubkey
+	if r.Record != nil {
+		old = r.Record.OldPubkey
+	}
+	if author != old && author != v.LegacyPubkey && author != r.Pubkey {
+		return Accept, false, nil
+	}
+	return r.JudgeEvent(ev), true, nil
+}
