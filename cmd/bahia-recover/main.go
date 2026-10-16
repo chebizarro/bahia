@@ -22,11 +22,11 @@ import (
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort} --config FILE [--confirm-phase PHASE|--confirm-abort]")
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts} --config FILE [--confirm-phase PHASE|--confirm-abort]")
 		return 2
 	}
 	op := args[0]
-	if op != "plan" && op != "apply" && op != "status" && op != "resume" && op != "abort" {
+	if op != "plan" && op != "apply" && op != "status" && op != "resume" && op != "abort" && op != "report-drafts" {
 		_, _ = fmt.Fprintln(stderr, "unknown recovery command")
 		return 2
 	}
@@ -35,6 +35,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	path := flags.String("config", "", "Bahia config file")
 	phase := flags.String("confirm-phase", "", "exact next phase")
 	abort := flags.Bool("confirm-abort", false, "confirm pre-cutover abort")
+	draftPath := flags.String("draft-report", "", "unsigned SQL review draft artifact path")
 	if err := flags.Parse(args[1:]); err != nil || *path == "" || len(flags.Args()) != 0 {
 		_, _ = fmt.Fprintln(stderr, "config file and valid flags required")
 		return 2
@@ -122,6 +123,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	recoveryRelayPolicy := cfg.Nostr
 	recoveryRelayPolicy.ControlledRelays = append([]string(nil), r.ControlledRelays...)
+	if *draftPath == "" {
+		*draftPath = r.LedgerPath + ".sql-review-drafts.json"
+	}
+	sqlDrafts := &identityrecovery.SQLReviewDraftAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Rows: identityrecovery.PGReviewRows{DB: cfg.DB, OldPubkey: old.Hex()}, ArtifactPath: *draftPath}
 	engine.Domains = map[string]identityrecovery.DomainRecoveryAdapter{
 		"cp-state/service-registry":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindServiceRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"cp-state/environment-registry":      &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindEnvironmentRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
@@ -131,6 +136,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"bahia-docs":                         &identityrecovery.DocsRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"sql-only-review-drafts":             sqlDrafts,
 	}
 	engine.RequiredDomains = []string{
 		"cp-state/service-registry", "cp-state/environment-registry", "cp-state/adoption-binding",
@@ -141,6 +147,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		engine.OldSigner = func(ctx context.Context) (nostr.Keyer, error) {
 			return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.OldSigner.PublicKey, Signer: r.OldSigner.Signer}, servicesigner.Options{Logger: zap.NewNop()})
 		}
+	}
+	if op == "report-drafts" {
+		if _, err := sqlDrafts.Reassert(ctx, nil); err != nil {
+			_, _ = fmt.Fprintln(stderr, "unsigned SQL review draft report failed:", err)
+			return 1
+		}
+		if _, err := sqlDrafts.Verify(ctx); err != nil {
+			_, _ = fmt.Fprintln(stderr, "unsigned SQL review draft verification failed:", err)
+			return 1
+		}
+		_, _ = fmt.Fprintln(stdout, *draftPath)
+		return 0
 	}
 	switch op {
 	case "abort":

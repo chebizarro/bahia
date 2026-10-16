@@ -134,8 +134,7 @@ The CLI declares all domain groups required before `reassert-canonical-state`
 or `verify` can complete. A partially registered build cannot issue a
 completed phase receipt. PostgreSQL-only rows are never passed to a recovery
 publisher: they require an unsigned review draft followed by a separate
-operator-signed intent. Until a SQL candidate reporter exists, its absence is
-*not* evidence that there are no SQL-only candidates.
+operator-signed intent.
 
 Security state uses the fleet OCK (`SecurityCanonicalPublisher.publishConfidential`)
 and attribution edges use the subject organization's OCK
@@ -185,3 +184,13 @@ required but unregistered: notification `service_inner` is encrypted to the
 old service pubkey, while the system announcement is assembled from live
 configuration, capabilities and observations rather than a recoverable typed
 snapshot. Neither is silently copied or marked complete.
+
+`bahia-recover report-drafts --config FILE [--draft-report FILE]` writes an
+unsigned, mode-0600 JSON artifact without using a service signer or publishing
+an event. It enumerates projection identifiers in a read-only repeatable-read
+PostgreSQL snapshot, compares them with EOSE-complete accepted old-key and
+validated new-key canonical heads in the relay and durable store, and reports
+missing heads (including embedded deployment units and rows lacking an SBOM
+coordinate) as manual-review candidates. The artifact contains identifiers,
+not projection payloads or secrets. A changed SQL snapshot or incomplete relay
+read fails verification; absence is never inferred from a failed source.
