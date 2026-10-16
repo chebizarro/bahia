@@ -74,9 +74,49 @@ const openTimeout = 2 * time.Second
 // in one process share the underlying database; the database closes with the
 // last handle.
 type Store struct {
-	shared    *sharedStore
-	closeOnce sync.Once
-	closeErr  error
+	shared           *sharedStore
+	closeOnce        sync.Once
+	closeErr         error
+	admissionMu      sync.RWMutex
+	admission        func(nostr.Event) error
+	historicalReplay func(nostr.Event) bool
+}
+
+// SetAdmission installs a pre-persistence trust decision on this store handle.
+// It is applied to both relay bootstrap and live subscriber ingestion.
+func (s *Store) SetAdmission(judge func(nostr.Event) error) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	s.admission = judge
+}
+
+// SetHistoricalReplay admits only a separately verified, exact historical
+// inventory entry through generic age validation. SaveEvent still runs the
+// ordinary trust admission hook before persistence.
+func (s *Store) SetHistoricalReplay(judge func(nostr.Event) bool) {
+	s.admissionMu.Lock()
+	defer s.admissionMu.Unlock()
+	s.historicalReplay = judge
+}
+
+func (s *Store) AllowsHistoricalReplay(ev nostr.Event) bool {
+	s.admissionMu.RLock()
+	judge := s.historicalReplay
+	s.admissionMu.RUnlock()
+	return judge != nil && judge(ev)
+}
+
+// ObserveRejected passes a structurally present but invalid relay event to
+// the trust admission hook without storing it. A malformed epoch head can
+// then poison service admission instead of vanishing into legacy mode.
+func (s *Store) ObserveRejected(ev nostr.Event) error {
+	s.admissionMu.RLock()
+	judge := s.admission
+	s.admissionMu.RUnlock()
+	if judge == nil {
+		return nil
+	}
+	return judge(ev)
 }
 
 type sharedStore struct {
@@ -188,6 +228,14 @@ func (s *Store) backend() *boltdb.BoltBackend { return s.shared.backend }
 // to the request's created_at. Ephemeral events are never stored and always
 // count as new. The caller is expected to have verified the event.
 func (s *Store) SaveEvent(ev nostr.Event) (bool, error) {
+	s.admissionMu.RLock()
+	judge := s.admission
+	s.admissionMu.RUnlock()
+	if judge != nil {
+		if err := judge(ev); err != nil {
+			return false, err
+		}
+	}
 	if ev.Kind.IsEphemeral() {
 		return true, nil
 	}
