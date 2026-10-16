@@ -17,6 +17,7 @@ Nostr is Bahia's control plane and source of durable product state. Clients subs
 | Signed intent | `30900` with `t=bahia-intent` | operator | `d=<intent-id>`, `domain`, `intent_id`, optional `org` |
 | Intent status | `30315` | service | requester `p`, intent correlation and bounded status |
 | Canonical state | `30900` with `schema=bahia.cp-state.v1` | service | `t=<topic>` and stable `d` coordinate |
+| Identity recovery control | `30900` with family `32051`, `32052`, or `32053` | independent operator root, except new-service consumer acks | `t=identity-incident`, `trust-epoch`, or `identity-recovery-receipt`; stable incident/service/consumer `d` |
 | Audit fact | `4903` | service | entity and correlation tags; assistant checkpoints use `t=assistant-checkpoint:<session_id>` |
 | Interactive request | `25910`, optionally wrapped by `1059` or `21059` | requester | registered ContextVM JSON-RPC method |
 | Documentation | `30023` with `t=bahia-docs` | service | `d=<topic>` |

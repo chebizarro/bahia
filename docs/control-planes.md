@@ -181,3 +181,14 @@ recovery receipts are subscribed by `#t=hostname-reservation` and
 conflict, rejected, or superseded. A route plan may be applied only while its
 exact service-signed reservation is active. PostgreSQL does not decide
 ownership. See the [event spec](event-spec.md#public-hostname-reservations).
+
+## Identity recovery control
+
+Identity recovery adds `30900` cp-state families `32051` (incident), `32052`
+(trust epoch), and `32053` (phase receipt/consumer acknowledgment) in the
+`identity` domain. Unlike ordinary service projections, the incident, epoch,
+and phase receipts are authored by the independent operator root. Only a
+post-activation consumer acknowledgment is new-service-authored. Readers
+subscribe by operator author and `#t`, verify the exact schemas and
+coordinates, and reject regressions. See
+[identity recovery](architecture/identity-recovery.md).

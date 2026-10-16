@@ -568,7 +568,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	kinds.RouteCanaryRecord:                     {"route", "canary", kinds.CPStateTopicRouteCanary},
 	int(kinds.CPStateFamilyHostnameReservation): {"hostname", "reservation", kinds.CPStateTopicHostnameReservation},
 	int(kinds.CPStateFamilyHostnameRecovery):    {"hostname", "recovery", kinds.CPStateTopicHostnameRecovery},
-	kinds.SoulRuntimePolicyRecord:               {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
+	// Recovery control records are independently operator-authored, not service projections.
+	int(kinds.CPStateFamilyIdentityIncident):        {"identity", "incident", kinds.CPStateTopicIdentityIncident},
+	int(kinds.CPStateFamilyTrustEpoch):              {"identity", "trust-epoch", kinds.CPStateTopicTrustEpoch},
+	int(kinds.CPStateFamilyIdentityRecoveryReceipt): {"identity", "recovery-receipt", kinds.CPStateTopicIdentityRecoveryReceipt},
+	kinds.SoulRuntimePolicyRecord:                   {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
 	// Governed provisioning adapter ledger; published by the
 	// soulfactory package through the publisher seam, not the projector.
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): {"soul-factory", "adapter-ledger", kinds.CPStateTopicSoulFactoryAdapterLedger},

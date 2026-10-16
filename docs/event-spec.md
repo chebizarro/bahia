@@ -706,6 +706,20 @@ raw environment values, Docker TLS material or credentials:
 | `llm_route.created/updated`, `llm_release.registered`, `llm_deployment_intent.*`, `llm_deployment_run.*`, `llm_route.observation`, `llm_route_state.changed`, `llm_route.drift_detected`, `llm_gateway_route.synced` | `route_id`, `release_id`, `environment_id`, `intent_id`, `run_id` |
 | `security.policy_breached` | `policy_id`, `target_key_hash`, `fingerprint`, `severity_counts`, `violated_rules`; emitted only when the breach fingerprint is new or materially changed |
 
+## Identity recovery control state
+
+Identity recovery uses operator-authored `30900` cp-state families:
+`legacy_kind=32051`, `t=identity-incident`, `domain=identity`,
+`d=identity-incident:<incident-id>`; `legacy_kind=32052`, `t=trust-epoch`,
+`domain=identity`, `d=trust-epoch:<service-id>`; and `legacy_kind=32053`,
+`t=identity-recovery-receipt`, `domain=identity`, with phase receipt
+`d=identity-incident:<incident-id>:phase:<phase>` and consumer acknowledgment
+`d=trust-epoch-ack:<service-id>:<consumer-id>`. These are exceptions to the
+service-authored cp-state rule: the independent operator root signs the
+incident, epoch, and phase receipts; the new service identity signs only
+consumer acknowledgments. The precise tags, schemas, content, and validation
+rules are in [identity recovery](architecture/identity-recovery.md).
+
 ## Public hostname reservations
 
 Public-hostname mutation is an operator-signed `30900` intent with

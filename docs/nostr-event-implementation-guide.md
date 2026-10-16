@@ -130,3 +130,17 @@ ownership; never allocate a wire kind. The plaintext reservation family is
 `#t=hostname-reservation`. The plaintext recovery family is
 `CPStateFamilyHostnameRecovery` (32050), `d=hostname:recovery:<host>`,
 `#t=hostname-recovery`. See the [wire contract](event-spec.md#public-hostname-reservations).
+
+## Identity recovery control families
+
+Identity recovery uses three `30900` cp-state families: `32051`
+(`identity-incident`, `d=identity-incident:<incident-id>`), `32052`
+(`trust-epoch`, `d=trust-epoch:<service-id>`), and `32053`
+(`identity-recovery-receipt`, `d=identity-incident:<incident-id>:phase:<phase>`;
+also the `trust-epoch-ack:<service-id>:<consumer-id>` coordinate).
+Unlike service-authored cp-state projections, incident, epoch, and phase
+receipt records are signed by the configured independent operator root.
+Only consumer acknowledgments use the new service identity. Consumers filter
+by the operator author and indexed `#t`, and validate the full envelope and
+monotonic epoch before trusting a record. See
+[identity recovery](architecture/identity-recovery.md).
