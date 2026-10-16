@@ -76,7 +76,7 @@ func (t *LedgerRotationTracker) Inventory(ctx context.Context) ([]SecretRef, err
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]struct{}{}
+	scanned := map[string]SecretRef{}
 	for i := range refs {
 		ref := &refs[i]
 		if ref.Label == "" || secretstore.ValidateRef(ref.Credential) != nil || ref.Provider != ref.Credential.Store {
@@ -87,27 +87,34 @@ func (t *LedgerRotationTracker) Inventory(ctx context.Context) ([]SecretRef, err
 			return nil, errors.New("rotation inventory id mismatch")
 		}
 		ref.ID = expected
-		if _, duplicate := seen[ref.ID]; duplicate {
+		replacement := false
+		for _, prior := range existing {
+			if prior.Ref.Label == ref.Label && prior.Replacement != nil && *prior.Replacement == ref.Credential {
+				replacement = true
+				break
+			}
+		}
+		if replacement {
 			continue
 		}
-		seen[ref.ID] = struct{}{}
-		if item, ok := existing[ref.ID]; ok {
-			if item.Ref.Label != ref.Label || item.Ref.Credential != ref.Credential {
-				return nil, errors.New("rotation inventory drift")
+		scanned[ref.ID] = *ref
+	}
+	for id, item := range existing {
+		if item.Ref.ID != id || rotationID(item.Ref.Label, item.Ref.Credential) != id || secretstore.ValidateRef(item.Ref.Credential) != nil {
+			return nil, errors.New("rotation ledger reference invalid")
+		}
+		scanned[id] = item.Ref
+	}
+	for id, ref := range scanned {
+		if _, ok := existing[id]; !ok {
+			if err := t.Ledger.SaveRotationItem(RotationWorkItem{Ref: ref}); err != nil {
+				return nil, err
 			}
-		} else if err := t.Ledger.SaveRotationItem(RotationWorkItem{Ref: *ref}); err != nil {
-			return nil, err
 		}
 	}
-	if len(existing) > 0 && len(seen) != len(existing) {
-		return nil, errors.New("rotation inventory shrank; refusing incomplete scan")
-	}
-	unique := make([]SecretRef, 0, len(seen))
-	for _, ref := range refs {
-		if _, ok := seen[ref.ID]; ok {
-			unique = append(unique, ref)
-			delete(seen, ref.ID)
-		}
+	unique := make([]SecretRef, 0, len(scanned))
+	for _, ref := range scanned {
+		unique = append(unique, ref)
 	}
 	slices.SortFunc(unique, func(a, b SecretRef) int {
 		if a.ID < b.ID {

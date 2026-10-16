@@ -40,7 +40,11 @@ func TestRotationInventoryAndOperatorEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ledger.Close()
+	defer func() {
+		if err := ledger.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	org, service := uuid.New(), uuid.New()
 	old := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("a", 64), Version: 1}
 	newer := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("b", 64), Version: 2}
@@ -82,8 +86,14 @@ func TestRotationInventoryAndOperatorEvidence(t *testing.T) {
 	}
 	tracker.Source = rotationSource{refs: []SecretRef{canonical[0]}}
 	tracker.SystemKeys = config.SystemKeysConfig{}
-	if _, err := tracker.Inventory(ctx); err == nil {
-		t.Fatal("shrinking inventory accepted")
+	retained, err := tracker.Inventory(ctx)
+	if err != nil || len(retained) != 2 {
+		t.Fatalf("old work items not retained after canonical repoint: %v %+v", err, retained)
+	}
+	tracker.Source = rotationSource{refs: []SecretRef{{Provider: "signet", Label: canonical[0].Label, Credential: newer}}}
+	retained, err = tracker.Inventory(ctx)
+	if err != nil || len(retained) != 2 {
+		t.Fatalf("replacement incorrectly inventoried: %v %+v", err, retained)
 	}
 }
 
@@ -94,7 +104,11 @@ func TestRotationFailsClosedOnSourceAndUnchangedReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ledger.Close()
+	defer func() {
+		if err := ledger.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	tracker := &LedgerRotationTracker{Ledger: ledger, Source: rotationSource{err: errors.New("canonical unavailable")}}
 	if _, err := tracker.Inventory(ctx); err == nil {
 		t.Fatal("source error ignored")
