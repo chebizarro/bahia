@@ -90,7 +90,7 @@ func (testRotation) Rotate(context.Context, []SecretRef) (map[string]string, err
 type testPurge struct{}
 
 func (testPurge) Purge(context.Context, []nostr.ID) ([]string, error) {
-	return []string{"purge-proof"}, nil
+	return []string{"purge:archive-artifacts:archive-proof", "purge:pg-backups:backup-proof", "purge:wal:wal-proof", "purge:controlled-re-encryption:reencrypt-proof"}, nil
 }
 
 type testAcks struct{}

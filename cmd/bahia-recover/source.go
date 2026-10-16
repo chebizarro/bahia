@@ -74,10 +74,21 @@ func (s relaySource) Publish(ctx context.Context, ev nostr.Event) error {
 	if len(results) != len(s.relays) {
 		return errors.New("recovery publish omitted controlled relay")
 	}
+	want := make(map[string]struct{}, len(s.relays))
+	for _, relay := range s.relays {
+		want[relay] = struct{}{}
+	}
 	for _, r := range results {
+		if _, ok := want[r.RelayURL]; !ok {
+			return errors.New("recovery publish result outside controlled relays")
+		}
+		delete(want, r.RelayURL)
 		if !r.Succeeded() {
 			return fmt.Errorf("controlled relay %s did not acknowledge recovery record", r.RelayURL)
 		}
+	}
+	if len(want) != 0 {
+		return errors.New("recovery publish omitted controlled relay")
 	}
 	return nil
 }

@@ -2,10 +2,10 @@ package identityrecovery
 
 import (
 	"errors"
-	"strconv"
 	"strings"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/deletionguard"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -36,48 +36,13 @@ func (e *Engine) validatePending(s State, id string, ev nostr.Event) error {
 		}
 		return nil
 	}
-	if ev.Kind != nostr.KindDeletion || ev.PubKey != e.Config.OldPubkey || ev.Content != "" {
-		return errors.New("pending event is neither operator record nor scoped deletion")
-	}
-	targets := map[string]nostr.Kind{}
+	targets := map[nostr.ID]nostr.Kind{}
 	for _, item := range s.Observed {
-		targets[item.ID] = nostr.Kind(item.Kind)
-	}
-	referenced := map[string]struct{}{}
-	kindsNeeded := map[nostr.Kind]struct{}{}
-	declared := map[nostr.Kind]struct{}{}
-	for _, t := range ev.Tags {
-		if len(t) != 2 || strings.Contains(strings.ToLower(t[1]), "nsec1") {
-			return errors.New("unsafe pending deletion tag")
+		targetID, err := nostr.IDFromHex(item.ID)
+		if err != nil {
+			return errors.New("invalid observed inventory id")
 		}
-		switch t[0] {
-		case "e":
-			if _, dup := referenced[t[1]]; dup {
-				return errors.New("duplicate pending deletion target")
-			}
-			kind, ok := targets[t[1]]
-			if !ok {
-				return errors.New("pending deletion outside observed inventory")
-			}
-			referenced[t[1]] = struct{}{}
-			kindsNeeded[kind] = struct{}{}
-		case "k":
-			v, err := strconv.Atoi(t[1])
-			if err != nil || strconv.Itoa(v) != t[1] {
-				return errors.New("invalid pending deletion kind")
-			}
-			declared[nostr.Kind(v)] = struct{}{}
-		default:
-			return errors.New("pending deletion tag not permitted")
-		}
+		targets[targetID] = nostr.Kind(item.Kind)
 	}
-	if len(referenced) == 0 || len(referenced) > 500 || len(kindsNeeded) != len(declared) {
-		return errors.New("pending deletion scope invalid")
-	}
-	for k := range kindsNeeded {
-		if _, ok := declared[k]; !ok {
-			return errors.New("pending deletion kind mismatch")
-		}
-	}
-	return nil
+	return deletionguard.CheckSigned(ev, e.Config.OldPubkey, targets, nil)
 }

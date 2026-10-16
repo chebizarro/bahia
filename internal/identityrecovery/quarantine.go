@@ -2,13 +2,15 @@ package identityrecovery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/deletionguard"
 )
 
 // QuarantinedOldSigner deliberately does not implement nostr.Signer or Keyer.
@@ -41,56 +43,16 @@ func (q *QuarantinedOldSigner) Decrypt(ctx context.Context, ciphertext string, s
 	return q.keyer.Decrypt(ctx, ciphertext, sender)
 }
 func (q *QuarantinedOldSigner) SignDeletion(ctx context.Context, ev *nostr.Event) error {
-	if ev == nil || ev.Kind != nostr.KindDeletion || ev.PubKey != q.author || ev.Content != "" || len(ev.Tags) == 0 {
-		return errors.New("old signer permits only scoped kind-5 deletion")
+	if ev == nil {
+		return errors.New("deletion required")
 	}
-	seen := map[nostr.ID]struct{}{}
-	kinds := map[nostr.Kind]struct{}{}
-	declared := map[nostr.Kind]struct{}{}
-	for _, tag := range ev.Tags {
-		if len(tag) != 2 || strings.Contains(strings.ToLower(tag[1]), "nsec1") {
-			return errors.New("unsafe deletion tag")
-		}
-		switch tag[0] {
-		case "e":
-			id, err := nostr.IDFromHex(tag[1])
-			if err != nil || id.Hex() != tag[1] {
-				return errors.New("invalid deletion e-tag")
-			}
-			kind, ok := q.targets[id]
-			if !ok {
-				return errors.New("deletion e-tag outside observed inventory")
-			}
-			if _, dup := seen[id]; dup {
-				return errors.New("duplicate deletion e-tag")
-			}
-			seen[id] = struct{}{}
-			kinds[kind] = struct{}{}
-		case "k":
-			value, err := strconv.Atoi(tag[1])
-			if err != nil || strconv.Itoa(value) != tag[1] {
-				return errors.New("invalid deletion k-tag")
-			}
-			declared[nostr.Kind(value)] = struct{}{}
-		default:
-			return fmt.Errorf("old signer refuses tag %s", tag[0])
-		}
-	}
-	if len(seen) == 0 || len(seen) > 500 || len(kinds) != len(declared) {
-		return errors.New("invalid deletion scope")
-	}
-	for k := range kinds {
-		if _, ok := declared[k]; !ok {
-			return errors.New("deletion kind mismatch")
-		}
+	if err := deletionguard.Check(*ev, q.author, q.targets, nil); err != nil {
+		return err
 	}
 	if err := q.keyer.SignEvent(ctx, ev); err != nil {
 		return errors.New("old signer refused deletion")
 	}
-	if ev.PubKey != q.author || !ev.CheckID() || !ev.VerifySignature() {
-		return errors.New("old signer returned invalid deletion")
-	}
-	return nil
+	return deletionguard.CheckSigned(*ev, q.author, q.targets, nil)
 }
 func (e *Engine) deleteAndPurge(ctx context.Context, s *State) ([]string, error) {
 	if e.Purge == nil {
@@ -149,8 +111,15 @@ func (e *Engine) deleteAndPurge(ctx context.Context, s *State) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	if len(receipts) == 0 {
-		return nil, fmt.Errorf("purge receipts: %w", ErrIncomplete)
+	if err := validatePurgeEvidence(receipts); err != nil {
+		return nil, fmt.Errorf("purge receipts: %w", err)
 	}
-	return append(append([]string{}, s.DeletionIDs...), receipts...), nil
+	evidence := append([]string{"deletion-complete"}, s.DeletionIDs...)
+	for _, id := range s.DeletionIDs {
+		for _, relay := range e.Config.ControlledRelays {
+			sum := sha256.Sum256([]byte(relay))
+			evidence = append(evidence, "delete-ok:"+hex.EncodeToString(sum[:])+":"+id)
+		}
+	}
+	return append(evidence, receipts...), nil
 }
