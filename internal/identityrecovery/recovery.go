@@ -14,6 +14,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/google/uuid"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -74,8 +75,10 @@ type DomainRecoveryAdapter interface {
 	Verify(context.Context) ([]string, error)
 }
 type SecretRef struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
+	ID         string                     `json:"id"`
+	Provider   string                     `json:"provider"`
+	Label      string                     `json:"label,omitempty"`
+	Credential domain.SecretCredentialRef `json:"credential_ref"`
 }
 type SecretRotationTracker interface {
 	Inventory(context.Context) ([]SecretRef, error)

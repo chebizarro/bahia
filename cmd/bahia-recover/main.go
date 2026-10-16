@@ -117,6 +117,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	engine.Operator = operator
 	engine.Source = relaySource{pool: pool, relays: r.ControlledRelays}
 	engine.Local = localSource{path: cfg.Nostr.LocalStore.Path}
+	engine.Purge = identityrecovery.FilePurgeReceipts{Path: r.PurgeEvidencePath}
 	engine.NewSigner = func(ctx context.Context) (nostr.Keyer, error) {
 		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.NewIdentity.PublicKey, Signer: r.NewIdentity.Signer}, servicesigner.Options{Logger: zap.NewNop()})
 	}

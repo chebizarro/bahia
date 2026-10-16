@@ -5,11 +5,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"unicode"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/deletionguard"
 	"github.com/openagentsinc/bahia/internal/kinds"
 )
 
@@ -136,85 +136,25 @@ func (g deletionGuard) check(ev nostr.Event) error {
 		if len(tag) > 0 && strings.EqualFold(strings.TrimSpace(tag[0]), "a") {
 			return errATag
 		}
-	}
-	if ev.Kind != nostr.KindDeletion {
-		return fmt.Errorf("refusing deletion of kind %d: only kind 5 is allowed", ev.Kind)
-	}
-	if ev.PubKey != g.author {
-		return fmt.Errorf("refusing deletion authored by %s: only the leaked identity %s may request it", ev.PubKey.Hex(), g.author.Hex())
-	}
-	if ev.Content != "" {
-		return errors.New("refusing deletion with content: the request carries only e and k tags")
-	}
-	referenced := make(map[nostr.ID]struct{})
-	referencedKinds := make(map[nostr.Kind]struct{})
-	declaredKinds := make(map[nostr.Kind]struct{})
-	for _, tag := range ev.Tags {
-		if len(tag) != 2 {
-			return fmt.Errorf("refusing deletion with a %d-element tag: only [\"e\", id] and [\"k\", kind] are allowed", len(tag))
-		}
 		for _, field := range tag {
 			if g.forbidden.contains(field) {
 				return errDValue
 			}
-			if strings.Contains(strings.ToLower(field), "nsec1") {
-				return errors.New("refusing deletion: a tag contains an nsec")
-			}
-		}
-		switch tag[0] {
-		case "e":
-			id, err := nostr.IDFromHex(tag[1])
-			if err != nil || id.Hex() != tag[1] {
-				return fmt.Errorf("refusing deletion: e tag %q is not a lowercase 64-hex event id", tag[1])
-			}
-			kind, ok := g.targets[id]
-			if !ok {
-				return fmt.Errorf("refusing deletion: e tag %s names an event no scan found", tag[1])
-			}
-			if _, dup := referenced[id]; dup {
-				return fmt.Errorf("refusing deletion: e tag %s repeats", tag[1])
-			}
-			referenced[id] = struct{}{}
-			referencedKinds[kind] = struct{}{}
-		case "k":
-			value, err := strconv.Atoi(tag[1])
-			if err != nil || strconv.Itoa(value) != tag[1] || !isLeakedKind(nostr.Kind(value)) {
-				return fmt.Errorf("refusing deletion: k tag %q is not a leaked status kind", tag[1])
-			}
-			if _, dup := declaredKinds[nostr.Kind(value)]; dup {
-				return fmt.Errorf("refusing deletion: k tag %s repeats", tag[1])
-			}
-			declaredKinds[nostr.Kind(value)] = struct{}{}
-		default:
-			return fmt.Errorf("refusing deletion with a %q tag: only e and k tags are allowed", tag[0])
 		}
 	}
-	if len(referenced) == 0 {
-		return errors.New("refusing deletion without e tags")
+	allowed := make(map[nostr.Kind]struct{}, len(leakedKinds))
+	for _, kind := range leakedKinds {
+		allowed[kind] = struct{}{}
 	}
-	if len(referenced) > maxBatchSize {
-		return fmt.Errorf("refusing deletion of %d events: at most %d per request", len(referenced), maxBatchSize)
-	}
-	if len(declaredKinds) != len(referencedKinds) {
-		return errors.New("refusing deletion: k tags must list exactly the kinds of the referenced events")
-	}
-	for kind := range referencedKinds {
-		if _, ok := declaredKinds[kind]; !ok {
-			return fmt.Errorf("refusing deletion: kind %d of a referenced event has no k tag", kind)
-		}
-	}
-	return nil
+	return deletionguard.Check(ev, g.author, g.targets, allowed)
 }
 
-// checkSigned applies the guard to a signed request and verifies its id and
-// signature, so neither a signer nor an edited report can change what is
-// published.
 func (g deletionGuard) checkSigned(ev nostr.Event) error {
 	if err := g.check(ev); err != nil {
 		return err
 	}
 	if !ev.CheckID() || !ev.VerifySignature() {
-		return fmt.Errorf("refusing deletion %s: id or signature does not verify", ev.ID.Hex())
+		return errors.New("signed deletion does not verify")
 	}
 	return nil
 }

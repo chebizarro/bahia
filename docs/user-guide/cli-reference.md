@@ -89,7 +89,7 @@ Two operations are confidential request/response calls instead of intents: `logs
 
 ## Operator identity recovery
 
-`bahia-recover` is a separate operator tool, not a daemon subcommand. It uses a remote operator-root signer, controlled relays, and a dedicated recovery ledger. See the [identity recovery runbook](../runbooks/identity-recovery.md) for configuration, phase confirmations, and the forward-only cutover rule.
+`bahia-recover` is a separate operator tool, not a daemon subcommand. It uses a remote operator-root signer, controlled relays, and a dedicated recovery ledger. See the [identity recovery runbook](../runbooks/identity-compromise-recovery.md) for configuration, phase confirmations, and the forward-only cutover rule. Production containment, reassertion, rotation and consumer-ack adapters are not yet registered by this CLI, so live cutover remains blocked.
 
 ## Commands
 

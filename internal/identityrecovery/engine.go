@@ -255,6 +255,13 @@ func (e *Engine) execute(ctx context.Context, s *State, p Phase) ([]string, erro
 	case Verify:
 		return e.verify(ctx, *s)
 	case RetireOldIdentity:
+		deletion, ok := s.Receipt(DeleteAndPurge)
+		if !ok || !hasPurgeEvidence(deletion, s.DeletionIDs, e.Config.ControlledRelays) {
+			return nil, fmt.Errorf("retirement requires deletion and controlled re-encryption receipts: %w", ErrIncomplete)
+		}
+		if _, ok := s.Receipt(ReassertCanonicalState); !ok {
+			return nil, fmt.Errorf("retirement requires canonical reassertion: %w", ErrIncomplete)
+		}
 		return []string{s.IncidentID}, nil
 	default:
 		return nil, errors.New("unknown recovery phase")
