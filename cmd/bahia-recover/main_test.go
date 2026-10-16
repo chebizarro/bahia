@@ -28,6 +28,8 @@ func TestPlanAndStatusDoNotCreateLedger(t *testing.T) {
 	old, root, next := key(), key(), key()
 	yaml := fmt.Sprintf(`nostr:
   service_id: bahia-service-v1
+  operator_root_pubkey: %s
+  public_key: %s
   local_store:
     path: %s
 identity_recovery:
@@ -45,7 +47,7 @@ identity_recovery:
     public_key: %s
     signer:
       method: nip55l
-`, filepath.Join(dir, "daemon.bolt"), ledger, old, root, next)
+`, root, old, filepath.Join(dir, "daemon.bolt"), ledger, old, root, next)
 	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
