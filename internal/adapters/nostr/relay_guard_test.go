@@ -121,3 +121,44 @@ func TestRelayGuardRefusesNegentropyUploadOutsideControlledRelays(t *testing.T) 
 	require.ErrorAs(t, err, &refused)
 	require.Empty(t, frames.sent())
 }
+
+func TestRecoveryCleanupPoolPublicRelayCarveOutIsSignerAndKindScoped(t *testing.T) {
+	old, operator, other := gonostr.Generate(), gonostr.Generate(), gonostr.Generate()
+	var allowed gonostr.ID
+	guard, err := relayguard.NewRecoveryCleanup(operator.Public(), []string{guardControlledRelay}, []string{guardControlledRelay, guardPublicRelay}, old.Public(), func(ev gonostr.Event) bool { return ev.ID == allowed })
+	require.NoError(t, err)
+	pool := connectedTestPool(t, newIsolatedTestAdmission(), guardPublicRelay)
+	pool.relayGuard = guard
+	pool.controlPlanePurpose = true
+	frames := &frameRecorder{}
+	setPublishOnRelayForTest(t, frames.publish)
+	deletion := gonostr.Event{Kind: gonostr.KindDeletion, CreatedAt: 1, Tags: gonostr.Tags{{"e", gonostr.Generate().Public().Hex()}, {"k", "30900"}}}
+	require.NoError(t, deletion.Sign(old))
+	allowed = deletion.ID
+	results, err := pool.PublishToRelaysWithResults(t.Context(), deletion, []string{guardPublicRelay})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.True(t, results[0].Succeeded())
+	require.Equal(t, []string{guardPublicRelay}, frames.sent())
+	for _, tc := range []struct {
+		name string
+		ev   gonostr.Event
+	}{
+		{"wrong signer", func() gonostr.Event { ev := deletion; require.NoError(t, ev.Sign(other)); return ev }()},
+		{"operator signer", func() gonostr.Event { ev := deletion; require.NoError(t, ev.Sign(operator)); return ev }()},
+		{"old signer outside pending batch", func() gonostr.Event { ev := deletion; ev.CreatedAt++; require.NoError(t, ev.Sign(old)); return ev }()},
+		{"wrong kind", func() gonostr.Event {
+			ev := gonostr.Event{Kind: kinds.CASControlState, CreatedAt: 1, Tags: gonostr.Tags{{"d", "service:x"}}}
+			require.NoError(t, ev.Sign(old))
+			return ev
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			results, err := pool.PublishToRelaysWithResults(t.Context(), tc.ev, []string{guardPublicRelay})
+			require.Error(t, err)
+			require.Len(t, results, 1)
+			require.True(t, IsBlockedReason(results[0].Reason))
+			require.Equal(t, []string{guardPublicRelay}, frames.sent(), "non-deletion frame reached public relay")
+		})
+	}
+}

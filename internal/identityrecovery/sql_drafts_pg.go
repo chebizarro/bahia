@@ -51,6 +51,11 @@ var sqlReviewQueries = []sqlReviewQuery{
 }
 
 func (p PGReviewRows) ListReviewRows(ctx context.Context) ([]SQLReviewRow, error) {
+	// An absent derived PostgreSQL projection contributes no candidate rows;
+	// the canonical relay/local inventory remains authoritative.
+	if p.DB.Host == "" && p.DB.Name == "" {
+		return []SQLReviewRow{}, nil
+	}
 	cfg, err := pgxpool.ParseConfig(p.DB.DSN())
 	if err != nil {
 		return nil, errors.New("SQL draft database configuration invalid")

@@ -92,10 +92,11 @@ func IsGiftWrapKind(kind nostr.Kind) bool {
 // outside the controlled set. A nil *Guard allows everything; the daemon
 // always constructs one with New.
 type Guard struct {
-	service    nostr.PubKey
-	controlled map[string]struct{}
-	cleanup    map[string]struct{}
-	old        nostr.PubKey
+	service           nostr.PubKey
+	controlled        map[string]struct{}
+	cleanup           map[string]struct{}
+	old               nostr.PubKey
+	authorizeDeletion func(nostr.Event) bool
 
 	refusals atomic.Uint64
 	reported sync.Map // refusalKey -> struct{}: refusals already reported once
@@ -130,15 +131,16 @@ func New(service nostr.PubKey, controlled []string) (*Guard, error) {
 // NewRecoveryCleanup confines a dedicated recovery pool to signed old-key
 // NIP-09 e-tag deletions on the explicitly configured cleanup set. It does
 // not relax the ordinary control-plane guard or its public-relay denylist.
-func NewRecoveryCleanup(service nostr.PubKey, controlled, cleanup []string, old nostr.PubKey) (*Guard, error) {
+func NewRecoveryCleanup(service nostr.PubKey, controlled, cleanup []string, old nostr.PubKey, authorizeDeletion func(nostr.Event) bool) (*Guard, error) {
 	g, err := New(service, controlled)
 	if err != nil {
 		return nil, err
 	}
-	if old == nostr.ZeroPK || old == service || len(cleanup) == 0 {
+	if old == nostr.ZeroPK || old == service || len(cleanup) == 0 || authorizeDeletion == nil {
 		return nil, fmt.Errorf("recovery cleanup signer and relays required")
 	}
 	g.old = old
+	g.authorizeDeletion = authorizeDeletion
 	g.cleanup = make(map[string]struct{}, len(cleanup))
 	for _, relay := range cleanup {
 		url := Normalize(relay)
@@ -164,7 +166,7 @@ func (g *Guard) Allows(relayURL string) bool {
 func (g *Guard) Check(relayURL string, ev nostr.Event) error {
 	if g != nil && g.cleanup != nil {
 		_, listed := g.cleanup[Normalize(relayURL)]
-		if !listed || ev.Kind != nostr.KindDeletion || ev.PubKey != g.old || !ev.CheckID() || !ev.VerifySignature() || !scopedETagDeletion(ev) {
+		if !listed || ev.Kind != nostr.KindDeletion || ev.PubKey != g.old || !ev.CheckID() || !ev.VerifySignature() || !scopedETagDeletion(ev) || !g.authorizeDeletion(ev) {
 			return g.refuse(relayURL, ev.Kind, "non-quarantined cleanup event")
 		}
 		return nil

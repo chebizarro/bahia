@@ -51,6 +51,18 @@ func (s CleanupRelaySource) Scan(ctx context.Context, filter nostr.Filter) ([]no
 				}
 				seen[ev.ID] = *ev
 			case <-sub.EndOfStoredEvents:
+				for draining := true; draining; {
+					select {
+					case ev, ok := <-sub.Events:
+						if !ok {
+							draining = false
+						} else {
+							seen[ev.ID] = *ev
+						}
+					default:
+						draining = false
+					}
+				}
 				complete = true
 			case <-readCtx.Done():
 				complete = true

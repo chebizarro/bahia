@@ -153,7 +153,7 @@ func TestRecoveryCleanupCarveOutOnlyQuarantinedDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanup, err := NewRecoveryCleanup(operator.Public(), []string{controlled}, []string{controlled, public}, old.Public())
+	cleanup, err := NewRecoveryCleanup(operator.Public(), []string{controlled}, []string{controlled, public}, old.Public(), func(ev nostr.Event) bool { return ev.Kind == nostr.KindDeletion })
 	if err != nil {
 		t.Fatal(err)
 	}

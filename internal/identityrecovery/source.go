@@ -10,6 +10,7 @@ import (
 	"fiatjaf.com/nostr"
 	adapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 )
 
 type RelaySource struct {
@@ -38,16 +39,19 @@ func (s RelaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Eve
 					sub.Close()
 					return nil, errors.New("audited relay history incomplete")
 				}
-				for {
+				for draining := true; draining; {
 					select {
 					case ev, ok := <-sub.Events:
-						if ok {
+						if !ok {
+							draining = false
+						} else {
 							seen[ev.ID] = *ev
 						}
 					default:
-						complete = true
+						draining = false
 					}
 				}
+				complete = true
 			case <-ctx.Done():
 				sub.Close()
 				return nil, ctx.Err()
@@ -69,6 +73,9 @@ func (s RelaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Eve
 func (s RelaySource) Publish(ctx context.Context, ev nostr.Event) error {
 	results, err := s.Pool.PublishToRelaysWithResults(ctx, ev, s.Relays)
 	if err != nil {
+		if len(results) > 0 {
+			return fmt.Errorf("recovery publish failed: %s", classifyRelayReason(results[0].Reason, "transport"))
+		}
 		return errors.New("recovery publish failed")
 	}
 	if len(results) != len(s.Relays) {
@@ -76,13 +83,13 @@ func (s RelaySource) Publish(ctx context.Context, ev nostr.Event) error {
 	}
 	want := make(map[string]struct{}, len(s.Relays))
 	for _, relay := range s.Relays {
-		want[relay] = struct{}{}
+		want[relayguard.Normalize(relay)] = struct{}{}
 	}
 	for _, r := range results {
-		if _, ok := want[r.RelayURL]; !ok {
+		if _, ok := want[relayguard.Normalize(r.RelayURL)]; !ok {
 			return errors.New("recovery publish result outside controlled relays")
 		}
-		delete(want, r.RelayURL)
+		delete(want, relayguard.Normalize(r.RelayURL))
 		if !r.Succeeded() {
 			return fmt.Errorf("controlled relay %s did not acknowledge recovery record", r.RelayURL)
 		}
