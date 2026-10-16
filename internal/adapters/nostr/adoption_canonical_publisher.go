@@ -96,6 +96,17 @@ func adoptionBindingRecord(binding *domain.AdoptionBinding) (gonostr.Tags, strin
 	return tags, string(contentJSON), nil
 }
 
+// AdoptionBindingRecoveryRecord exposes the production binding builder for
+// recovery preflight without copying or editing a signed event's JSON.
+func AdoptionBindingRecoveryRecord(binding *domain.AdoptionBinding) (int, gonostr.Tags, string, error) {
+	tags, content, err := adoptionBindingRecord(binding)
+	if err != nil {
+		return 0, nil, "", err
+	}
+	kind, envelope := controlStateEnvelope(KindAdoptionBindingRecord, AdoptionBindingDTag(binding.ServiceID, binding.EnvironmentID), false)
+	return kind, append(envelope, tags...), content, nil
+}
+
 // PublishEnvironmentRegistry publishes the environment's registry record with
 // units as its complete explicit deployment-unit set.
 func (p *AdoptionCanonicalPublisher) PublishEnvironmentRegistry(ctx context.Context, env *domain.Environment, units []domain.DeploymentUnit) error {

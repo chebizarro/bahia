@@ -86,6 +86,15 @@ func serviceRegistryRecord(svc *domain.Service, deleted bool) (gonostr.Tags, str
 	return tags, string(contentJSON)
 }
 
+// ServiceRegistryRecoveryRecord exposes the production wire builder for a
+// recovery preflight. Recovery must reject an old head it cannot reproduce
+// before the new identity signs anything on that coordinate.
+func ServiceRegistryRecoveryRecord(svc *domain.Service, deleted bool) (int, gonostr.Tags, string) {
+	tags, content := serviceRegistryRecord(svc, deleted)
+	kind, envelope := controlStateEnvelope(KindServiceRegistry, svc.ID.String(), deleted)
+	return kind, append(envelope, tags...), content
+}
+
 // environmentRegistryRecord returns the family tags and content of an
 // environment's registry record. units is the environment's explicit
 // deployment-unit set; when it is empty the record carries the implicit
@@ -123,6 +132,14 @@ func environmentRegistryRecord(env *domain.Environment, units []domain.Deploymen
 	}
 	contentJSON, _ := json.Marshal(content)
 	return tags, string(contentJSON)
+}
+
+// EnvironmentRegistryRecoveryRecord uses the same builder as both normal
+// environment writers, including the explicit deployment-unit set.
+func EnvironmentRegistryRecoveryRecord(env *domain.Environment, units []domain.DeploymentUnit, deleted bool) (int, gonostr.Tags, string) {
+	tags, content := environmentRegistryRecord(env, units, deleted)
+	kind, envelope := controlStateEnvelope(KindEnvironmentRegistry, env.ID.String(), deleted)
+	return kind, append(envelope, tags...), content
 }
 
 // recordDeploymentUnits is the deployment_units content of an environment

@@ -14,19 +14,20 @@ import (
 )
 
 type Engine struct {
-	Config      Config
-	Ledger      *Ledger
-	Source      EventSource
-	Local       LocalInventory
-	Operator    nostr.Keyer
-	NewSigner   func(context.Context) (nostr.Keyer, error)
-	OldSigner   func(context.Context) (nostr.Keyer, error)
-	Containment ContainmentAdapter
-	Domains     map[string]DomainRecoveryAdapter
-	Rotation    SecretRotationTracker
-	Purge       PurgeReceiptSink
-	Acks        ConsumerAcknowledgments
-	Now         func() time.Time
+	Config          Config
+	Ledger          *Ledger
+	Source          EventSource
+	Local           LocalInventory
+	Operator        nostr.Keyer
+	NewSigner       func(context.Context) (nostr.Keyer, error)
+	OldSigner       func(context.Context) (nostr.Keyer, error)
+	Containment     ContainmentAdapter
+	Domains         map[string]DomainRecoveryAdapter
+	RequiredDomains []string
+	Rotation        SecretRotationTracker
+	Purge           PurgeReceiptSink
+	Acks            ConsumerAcknowledgments
+	Now             func() time.Time
 }
 
 func (e *Engine) clock() time.Time {
@@ -402,6 +403,9 @@ func (e *Engine) cut(ctx context.Context, s *State) ([]string, error) {
 	return []string{strconv.FormatInt(epoch, 10)}, nil
 }
 func (e *Engine) reassert(ctx context.Context) ([]string, error) {
+	if err := e.requireDomains(); err != nil {
+		return nil, err
+	}
 	if len(e.Domains) == 0 {
 		return nil, fmt.Errorf("reassert: %w", ErrAdapterNotRegistered)
 	}
@@ -429,6 +433,15 @@ func (e *Engine) reassert(ctx context.Context) ([]string, error) {
 	slices.Sort(evidence)
 	return evidence, nil
 }
+
+func (e *Engine) requireDomains() error {
+	for _, name := range e.RequiredDomains {
+		if e.Domains[name] == nil {
+			return fmt.Errorf("domain %s: %w", name, ErrAdapterNotRegistered)
+		}
+	}
+	return nil
+}
 func (e *Engine) rotate(ctx context.Context) ([]string, error) {
 	if e.Rotation == nil {
 		return nil, fmt.Errorf("rotate: %w", ErrAdapterNotRegistered)
@@ -453,6 +466,9 @@ func (e *Engine) rotate(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 func (e *Engine) verify(ctx context.Context, s State) ([]string, error) {
+	if err := e.requireDomains(); err != nil {
+		return nil, err
+	}
 	for _, p := range Phases[:8] {
 		if _, ok := s.Receipt(p); !ok {
 			return nil, fmt.Errorf("%w: %s", ErrIncomplete, p)
@@ -475,10 +491,14 @@ func (e *Engine) verify(ctx context.Context, s State) ([]string, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: missing consumer acknowledgments %v", ErrIncomplete, missing)
 	}
+	var domainEvidence []string
 	for name, a := range e.Domains {
-		if _, err := a.Verify(ctx); err != nil {
+		proof, err := a.Verify(ctx)
+		if err != nil {
 			return nil, fmt.Errorf("domain %s: %w", name, err)
 		}
+		domainEvidence = append(domainEvidence, proof...)
 	}
-	return []string{strconv.FormatInt(s.Epoch, 10)}, nil
+	slices.Sort(domainEvidence)
+	return append([]string{strconv.FormatInt(s.Epoch, 10)}, domainEvidence...), nil
 }

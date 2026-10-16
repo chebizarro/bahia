@@ -120,6 +120,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	engine.NewSigner = func(ctx context.Context) (nostr.Keyer, error) {
 		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.NewIdentity.PublicKey, Signer: r.NewIdentity.Signer}, servicesigner.Options{Logger: zap.NewNop()})
 	}
+	engine.Domains = map[string]identityrecovery.DomainRecoveryAdapter{
+		"cp-state/service-registry":     &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindServiceRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"cp-state/environment-registry": &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindEnvironmentRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"cp-state/adoption-binding":     &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindAdoptionBindingRecord, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+	}
+	engine.RequiredDomains = []string{
+		"cp-state/service-registry", "cp-state/environment-registry", "cp-state/adoption-binding",
+		"relay-settings-and-sets", "hostname-reservations-and-recovery", "backup-canonical-families",
+		"security-and-sbom", "notification-docs-discovery-system", "sql-only-review-drafts",
+	}
 	if r.OldSigner.PublicKey != "" {
 		engine.OldSigner = func(ctx context.Context) (nostr.Keyer, error) {
 			return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.OldSigner.PublicKey, Signer: r.OldSigner.Signer}, servicesigner.Options{Logger: zap.NewNop()})

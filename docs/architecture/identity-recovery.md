@@ -113,3 +113,36 @@ Audited relay events, the durable local Nostr store, and verified pre-compromise
 snapshots only. PostgreSQL and its outbox are never canonical; SQL-only
 candidates surface as unsigned review drafts that require operator-signed
 intents to re-enter canonical state.
+
+## Domain reassertion safety
+
+The engine passes only the new-identity `servicesigner` keyer to registered
+`DomainRecoveryAdapter` implementations. A domain inventories accepted old-key
+heads from EOSE-complete controlled-relay reads and the durable local store,
+rebuilds each head with its production typed publisher, and checks exact tags
+and content before publishing. An accepted old-key event beyond the trust
+activation barrier is rejected even if its ID appears in the inventory.
+New-key heads with the same coordinate and
+equivalent tags/content are not re-signed. Verification reads the new-key head
+back from both surfaces and emits a sorted-coordinate SHA-256 equivalence
+digest. Service and environment registry recovery includes service tombstones,
+environment tombstones and the environment's explicit deployment-unit set;
+adoption bindings use the existing live binding publisher. An accepted binding
+tombstone has no production publisher and therefore fails closed.
+
+The CLI declares all domain groups required before `reassert-canonical-state`
+or `verify` can complete. A partially registered build cannot issue a
+completed phase receipt. PostgreSQL-only rows are never passed to a recovery
+publisher: they require an unsigned review draft followed by a separate
+operator-signed intent. Until a SQL candidate reporter exists, its absence is
+*not* evidence that there are no SQL-only candidates.
+
+Security state uses the fleet OCK (`SecurityCanonicalPublisher.publishConfidential`)
+and attribution edges use the subject organization's OCK
+(`SecurityCanonicalPublisher.PublishAttribution`). Both call
+`EncryptConfidential` with no service-only plaintext, so those records have
+no service-key-derived `service_inner`. Their existing ciphertext can be
+preserved byte-for-byte when their recovery adapter is implemented; this does
+not apply to other confidential families that may carry `service_inner`.
+SBOM attestations are excluded from canonical reassertion and are regenerated
+under `bahia-4f10q.3.3`.
