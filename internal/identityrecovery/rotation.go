@@ -76,6 +76,20 @@ func (t *LedgerRotationTracker) Inventory(ctx context.Context) ([]SecretRef, err
 	if err != nil {
 		return nil, err
 	}
+	// Index replacements by the same label/ref identity used for work items.
+	// A source or ledger iteration order must not decide which refs are suppressed.
+	replacementIDs := make(map[string]struct{}, len(existing))
+	for id, item := range existing {
+		if item.Ref.ID != id || rotationID(item.Ref.Label, item.Ref.Credential) != id || secretstore.ValidateRef(item.Ref.Credential) != nil {
+			return nil, errors.New("rotation ledger reference invalid")
+		}
+		if item.Replacement != nil {
+			if secretstore.ValidateRef(*item.Replacement) != nil || *item.Replacement == item.Ref.Credential {
+				return nil, errors.New("rotation ledger replacement invalid")
+			}
+			replacementIDs[rotationID(item.Ref.Label, *item.Replacement)] = struct{}{}
+		}
+	}
 	scanned := map[string]SecretRef{}
 	for i := range refs {
 		ref := &refs[i]
@@ -87,22 +101,12 @@ func (t *LedgerRotationTracker) Inventory(ctx context.Context) ([]SecretRef, err
 			return nil, errors.New("rotation inventory id mismatch")
 		}
 		ref.ID = expected
-		replacement := false
-		for _, prior := range existing {
-			if prior.Ref.Label == ref.Label && prior.Replacement != nil && *prior.Replacement == ref.Credential {
-				replacement = true
-				break
-			}
-		}
-		if replacement {
+		if _, replacement := replacementIDs[ref.ID]; replacement {
 			continue
 		}
 		scanned[ref.ID] = *ref
 	}
 	for id, item := range existing {
-		if item.Ref.ID != id || rotationID(item.Ref.Label, item.Ref.Credential) != id || secretstore.ValidateRef(item.Ref.Credential) != nil {
-			return nil, errors.New("rotation ledger reference invalid")
-		}
 		scanned[id] = item.Ref
 	}
 	for id, ref := range scanned {
