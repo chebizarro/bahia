@@ -260,6 +260,9 @@ func (e *Engine) execute(ctx context.Context, s *State, p Phase) ([]string, erro
 		if !ok || !hasPurgeEvidence(deletion, s.DeletionIDs, e.Config.ControlledRelays) {
 			return nil, fmt.Errorf("retirement requires deletion and controlled re-encryption receipts: %w", ErrIncomplete)
 		}
+		if err := e.requireNotificationReencryption(ctx, *s, deletion.EvidenceIDs); err != nil {
+			return nil, err
+		}
 		if _, ok := s.Receipt(ReassertCanonicalState); !ok {
 			return nil, fmt.Errorf("retirement requires canonical reassertion: %w", ErrIncomplete)
 		}
@@ -267,6 +270,30 @@ func (e *Engine) execute(ctx context.Context, s *State, p Phase) ([]string, erro
 	default:
 		return nil, errors.New("unknown recovery phase")
 	}
+}
+
+func (e *Engine) requireNotificationReencryption(ctx context.Context, s State, deletionEvidence []string) error {
+	if !slices.Contains(e.RequiredDomains, "notification-channels") {
+		return nil
+	}
+	adapter := e.Domains["notification-channels"]
+	if adapter == nil {
+		return fmt.Errorf("notification receipts: %w", ErrAdapterNotRegistered)
+	}
+	reassertion, ok := s.Receipt(ReassertCanonicalState)
+	if !ok {
+		return fmt.Errorf("notification reassertion receipt: %w", ErrIncomplete)
+	}
+	proof, err := adapter.Verify(ctx)
+	if err != nil {
+		return fmt.Errorf("notification re-encryption verification: %w", err)
+	}
+	for _, id := range proof {
+		if !slices.Contains(reassertion.EvidenceIDs, id) || deletionEvidence != nil && !slices.Contains(deletionEvidence, id) {
+			return fmt.Errorf("notification re-encryption receipt missing: %w", ErrIncomplete)
+		}
+	}
+	return nil
 }
 func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 	if e.Local == nil {
@@ -424,7 +451,8 @@ func (e *Engine) reassert(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	var evidence []string
-	for name, a := range e.Domains {
+	for _, name := range e.domainOrder() {
+		a := e.Domains[name]
 		if a == nil {
 			return nil, fmt.Errorf("domain %s: %w", name, ErrAdapterNotRegistered)
 		}
@@ -439,6 +467,20 @@ func (e *Engine) reassert(ctx context.Context) ([]string, error) {
 	}
 	slices.Sort(evidence)
 	return evidence, nil
+}
+
+func (e *Engine) domainOrder() []string {
+	names := make([]string, 0, len(e.Domains))
+	for name := range e.Domains {
+		if name != "discovery-system" {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	if _, ok := e.Domains["discovery-system"]; ok {
+		names = append(names, "discovery-system")
+	}
+	return names
 }
 
 func (e *Engine) requireDomains() error {
@@ -499,7 +541,8 @@ func (e *Engine) verify(ctx context.Context, s State) ([]string, error) {
 		return nil, fmt.Errorf("%w: missing consumer acknowledgments %v", ErrIncomplete, missing)
 	}
 	var domainEvidence []string
-	for name, a := range e.Domains {
+	for _, name := range e.domainOrder() {
+		a := e.Domains[name]
 		proof, err := a.Verify(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("domain %s: %w", name, err)

@@ -793,6 +793,14 @@ func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool
 }
 
 func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg *config.Config) error {
+	tags, content, err := p.systemDiscoveryAnnouncementRecord(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, tags, content, "system.discovery", nil)
+}
+
+func (p *Projector) systemDiscoveryAnnouncementRecord(ctx context.Context, cfg *config.Config) (gonostr.Tags, string, error) {
 	observedDeployments, observedStatus := p.observedDeployments(ctx)
 	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && p.signer != nil
@@ -841,9 +849,9 @@ func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg 
 	}
 	content, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal system discovery: %w", err)
+		return nil, "", fmt.Errorf("marshal system discovery: %w", err)
 	}
-	return p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, systemDiscoveryAnnouncementTags(), string(content), "system.discovery", nil)
+	return systemDiscoveryAnnouncementTags(), string(content), nil
 }
 
 // discoveryAssistant advertises which assistant workflows can start new turns

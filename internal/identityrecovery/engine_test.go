@@ -78,6 +78,18 @@ func (testDomain) Reassert(context.Context, nostr.Keyer) ([]string, error) {
 }
 func (testDomain) Verify(context.Context) ([]string, error) { return []string{"domain-verify"}, nil }
 
+type testNotificationDomain struct{ proof string }
+
+func (a testNotificationDomain) Inventory(context.Context) ([]string, error) {
+	return []string{"old-channel"}, nil
+}
+func (a testNotificationDomain) Reassert(context.Context, nostr.Keyer) ([]string, error) {
+	return []string{a.proof}, nil
+}
+func (a testNotificationDomain) Verify(context.Context) ([]string, error) {
+	return []string{a.proof}, nil
+}
+
 type testRotation struct{}
 
 func (testRotation) Inventory(context.Context) ([]SecretRef, error) {
@@ -281,6 +293,41 @@ func TestMissingAdaptersDoNotComplete(t *testing.T) {
 	s, _ := e.Status()
 	if _, ok := s.Receipt(Contain); ok {
 		t.Fatal("missing adapter completed phase")
+	}
+}
+
+func TestRetirementConsumesSignedNotificationReencryptionReceipts(t *testing.T) {
+	e, _, _ := fixture(t)
+	proof := "notification:channel-id:" + strings.Repeat("a", 64)
+	e.RequiredDomains = []string{"domain", "notification-channels"}
+	e.Domains["notification-channels"] = testNotificationDomain{proof: proof}
+	ctx := context.Background()
+	for _, p := range Phases[:7] {
+		if err := e.Apply(ctx, p); err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+	}
+	e.Domains["notification-channels"] = testNotificationDomain{proof: "notification:channel-id:changed"}
+	if err := e.Apply(ctx, DeleteAndPurge); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("missing exact notification receipt: %v", err)
+	}
+	e.Domains["notification-channels"] = testNotificationDomain{proof: proof}
+	if err := e.Apply(ctx, DeleteAndPurge); err != nil {
+		t.Fatal(err)
+	}
+	s, err := e.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok := s.Receipt(DeleteAndPurge)
+	if !ok || !slices.Contains(r.EvidenceIDs, proof) {
+		t.Fatal("delete receipt omitted notification coordinate")
+	}
+	if err := e.Apply(ctx, Verify); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Apply(ctx, RetireOldIdentity); err != nil {
+		t.Fatal(err)
 	}
 }
 

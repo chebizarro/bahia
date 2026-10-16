@@ -22,7 +22,7 @@ import (
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts} --config FILE [--confirm-phase PHASE|--confirm-abort]")
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts} --config FILE [--confirm-phase PHASE|--confirm-abort] [--confirm-daemon-unreachable] [--rotation-updates FILE]")
 		return 2
 	}
 	op := args[0]
@@ -35,6 +35,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	path := flags.String("config", "", "Bahia config file")
 	phase := flags.String("confirm-phase", "", "exact next phase")
 	abort := flags.Bool("confirm-abort", false, "confirm pre-cutover abort")
+	daemonUnreachable := flags.Bool("confirm-daemon-unreachable", false, "operator confirms the old daemon is already unreachable")
+	rotationUpdates := flags.String("rotation-updates", "", "operator-supplied credential rotation evidence JSON")
 	draftPath := flags.String("draft-report", "", "unsigned SQL review draft artifact path")
 	if err := flags.Parse(args[1:]); err != nil || *path == "" || len(flags.Args()) != 0 {
 		_, _ = fmt.Fprintln(stderr, "config file and valid flags required")
@@ -119,9 +121,17 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	engine.Source = relaySource{pool: pool, relays: r.ControlledRelays}
 	engine.Local = localSource{path: cfg.Nostr.LocalStore.Path}
 	engine.Purge = identityrecovery.FilePurgeReceipts{Path: r.PurgeEvidencePath}
+	engine.Containment = identityrecovery.DurableContainmentAdapter{Ledger: ledger, MarkerPath: cfg.Nostr.LocalStore.ResolvedOutboxPath() + ".identity-containment", ConfirmDaemonUnreachable: *daemonUnreachable}
 	engine.NewSigner = func(ctx context.Context) (nostr.Keyer, error) {
 		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.NewIdentity.PublicKey, Signer: r.NewIdentity.Signer}, servicesigner.Options{Logger: zap.NewNop()})
 	}
+	oldDecryptor := func(ctx context.Context) (nostr.Keyer, error) {
+		if r.OldSigner.PublicKey == "" {
+			return nil, identityrecovery.ErrAdapterNotRegistered
+		}
+		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.OldSigner.PublicKey, Signer: r.OldSigner.Signer}, servicesigner.Options{Logger: zap.NewNop()})
+	}
+	engine.Rotation = &identityrecovery.LedgerRotationTracker{Ledger: ledger, Source: identityrecovery.CanonicalCredentialSource{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor}, SystemKeys: cfg.SecretStore.SystemKeys, UpdatesPath: *rotationUpdates}
 	recoveryRelayPolicy := cfg.Nostr
 	recoveryRelayPolicy.ControlledRelays = append([]string(nil), r.ControlledRelays...)
 	if *draftPath == "" {
@@ -136,6 +146,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"hostname-reservations-and-recovery": &identityrecovery.HostnameRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"sbom-references-and-availability":   &identityrecovery.SBOMRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"notification-channels":              &identityrecovery.NotificationRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor, NewSigner: engine.NewSigner},
+		"discovery-system":                   &identityrecovery.DiscoveryRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Config: cfg, MCPTransportEnabled: true},
 		"bahia-docs":                         &identityrecovery.DocsRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"sql-only-review-drafts":             sqlDrafts,
 	}
@@ -145,10 +158,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"security-canonical", "sbom-references-and-availability", "notification-channels", "bahia-docs", "discovery-system", "sql-only-review-drafts",
 	}
 	if r.OldSigner.PublicKey != "" {
-		engine.OldSigner = func(ctx context.Context) (nostr.Keyer, error) {
-			return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.OldSigner.PublicKey, Signer: r.OldSigner.Signer}, servicesigner.Options{Logger: zap.NewNop()})
-		}
+		engine.OldSigner = oldDecryptor
 	}
+	// TODO(merge-ack-reader): wire O1's production ConsumerAcknowledgments reader here.
 	if op == "report-drafts" {
 		if _, err := sqlDrafts.Reassert(ctx, nil); err != nil {
 			_, _ = fmt.Fprintln(stderr, "unsigned SQL review draft report failed:", err)

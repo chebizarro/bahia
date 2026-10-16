@@ -2,10 +2,23 @@ package nostr
 
 import (
 	"context"
+	"fmt"
 
+	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"go.uber.org/zap"
 )
+
+// SystemDiscoveryRecoveryRecord uses the live production announcement builder
+// without signing or publishing, so recovery can compare an existing new-key
+// head with the exact current configuration and observed local state.
+func SystemDiscoveryRecoveryRecord(ctx context.Context, cfg *config.Config, mcpTransport bool, signer nostr.Signer, pubkey string, observed ObservedDeploymentState) (nostr.Tags, string, error) {
+	if cfg == nil || signer == nil || pubkey == "" {
+		return nil, "", fmt.Errorf("discovery recovery builder unavailable")
+	}
+	p := &Projector{logger: zap.NewNop(), signer: signer, servicePubkey: pubkey, mcpTransport: mcpTransport, observedState: observed}
+	return p.systemDiscoveryAnnouncementRecord(ctx, cfg)
+}
 
 // SystemConfigCanonicalPublisher publishes system-configuration-derived records
 // (DM relay lists, system discovery announcement, relay sets, NIP-65 preferences)
