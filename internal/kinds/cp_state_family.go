@@ -206,6 +206,21 @@ const (
 	CPStateFamilyHostnameRecovery    CPStateFamily = 32050
 )
 
+// Identity-compromise recovery families (operator-root-signed; see
+// docs/architecture/identity-recovery.md). The operator authority, never the
+// service key, authors every record in this group.
+const (
+	// CPStateFamilyIdentityIncident is the incident declaration and its
+	// phase progression at d=identity-incident:<incident-id>.
+	CPStateFamilyIdentityIncident CPStateFamily = 32051
+	// CPStateFamilyTrustEpoch is the monotonic trust transition record at
+	// d=trust-epoch:<service-id>.
+	CPStateFamilyTrustEpoch CPStateFamily = 32052
+	// CPStateFamilyIdentityRecoveryReceipt is one durable receipt per
+	// recovery phase at d=identity-incident:<incident-id>:phase:<phase>.
+	CPStateFamilyIdentityRecoveryReceipt CPStateFamily = 32053
+)
+
 const (
 	HostnameReservationDPrefix = "hostname:reservation:"
 	HostnameRecoveryDPrefix    = "hostname:recovery:"

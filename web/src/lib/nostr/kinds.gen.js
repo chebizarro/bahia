@@ -231,6 +231,11 @@ export const HOSTNAME_RESERVATION_RECORD = 32049;
 export const HOSTNAME_RECOVERY_RECORD = 32050;
 export const HOSTNAME_RESERVATION_D_PREFIX = 'hostname:reservation:';
 export const HOSTNAME_RECOVERY_D_PREFIX = 'hostname:recovery:';
+export const IDENTITY_INCIDENT_RECORD = 32051;
+export const TRUST_EPOCH_RECORD = 32052;
+export const IDENTITY_RECOVERY_RECEIPT_RECORD = 32053;
+export const IDENTITY_INCIDENT_D_PREFIX = 'identity-incident:';
+export const TRUST_EPOCH_D_PREFIX = 'trust-epoch:';
 export const SOUL_RUNTIME_POLICY_RECORD = 32042;
 export const BLOSSOM_ADMIN_RECORD = 32043;
 export const BLOSSOM_BLOB_RECORD = 32044;
@@ -540,6 +545,9 @@ export const CP_STATE_TOPICS = Object.freeze({
   ROUTE_CANARY: 'route-canary',
   HOSTNAME_RESERVATION: 'hostname-reservation',
   HOSTNAME_RECOVERY: 'hostname-recovery',
+  IDENTITY_INCIDENT: 'identity-incident',
+  TRUST_EPOCH: 'trust-epoch',
+  IDENTITY_RECOVERY_RECEIPT: 'identity-recovery-receipt',
   SOUL_RUNTIME_POLICY: 'soul-factory-runtime-policy',
   BLOSSOM_ADMIN: 'blossom-admin',
   BLOSSOM_BLOB: 'blossom-blob',
