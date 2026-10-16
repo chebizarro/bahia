@@ -801,16 +801,17 @@ type NostrConfig struct {
 
 // IdentityRecoveryConfig is operator-only; the daemon never opens its ledger or signers.
 type IdentityRecoveryConfig struct {
-	LedgerPath        string             `koanf:"ledger_path" yaml:"ledger_path" secret:"false"`
-	OldPubkey         string             `koanf:"old_pubkey" yaml:"old_pubkey" secret:"false"`
-	ReasonCode        string             `koanf:"reason_code" yaml:"reason_code" secret:"false"`
-	ControlledRelays  []string           `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
-	ConsumerRoster    []string           `koanf:"consumer_roster" yaml:"consumer_roster" secret:"false"`
-	AcceptedEventIDs  []string           `koanf:"accepted_event_ids" yaml:"accepted_event_ids" secret:"false"`
-	PurgeEvidencePath string             `koanf:"purge_evidence_path" yaml:"purge_evidence_path" secret:"false"`
-	Operator          ConfigFabricConfig `koanf:"operator" yaml:"operator"`
-	NewIdentity       ConfigFabricConfig `koanf:"new_identity" yaml:"new_identity"`
-	OldSigner         ConfigFabricConfig `koanf:"old_signer" yaml:"old_signer"`
+	LedgerPath                string             `koanf:"ledger_path" yaml:"ledger_path" secret:"false"`
+	OldPubkey                 string             `koanf:"old_pubkey" yaml:"old_pubkey" secret:"false"`
+	ReasonCode                string             `koanf:"reason_code" yaml:"reason_code" secret:"false"`
+	ControlledRelays          []string           `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
+	ConsumerRoster            []string           `koanf:"consumer_roster" yaml:"consumer_roster" secret:"false"`
+	AcknowledgmentAuthorities map[string]string  `koanf:"acknowledgment_authorities" yaml:"acknowledgment_authorities" secret:"false"`
+	AcceptedEventIDs          []string           `koanf:"accepted_event_ids" yaml:"accepted_event_ids" secret:"false"`
+	PurgeEvidencePath         string             `koanf:"purge_evidence_path" yaml:"purge_evidence_path" secret:"false"`
+	Operator                  ConfigFabricConfig `koanf:"operator" yaml:"operator"`
+	NewIdentity               ConfigFabricConfig `koanf:"new_identity" yaml:"new_identity"`
+	OldSigner                 ConfigFabricConfig `koanf:"old_signer" yaml:"old_signer"`
 }
 
 // ConfigFabricConfig pins the independent operator identity used by daemon
@@ -1154,6 +1155,7 @@ type RelaySidecarConfig struct {
 	EventRetention       time.Duration `koanf:"event_retention" secret:"false"`
 	RequestRetention     time.Duration `koanf:"request_retention" secret:"false"`
 	AuthPrivateKey       string        `koanf:"auth_private_key" secret:"true"`
+	AckPrivateKeyFile    string        `koanf:"ack_private_key_file" yaml:"ack_private_key_file" secret:"false"`
 	AdministratorPubkeys []string      `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys" secret:"false"`
 	ConfigTrustedPubkeys []string      `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys" secret:"false"`
 	AdminPolicyPath      string        `koanf:"admin_policy_path" yaml:"admin_policy_path" secret:"false"`

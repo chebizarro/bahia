@@ -82,8 +82,7 @@ func WithMirrorTransport(transport MirrorTransport) ServerOption {
 
 // New creates a Khatru sidecar relay backed by durable storage. signer is the
 // service identity (servicesigner.Open in cmd/relay): its pubkey is the NIP-11
-// pubkey and is always admitted to write and read, and it signs config-consumer
-// acknowledgements. The caller owns the signer and closes it after the server
+// pubkey and is always admitted to write and read. The caller owns the signer and closes it after the server
 // stops.
 func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, logger *zap.Logger, opts ...ServerOption) (*Server, error) {
 	var options serverOptions
@@ -295,7 +294,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
 		fanout.dispatch(event)
 	}
-	if err := acknowledgeSidecarEpoch(ctx, trust, signer, store, relay); err != nil {
+	if err := acknowledgeSidecarEpoch(ctx, trust, nostrCfg.Sidecar.AckPrivateKeyFile, store, relay); err != nil {
 		return nil, err
 	}
 

@@ -10,6 +10,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/relayguard"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 )
 
 var recoveryIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
@@ -75,6 +76,32 @@ func (c *Config) ValidateIdentityRecovery() error {
 	}
 	if slices.Contains(r.ControlledRelays, "") || slices.Contains(r.ConsumerRoster, "") {
 		return errors.New("empty recovery relay or consumer id")
+	}
+	if !slices.Equal(r.ConsumerRoster, trustepoch.ConsumerIDs()) || len(r.AcknowledgmentAuthorities) != len(trustepoch.ConsumerIDs()) {
+		return errors.New("complete trust-epoch roster and acknowledgment authority table required")
+	}
+	seenComponentKeys := map[string]bool{}
+	for _, id := range r.ConsumerRoster {
+		authority := r.AcknowledgmentAuthorities[id]
+		parsed, parseErr := nostr.PubKeyFromHex(authority)
+		if parseErr != nil || parsed.Hex() != authority {
+			return fmt.Errorf("invalid acknowledgment authority for %s", id)
+		}
+		switch id {
+		case "daemon":
+			if authority != r.NewIdentity.PublicKey {
+				return errors.New("daemon acknowledgment authority must be new service key")
+			}
+		case "cli", "web", "pinned-runtimes":
+			if authority != r.Operator.PublicKey {
+				return fmt.Errorf("%s acknowledgment authority must be operator root", id)
+			}
+		default:
+			if authority == r.OldPubkey || authority == r.NewIdentity.PublicKey || authority == r.Operator.PublicKey || seenComponentKeys[authority] {
+				return fmt.Errorf("%s requires an independent component acknowledgment authority", id)
+			}
+			seenComponentKeys[authority] = true
+		}
 	}
 	operatorPubkey, err := nostr.PubKeyFromHex(r.Operator.PublicKey)
 	if err != nil {

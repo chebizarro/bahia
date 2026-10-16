@@ -27,6 +27,9 @@ func TestSidecarTrustEpochReplacesReadWriteAdmissionAndRecordsAck(t *testing.T) 
 	cfg.ServiceID = "deployment-a"
 	cfg.OperatorRootPubkey = fixture.RootPubkey
 	cfg.PublicKey = fixture.OldPubkey
+	ackKey := nostr.MustSecretKeyFromHex("4444444444444444444444444444444444444444444444444444444444444444")
+	cfg.Sidecar.AckPrivateKeyFile = filepath.Join(t.TempDir(), "ack.key")
+	require.NoError(t, os.WriteFile(cfg.Sidecar.AckPrivateKeyFile, []byte("4444444444444444444444444444444444444444444444444444444444444444"), 0o600))
 	cfg.Sidecar.AdministratorPubkeys = []string{fixture.OldPubkey}
 	seed, err := openEventStore(t.Context(), cfg.Sidecar.DataDir, zap.NewNop())
 	require.NoError(t, err)
@@ -45,8 +48,7 @@ func TestSidecarTrustEpochReplacesReadWriteAdmissionAndRecordsAck(t *testing.T) 
 	reject, reason := server.admission.acceptEvent(t.Context(), old)
 	require.True(t, reject)
 	require.Contains(t, reason, "hostile service event")
-	pubkey, err := nostr.PubKeyFromHex(fixture.NewPubkey)
-	require.NoError(t, err)
+	pubkey := ackKey.Public()
 	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{pubkey},
 		Tags: nostr.TagMap{"d": []string{"trust-epoch-ack:deployment-a:sidecar"}}}
 	seen := false
@@ -55,7 +57,7 @@ func TestSidecarTrustEpochReplacesReadWriteAdmissionAndRecordsAck(t *testing.T) 
 		require.NoError(t, parseErr)
 		resolution := trustepoch.Resolution{ServiceID: "deployment-a", Pubkey: fixture.NewPubkey,
 			Epoch: body.Epoch, Record: &body, EventID: fixture.Epoch.ID.Hex()}
-		require.NoError(t, trustepoch.VerifyAcknowledgment(ack, resolution, "sidecar"))
+		require.NoError(t, trustepoch.VerifyAcknowledgmentAuthority(ack, resolution, "sidecar", pubkey.Hex(), false))
 		seen = true
 	}
 	require.True(t, seen)

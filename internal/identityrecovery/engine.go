@@ -203,6 +203,9 @@ func (e *Engine) publishPending(ctx context.Context, s *State) error {
 			if json.Unmarshal([]byte(ev.Content), &pending) != nil {
 				return errors.New("invalid pending trust epoch")
 			}
+			if _, err := e.cutoverReadiness(ctx, s, pending.Epoch, pending.NewPubkey); err != nil {
+				return err
+			}
 			head, exists, err := e.epochHead(ctx)
 			if err != nil {
 				return err
@@ -226,6 +229,9 @@ func (e *Engine) receipt(ctx context.Context, s *State, p Phase, status string, 
 		return err
 	}
 	r := Receipt{IncidentID: s.IncidentID, Phase: p, Status: status, InputDigest: digestInput(*s, p), EvidenceIDs: evidence, CompletedAt: e.clock().Format(time.RFC3339)}
+	if p == CutActivateTrust && status == "completed" {
+		r.WaiverEventIDs = s.CutoverWaiverEventIDs
+	}
 	return e.record(ctx, s, kinds.CPStateTopicIdentityRecoveryReceipt, "identity-incident:"+s.IncidentID+":phase:"+string(p), "bahia.identity-recovery-receipt.v1", kinds.CPStateFamilyIdentityRecoveryReceipt, nostr.Tags{{"incident", s.IncidentID}}, r)
 }
 func (e *Engine) incident(ctx context.Context, s *State, p Phase, aborted bool) error {
@@ -379,8 +385,12 @@ func (e *Engine) cut(ctx context.Context, s *State) ([]string, error) {
 		}
 		s.Epoch = head.Epoch
 		s.ActivationBarrier = head.ActivationBarrier
+		proof, err := e.cutoverReadiness(ctx, s, head.Epoch, head.NewPubkey)
+		if err != nil {
+			return nil, err
+		}
 		_ = e.Ledger.Save(*s)
-		return []string{strconv.FormatInt(head.Epoch, 10)}, nil
+		return append([]string{strconv.FormatInt(head.Epoch, 10)}, proof.EvidenceIDs...), nil
 	}
 	epoch := int64(1)
 	if ok {
@@ -388,6 +398,10 @@ func (e *Engine) cut(ctx context.Context, s *State) ([]string, error) {
 	}
 	if s.Epoch != 0 && s.Epoch != epoch {
 		return nil, errors.New("epoch changed during interrupted cutover")
+	}
+	proof, err := e.cutoverReadiness(ctx, s, epoch, s.NewPubkey)
+	if err != nil {
+		return nil, err
 	}
 	barrier := e.clock().Unix()
 	body := TrustEpoch{IncidentID: s.IncidentID, Epoch: epoch, OldPubkey: s.OldPubkey, NewPubkey: s.NewPubkey, ControlledRelays: e.Config.ControlledRelays, ActivationBarrier: barrier, InventoryDigest: s.InventoryDigest, InventoryCount: len(s.Inventory), ConsumerRoster: e.Config.ConsumerRoster, Activated: true}
@@ -407,7 +421,25 @@ func (e *Engine) cut(ctx context.Context, s *State) ([]string, error) {
 	if err = e.Ledger.Save(*s); err != nil {
 		return nil, err
 	}
-	return []string{strconv.FormatInt(epoch, 10)}, nil
+	return append([]string{strconv.FormatInt(epoch, 10)}, proof.EvidenceIDs...), nil
+}
+
+func (e *Engine) cutoverReadiness(ctx context.Context, s *State, epoch int64, newPubkey string) (CutoverReadiness, error) {
+	if e.Acks == nil {
+		return CutoverReadiness{}, fmt.Errorf("%w: consumer readiness reader unavailable", ErrIncomplete)
+	}
+	proof, err := e.Acks.Readiness(ctx, epoch, s.IncidentID, newPubkey, e.Config.ConsumerRoster)
+	if err != nil {
+		return CutoverReadiness{}, err
+	}
+	if len(proof.Missing) != 0 {
+		return CutoverReadiness{}, fmt.Errorf("%w: missing consumer enforcement readiness or waiver %v", ErrIncomplete, proof.Missing)
+	}
+	if len(proof.EvidenceIDs) < len(e.Config.ConsumerRoster) {
+		return CutoverReadiness{}, fmt.Errorf("%w: incomplete consumer readiness evidence", ErrIncomplete)
+	}
+	s.CutoverWaiverEventIDs = proof.Waivers
+	return proof, nil
 }
 func (e *Engine) reassert(ctx context.Context) ([]string, error) {
 	if err := e.requireDomains(); err != nil {

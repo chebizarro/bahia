@@ -4,6 +4,8 @@
   "new_pubkey": "3c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1",
   "epoch": {
     "kind": 30900,
+    "id": "f261d4501f94089977c61817f9b47eb688ee4c02efdcb8dd102fb2ea8b06f4af",
+    "pubkey": "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
     "created_at": 100,
     "tags": [
       [
@@ -36,12 +38,12 @@
       ]
     ],
     "content": "{\"incident_id\":\"0199f4a6-3700-7000-8000-000000000001\",\"epoch\":1,\"old_pubkey\":\"466d7fcae563e5cb09a0d1870bb580344804617879a14949cf22285f1bae3f27\",\"new_pubkey\":\"3c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1\",\"controlled_relays\":[\"wss://relay.example\"],\"activation_barrier\":150,\"inventory_digest\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"inventory_count\":0,\"consumer_roster\":[\"daemon\",\"sidecar\",\"web\",\"cli\",\"dns\",\"loom\",\"soulfactory\",\"hiveci\",\"pinned-runtimes\"],\"activated\":true}",
-    "pubkey": "4f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa",
-    "id": "f261d4501f94089977c61817f9b47eb688ee4c02efdcb8dd102fb2ea8b06f4af",
     "sig": "e7da3a702387f673612d213575ad32f50453e4df9b411645b1d3632ec4c6332c4f8b6c0fdef2c2106ea05f8f0f21f5b3062d52d740e97fcce22a3e3417edbc96"
   },
   "ack": {
     "kind": 30900,
+    "id": "d532094fa23392cd14f4a8a16f4c557e89eeefce8a2d2d52ba9221c6922062ee",
+    "pubkey": "3c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1",
     "created_at": 200,
     "tags": [
       [
@@ -73,9 +75,7 @@
         "false"
       ]
     ],
-    "content": "{\"service_id\":\"deployment-a\",\"consumer_id\":\"daemon\",\"epoch\":1,\"epoch_event_id\":\"f261d4501f94089977c61817f9b47eb688ee4c02efdcb8dd102fb2ea8b06f4af\"}",
-    "pubkey": "3c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1",
-    "id": "6430b08da592472a48ee44da0a55cbfdc5a57169f1ff901d9107f04b978b538b",
-    "sig": "5e650ff4f9150ec9b1b5c56bab2d2d6af1e7b196e63dba82613dd607f24729247c1d4e6d82c05a35da6f774c0cba84e7b8d971a18bc993dc58ca97fc3e689a6d"
+    "content": "{\"service_id\":\"deployment-a\",\"consumer_id\":\"daemon\",\"epoch\":1,\"incident_id\":\"0199f4a6-3700-7000-8000-000000000001\",\"enforcing_pubkey\":\"3c72addb4fdf09af94f0c94d7fe92a386a7e70cf8a1d85916386bb2535c7b1b1\",\"epoch_event_id\":\"f261d4501f94089977c61817f9b47eb688ee4c02efdcb8dd102fb2ea8b06f4af\"}",
+    "sig": "1a616842d96c9d13a829d33e0b1454ebb4ea6bdacc1fe06c3475c4b702346876a7f74cd812e268fd64f249e28155677f5193935c5b61cc8755b885ceef70daff"
   }
 }

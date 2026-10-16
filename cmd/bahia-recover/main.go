@@ -16,17 +16,18 @@ import (
 	"github.com/openagentsinc/bahia/internal/identityrecovery"
 	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/servicesigner"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"go.uber.org/zap"
 )
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts} --config FILE [--confirm-phase PHASE|--confirm-abort]")
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts|attest-readiness|attest-ack} --config FILE [--confirm-phase PHASE|--confirm-abort|--consumer ID --evidence-ids IDS|--waiver-reason CODE]")
 		return 2
 	}
 	op := args[0]
-	if op != "plan" && op != "apply" && op != "status" && op != "resume" && op != "abort" && op != "report-drafts" {
+	if op != "plan" && op != "apply" && op != "status" && op != "resume" && op != "abort" && op != "report-drafts" && op != "attest-readiness" && op != "attest-ack" {
 		_, _ = fmt.Fprintln(stderr, "unknown recovery command")
 		return 2
 	}
@@ -36,6 +37,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	phase := flags.String("confirm-phase", "", "exact next phase")
 	abort := flags.Bool("confirm-abort", false, "confirm pre-cutover abort")
 	draftPath := flags.String("draft-report", "", "unsigned SQL review draft artifact path")
+	consumer := flags.String("consumer", "", "consumer id for operator-signed readiness or waiver")
+	evidenceIDs := flags.String("evidence-ids", "", "comma-separated event IDs proving enforcement")
+	waiverReason := flags.String("waiver-reason", "", "machine-readable per-consumer waiver reason code")
 	if err := flags.Parse(args[1:]); err != nil || *path == "" || len(flags.Args()) != 0 {
 		_, _ = fmt.Fprintln(stderr, "config file and valid flags required")
 		return 2
@@ -92,6 +96,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "--confirm-phase required")
 		return 2
 	}
+	if op == "attest-readiness" && (*consumer == "" || (*evidenceIDs == "") == (*waiverReason == "")) {
+		_, _ = fmt.Fprintln(stderr, "attest-readiness requires --consumer and exactly one of --evidence-ids or --waiver-reason")
+		return 2
+	}
+	if op == "attest-ack" && (*consumer != "cli" && *consumer != "web" && *consumer != "pinned-runtimes") {
+		_, _ = fmt.Fprintln(stderr, "attest-ack requires --consumer cli, web, or pinned-runtimes")
+		return 2
+	}
 	ledger, err := identityrecovery.OpenLedger(r.LedgerPath, cfg.Nostr.LocalStore.Path)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "recovery ledger unavailable")
@@ -118,6 +130,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	engine.Operator = operator
 	engine.Source = relaySource{pool: pool, relays: r.ControlledRelays}
 	engine.Local = localSource{path: cfg.Nostr.LocalStore.Path}
+	engine.Acks = &identityrecovery.AcknowledgmentReader{Source: engine.Source, Local: engine.Local,
+		Ledger: ledger, ServiceID: cfg.Nostr.ServiceID, OperatorRoot: root.Hex(), OldPubkey: old.Hex(),
+		Authorities: r.AcknowledgmentAuthorities}
+	if len(r.ConsumerRoster) != len(trustepoch.ConsumerIDs()) {
+		_, _ = fmt.Fprintln(stderr, "complete trust-epoch consumer roster required")
+		return 1
+	}
 	engine.Purge = identityrecovery.FilePurgeReceipts{Path: r.PurgeEvidencePath}
 	engine.NewSigner = func(ctx context.Context) (nostr.Keyer, error) {
 		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.NewIdentity.PublicKey, Signer: r.NewIdentity.Signer}, servicesigner.Options{Logger: zap.NewNop()})
@@ -164,6 +183,14 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	switch op {
 	case "abort":
 		err = engine.Abort(ctx)
+	case "attest-readiness":
+		var ids []string
+		if *evidenceIDs != "" {
+			ids = strings.Split(*evidenceIDs, ",")
+		}
+		err = engine.AttestReadiness(ctx, *consumer, ids, *waiverReason)
+	case "attest-ack":
+		err = engine.AttestAcknowledgment(ctx, *consumer)
 	case "resume":
 		err = engine.Resume(ctx, identityrecovery.Phase(*phase))
 	default:
@@ -177,6 +204,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
-	_, _ = fmt.Fprintln(stdout, "recovery phase recorded")
+	switch op {
+	case "attest-readiness":
+		_, _ = fmt.Fprintln(stdout, "consumer readiness or waiver published to controlled relays")
+	case "attest-ack":
+		_, _ = fmt.Fprintln(stdout, "operator consumer acknowledgment published to controlled relays")
+	default:
+		_, _ = fmt.Fprintln(stdout, "recovery phase recorded")
+	}
 	return 0
 }
