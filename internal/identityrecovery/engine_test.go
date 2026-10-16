@@ -17,11 +17,13 @@ import (
 )
 
 type testSource struct {
-	events    []nostr.Event
-	failPhase Phase
-	failed    bool
-	reads     int
-	onRead    func(int)
+	events         []nostr.Event
+	failPhase      Phase
+	failed         bool
+	reads          int
+	onRead         func(int)
+	scanOutcomes   map[string]RelayEvidence
+	deleteOutcomes map[string]RelayEvidence
 }
 
 func (s *testSource) Read(_ context.Context, f nostr.Filter) ([]nostr.Event, error) {
@@ -152,7 +154,7 @@ func fixture(t *testing.T) (*Engine, *testSource, func()) {
 	oldEv := oldEvent(t, old)
 	src := &testSource{events: []nostr.Event{oldEv}}
 	path := filepath.Join(t.TempDir(), "recovery.bolt")
-	cfg := Config{ServiceID: "bahia-service-v1", OldPubkey: pub(t, old), ReasonCode: "compromised", ControlledRelays: []string{"wss://relay.example"}, ConsumerRoster: []string{"daemon"}, OperatorPubkey: pub(t, op), LocalStorePath: filepath.Join(t.TempDir(), "daemon.bolt"), AcceptedEventIDs: []string{oldEv.ID.Hex()}}
+	cfg := Config{ServiceID: "bahia-service-v1", OldPubkey: pub(t, old), ReasonCode: "compromised", ControlledRelays: []string{"wss://relay.example"}, CleanupRelays: []string{"wss://relay.example"}, ConsumerRoster: []string{"daemon"}, OperatorPubkey: pub(t, op), LocalStorePath: filepath.Join(t.TempDir(), "daemon.bolt"), AcceptedEventIDs: []string{oldEv.ID.Hex()}}
 	open := func() *Ledger {
 		l, err := OpenLedger(path, cfg.LocalStorePath)
 		if err != nil {
@@ -160,7 +162,7 @@ func fixture(t *testing.T) (*Engine, *testSource, func()) {
 		}
 		return l
 	}
-	e := &Engine{Config: cfg, Ledger: open(), Source: src, Local: testLocal{events: []nostr.Event{oldEv}}, Operator: op, NewSigner: func(context.Context) (nostr.Keyer, error) { return newKey, nil }, OldSigner: func(context.Context) (nostr.Keyer, error) { return old, nil }, Containment: testContain{}, Domains: map[string]DomainRecoveryAdapter{"domain": testDomain{}}, Rotation: testRotation{}, Purge: testPurge{}, Acks: testAcks{}, Now: func() time.Time { return time.Unix(1000, 0).UTC() }}
+	e := &Engine{Config: cfg, Ledger: open(), Source: src, Cleanup: src, Local: testLocal{events: []nostr.Event{oldEv}}, Operator: op, NewSigner: func(context.Context) (nostr.Keyer, error) { return newKey, nil }, OldSigner: func(context.Context) (nostr.Keyer, error) { return old, nil }, Containment: testContain{}, Domains: map[string]DomainRecoveryAdapter{"domain": testDomain{}}, Rotation: testRotation{}, Purge: testPurge{}, Acks: testAcks{}, Now: func() time.Time { return time.Unix(1000, 0).UTC() }}
 	restart := func() {
 		if err := e.Ledger.Close(); err != nil {
 			t.Fatal(err)
@@ -409,5 +411,85 @@ func TestResumeRejectsOutOfScopePendingEvent(t *testing.T) {
 	}
 	if len(src.events) != before {
 		t.Fatal("pending event reached relay")
+	}
+}
+
+func (s *testSource) Scan(ctx context.Context, f nostr.Filter) ([]nostr.Event, map[string]RelayEvidence) {
+	events, _ := s.Read(ctx, f)
+	if s.scanOutcomes != nil {
+		return events, s.scanOutcomes
+	}
+	return events, map[string]RelayEvidence{"wss://relay.example": {Status: "eose"}}
+}
+func (s *testSource) PublishDeletion(ctx context.Context, ev nostr.Event) map[string]RelayEvidence {
+	_ = s.Publish(ctx, ev)
+	if s.deleteOutcomes != nil {
+		return s.deleteOutcomes
+	}
+	return map[string]RelayEvidence{"wss://relay.example": {Status: "ok"}}
+}
+
+func TestCleanupInventoryAndDeletionFailClosedPerRelay(t *testing.T) {
+	ctx := context.Background()
+	engine, source, _ := fixture(t)
+	public := "wss://relay.damus.io"
+	engine.Config.CleanupRelays = append(engine.Config.CleanupRelays, public)
+	source.scanOutcomes = map[string]RelayEvidence{
+		"wss://relay.example": {Status: "eose"}, public: {Status: "incomplete", Reason: "auth-required"},
+	}
+	for _, phase := range []Phase{Declare, Contain} {
+		if err := engine.Apply(ctx, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := engine.Apply(ctx, Inventory); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("unanswered audit accepted: %v", err)
+	}
+	state, err := engine.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.CleanupInventory[public].Reason != "auth-required" {
+		t.Fatal("per-relay incomplete audit not durable")
+	}
+	if slices.Contains(cleanupEvidence(state, Inventory), "eose") {
+		t.Fatal("EOSE misrepresented as absence proof")
+	}
+	source.scanOutcomes[public] = RelayEvidence{Status: "eose"}
+	if err := engine.Resume(ctx, Inventory); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []Phase{ProvisionNewIdentity, CutActivateTrust, ReassertCanonicalState, RotateExternalSecrets} {
+		if err := engine.Apply(ctx, phase); err != nil {
+			t.Fatalf("%s: %v", phase, err)
+		}
+	}
+	source.deleteOutcomes = map[string]RelayEvidence{
+		"wss://relay.example": {Status: "ok"}, public: {Status: "ok-false", Reason: "blocked"},
+	}
+	if err := engine.Apply(ctx, DeleteAndPurge); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("OK-false deletion accepted: %v", err)
+	}
+	state, err = engine.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.DeletionIDs) != 1 || state.CleanupDeletions[state.DeletionIDs[0]][public].Status != "ok-false" {
+		t.Fatal("per-relay deletion refusal not durable")
+	}
+	if _, ok := state.Receipt(DeleteAndPurge); ok {
+		t.Fatal("refused relay produced completion receipt")
+	}
+	source.deleteOutcomes[public] = RelayEvidence{Status: "ok"}
+	if err := engine.Resume(ctx, DeleteAndPurge); err != nil {
+		t.Fatal(err)
+	}
+	state, err = engine.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, ok := state.Receipt(DeleteAndPurge)
+	if !ok || !hasPurgeEvidence(receipt, state.DeletionIDs, engine.Config.CleanupRelays) {
+		t.Fatal("per-relay cleanup proof absent")
 	}
 }

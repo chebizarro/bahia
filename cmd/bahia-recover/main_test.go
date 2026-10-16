@@ -38,6 +38,7 @@ identity_recovery:
   old_pubkey: %s
   reason_code: compromised
   controlled_relays: ["wss://controlled.example"]
+  cleanup_relays: ["wss://controlled.example", "wss://relay.damus.io"]
   consumer_roster: [daemon, sidecar, web, cli, dns, loom, soulfactory, hiveci, pinned-runtimes]
   acknowledgment_authorities:
     daemon: %s

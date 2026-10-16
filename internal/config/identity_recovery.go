@@ -17,8 +17,8 @@ var recoveryIdentifierPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
 
 func (c *Config) ValidateIdentityRecovery() error {
 	r := &c.IdentityRecovery
-	if strings.TrimSpace(c.Nostr.ServiceID) == "" || strings.TrimSpace(r.LedgerPath) == "" || strings.TrimSpace(r.ReasonCode) == "" || len(r.ControlledRelays) == 0 || len(r.ConsumerRoster) == 0 || r.AcceptedEventIDs == nil {
-		return errors.New("identity_recovery requires service_id, ledger_path, reason_code, controlled_relays, consumer_roster and reviewed accepted_event_ids")
+	if strings.TrimSpace(c.Nostr.ServiceID) == "" || strings.TrimSpace(r.LedgerPath) == "" || strings.TrimSpace(r.ReasonCode) == "" || len(r.ControlledRelays) == 0 || len(r.CleanupRelays) == 0 || len(r.ConsumerRoster) == 0 || r.AcceptedEventIDs == nil {
+		return errors.New("identity_recovery requires service_id, ledger_path, reason_code, controlled_relays, cleanup_relays, consumer_roster and reviewed accepted_event_ids")
 	}
 	if !recoveryIdentifierPattern.MatchString(c.Nostr.ServiceID) || !recoveryIdentifierPattern.MatchString(r.ReasonCode) {
 		return errors.New("recovery service_id and reason_code must be stable machine identifiers")
@@ -74,7 +74,7 @@ func (c *Config) ValidateIdentityRecovery() error {
 			return fmt.Errorf("identity_recovery.old_signer: %w", err)
 		}
 	}
-	if slices.Contains(r.ControlledRelays, "") || slices.Contains(r.ConsumerRoster, "") {
+	if slices.Contains(r.ControlledRelays, "") || slices.Contains(r.CleanupRelays, "") || slices.Contains(r.ConsumerRoster, "") {
 		return errors.New("empty recovery relay or consumer id")
 	}
 	if !slices.Equal(r.ConsumerRoster, trustepoch.ConsumerIDs()) || len(r.AcknowledgmentAuthorities) != len(trustepoch.ConsumerIDs()) {
@@ -109,6 +109,19 @@ func (c *Config) ValidateIdentityRecovery() error {
 	}
 	if _, err := relayguard.New(operatorPubkey, r.ControlledRelays); err != nil {
 		return err
+	}
+	seenRelays := map[string]bool{}
+	for _, relay := range r.CleanupRelays {
+		normalized := relayguard.Normalize(relay)
+		if normalized == "" || seenRelays[normalized] {
+			return errors.New("invalid or duplicate identity_recovery.cleanup_relays")
+		}
+		seenRelays[normalized] = true
+	}
+	for _, relay := range r.ControlledRelays {
+		if !seenRelays[relayguard.Normalize(relay)] {
+			return errors.New("identity_recovery.cleanup_relays must include every controlled relay")
+		}
 	}
 	return nil
 }

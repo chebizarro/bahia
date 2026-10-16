@@ -100,3 +100,10 @@ func TestSQLReviewDraftRequiresEOSEAndSQL(t *testing.T) {
 		t.Fatal("SQL failure accepted as no candidates")
 	}
 }
+
+func TestPGReviewRowsAbsentDatabaseIsDerivedEmptyProjection(t *testing.T) {
+	rows, err := (PGReviewRows{}).ListReviewRows(t.Context())
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("absent PG projection: %v %v", rows, err)
+	}
+}

@@ -11,13 +11,8 @@ import (
 	"strings"
 
 	"fiatjaf.com/nostr"
-	adapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/identityrecovery"
-	"github.com/openagentsinc/bahia/internal/relayguard"
-	"github.com/openagentsinc/bahia/internal/servicesigner"
-	"github.com/openagentsinc/bahia/internal/trustepoch"
-	"go.uber.org/zap"
 )
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
@@ -64,7 +59,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	r := cfg.IdentityRecovery
-	engineCfg := identityrecovery.Config{ServiceID: cfg.Nostr.ServiceID, OldPubkey: old, ReasonCode: r.ReasonCode, ControlledRelays: r.ControlledRelays, ConsumerRoster: r.ConsumerRoster, OperatorPubkey: root, LocalStorePath: cfg.Nostr.LocalStore.Path, AcceptedEventIDs: r.AcceptedEventIDs}
 	if op == "status" || op == "plan" {
 		state, readErr := identityrecovery.LoadStateReadOnly(r.LedgerPath)
 		if readErr != nil {
@@ -106,78 +100,16 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "attest-ack requires --consumer cli, web, or pinned-runtimes")
 		return 2
 	}
-	ledger, err := identityrecovery.OpenLedger(r.LedgerPath, cfg.Nostr.LocalStore.Path)
+	runtime, err := identityrecovery.NewProductionRuntime(ctx, cfg, identityrecovery.RuntimeOptions{ConfirmDaemonUnreachable: *daemonUnreachable, RotationUpdatesPath: *rotationUpdates, DraftPath: *draftPath})
 	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "recovery ledger unavailable")
+		_, _ = fmt.Fprintln(stderr, "recovery runtime unavailable:", err)
 		return 1
 	}
-	defer func() { _ = ledger.Close() }()
-	engine := identityrecovery.Engine{Config: engineCfg, Ledger: ledger}
-
-	sessionCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	operator, err := servicesigner.Open(sessionCtx, config.NostrConfig{PublicKey: r.Operator.PublicKey, Signer: r.Operator.Signer}, servicesigner.Options{Logger: zap.NewNop()})
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "operator signer unavailable")
-		return 1
-	}
-	guard, err := relayguard.New(root, r.ControlledRelays)
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, "invalid controlled relay policy")
-		return 1
-	}
-	pool := adapter.NewRelayPool(r.ControlledRelays, zap.NewNop(), adapter.WithAuthSigner(operator), adapter.WithControlPlaneRelayGuard(guard), adapter.WithControlPlanePurpose())
-	defer pool.Close()
-	pool.Connect(ctx)
-	engine.Operator = operator
-	engine.Source = relaySource{pool: pool, relays: r.ControlledRelays}
-	engine.Local = localSource{path: cfg.Nostr.LocalStore.Path}
-	engine.Acks = &identityrecovery.AcknowledgmentReader{Source: engine.Source, Local: engine.Local,
-		Ledger: ledger, ServiceID: cfg.Nostr.ServiceID, OperatorRoot: root.Hex(), OldPubkey: old.Hex(),
-		Authorities: r.AcknowledgmentAuthorities}
-	if len(r.ConsumerRoster) != len(trustepoch.ConsumerIDs()) {
-		_, _ = fmt.Fprintln(stderr, "complete trust-epoch consumer roster required")
-		return 1
-	}
-	engine.Purge = identityrecovery.FilePurgeReceipts{Path: r.PurgeEvidencePath}
-	engine.Containment = identityrecovery.DurableContainmentAdapter{Ledger: ledger, MarkerPath: cfg.Nostr.LocalStore.ResolvedOutboxPath() + ".identity-containment", ConfirmDaemonUnreachable: *daemonUnreachable}
-	engine.NewSigner = func(ctx context.Context) (nostr.Keyer, error) {
-		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.NewIdentity.PublicKey, Signer: r.NewIdentity.Signer}, servicesigner.Options{Logger: zap.NewNop()})
-	}
-	oldDecryptor := func(ctx context.Context) (nostr.Keyer, error) {
-		if r.OldSigner.PublicKey == "" {
-			return nil, identityrecovery.ErrAdapterNotRegistered
-		}
-		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.OldSigner.PublicKey, Signer: r.OldSigner.Signer}, servicesigner.Options{Logger: zap.NewNop()})
-	}
-	engine.Rotation = &identityrecovery.LedgerRotationTracker{Ledger: ledger, Source: identityrecovery.CanonicalCredentialSource{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor}, SystemKeys: cfg.SecretStore.SystemKeys, UpdatesPath: *rotationUpdates}
-	recoveryRelayPolicy := cfg.Nostr
-	recoveryRelayPolicy.ControlledRelays = append([]string(nil), r.ControlledRelays...)
+	defer func() { _ = runtime.Close() }()
+	engine := runtime.Engine
+	sqlDrafts := runtime.SQLDrafts
 	if *draftPath == "" {
 		*draftPath = r.LedgerPath + ".sql-review-drafts.json"
-	}
-	sqlDrafts := &identityrecovery.SQLReviewDraftAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Rows: identityrecovery.PGReviewRows{DB: cfg.DB, OldPubkey: old.Hex()}, ArtifactPath: *draftPath}
-	engine.Domains = map[string]identityrecovery.DomainRecoveryAdapter{
-		"cp-state/service-registry":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindServiceRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"cp-state/environment-registry":      &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindEnvironmentRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"cp-state/adoption-binding":          &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindAdoptionBindingRecord, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"relay-settings-and-sets":            &identityrecovery.RelayRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Static: recoveryRelayPolicy},
-		"hostname-reservations-and-recovery": &identityrecovery.HostnameRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"sbom-references-and-availability":   &identityrecovery.SBOMRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"notification-channels":              &identityrecovery.NotificationRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, OldSigner: oldDecryptor, NewSigner: engine.NewSigner},
-		"discovery-system":                   &identityrecovery.DiscoveryRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Config: cfg, MCPTransportEnabled: true},
-		"bahia-docs":                         &identityrecovery.DocsRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
-		"sql-only-review-drafts":             sqlDrafts,
-	}
-	engine.RequiredDomains = []string{
-		"cp-state/service-registry", "cp-state/environment-registry", "cp-state/adoption-binding",
-		"relay-settings-and-sets", "hostname-reservations-and-recovery", "backup-canonical-families",
-		"security-canonical", "sbom-references-and-availability", "notification-channels", "bahia-docs", "discovery-system", "sql-only-review-drafts",
-	}
-	if r.OldSigner.PublicKey != "" {
-		engine.OldSigner = oldDecryptor
 	}
 	if op == "report-drafts" {
 		if _, err := sqlDrafts.Reassert(ctx, nil); err != nil {

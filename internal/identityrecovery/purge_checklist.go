@@ -2,8 +2,6 @@ package identityrecovery
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -96,8 +94,7 @@ func hasPurgeEvidence(receipt Receipt, deletionIDs []string, relays []string) bo
 			return false
 		}
 		for _, relay := range relays {
-			sum := sha256.Sum256([]byte(relay))
-			if !slices.Contains(receipt.EvidenceIDs, "delete-ok:"+hex.EncodeToString(sum[:])+":"+id) {
+			if !slices.Contains(receipt.EvidenceIDs, deletionOKEvidence(relay, id)) {
 				return false
 			}
 		}

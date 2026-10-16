@@ -17,6 +17,7 @@ type Engine struct {
 	Config          Config
 	Ledger          *Ledger
 	Source          EventSource
+	Cleanup         CleanupTransport
 	Local           LocalInventory
 	Operator        nostr.Keyer
 	NewSigner       func(context.Context) (nostr.Keyer, error)
@@ -40,7 +41,7 @@ func (e *Engine) validate(ctx context.Context) error {
 	if err := e.Config.Validate(); err != nil {
 		return err
 	}
-	if e.Ledger == nil || e.Source == nil || e.Operator == nil {
+	if e.Ledger == nil || e.Source == nil || e.Cleanup == nil || e.Operator == nil {
 		return errors.New("recovery ledger, relay source and operator signer required")
 	}
 	pub, err := e.Operator.GetPublicKey(ctx)
@@ -112,7 +113,7 @@ func (e *Engine) Apply(ctx context.Context, confirmed Phase) error {
 	}
 	evidence, err := e.execute(ctx, &s, p)
 	if err != nil {
-		_ = e.receipt(ctx, &s, p, "failed", nil)
+		_ = e.receipt(ctx, &s, p, "failed", cleanupEvidence(s, p))
 		return err
 	}
 	if err = e.incident(ctx, &s, p, false); err != nil {
@@ -214,7 +215,19 @@ func (e *Engine) publishPending(ctx context.Context, s *State) error {
 				return errors.New("trust epoch head advanced; refusing pending non-monotonic publication")
 			}
 		}
-		if err := e.Source.Publish(ctx, ev); err != nil {
+		if ev.Kind == nostr.KindDeletion {
+			outcomes := e.Cleanup.PublishDeletion(ctx, ev)
+			if s.CleanupDeletions == nil {
+				s.CleanupDeletions = map[string]map[string]RelayEvidence{}
+			}
+			s.CleanupDeletions[id] = outcomes
+			if err := e.Ledger.Save(*s); err != nil {
+				return err
+			}
+			if !completeCleanup(outcomes, e.Config.CleanupRelays, "ok") {
+				return fmt.Errorf("cleanup relay deletion incomplete: %w", ErrIncomplete)
+			}
+		} else if err := e.Source.Publish(ctx, ev); err != nil {
 			return fmt.Errorf("publish signed recovery record %s: %w", id, err)
 		}
 		s.Pending = s.Pending[1:]
@@ -263,7 +276,7 @@ func (e *Engine) execute(ctx context.Context, s *State, p Phase) ([]string, erro
 		return e.verify(ctx, *s)
 	case RetireOldIdentity:
 		deletion, ok := s.Receipt(DeleteAndPurge)
-		if !ok || !hasPurgeEvidence(deletion, s.DeletionIDs, e.Config.ControlledRelays) {
+		if !ok || !hasPurgeEvidence(deletion, s.DeletionIDs, e.Config.CleanupRelays) {
 			return nil, fmt.Errorf("retirement requires deletion and controlled re-encryption receipts: %w", ErrIncomplete)
 		}
 		if err := e.requireNotificationReencryption(ctx, *s, deletion.EvidenceIDs); err != nil {
@@ -309,9 +322,13 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 		return nil, errors.New("reviewed accepted event IDs required")
 	}
 	filter := nostr.Filter{Authors: []nostr.PubKey{e.Config.OldPubkey}}
-	relayEvents, err := e.Source.Read(ctx, filter)
-	if err != nil {
+	relayEvents, outcomes := e.Cleanup.Scan(ctx, filter)
+	s.CleanupInventory = outcomes
+	if err := e.Ledger.Save(*s); err != nil {
 		return nil, err
+	}
+	if !completeCleanup(outcomes, e.Config.CleanupRelays, "eose") {
+		return nil, fmt.Errorf("cleanup relay inventory incomplete: %w", ErrIncomplete)
 	}
 	localEvents, err := e.Local.Events(ctx, e.Config.OldPubkey)
 	if err != nil {
@@ -349,7 +366,7 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 	if err = e.Ledger.Save(*s); err != nil {
 		return nil, err
 	}
-	return []string{digest, strconv.Itoa(count)}, nil
+	return append([]string{digest, strconv.Itoa(count)}, cleanupEvidence(*s, Inventory)...), nil
 }
 func (e *Engine) provision(ctx context.Context, s *State) ([]string, error) {
 	if e.NewSigner == nil {

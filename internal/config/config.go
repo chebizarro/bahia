@@ -805,6 +805,7 @@ type IdentityRecoveryConfig struct {
 	OldPubkey                 string             `koanf:"old_pubkey" yaml:"old_pubkey" secret:"false"`
 	ReasonCode                string             `koanf:"reason_code" yaml:"reason_code" secret:"false"`
 	ControlledRelays          []string           `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
+	CleanupRelays             []string           `koanf:"cleanup_relays" yaml:"cleanup_relays" secret:"false"`
 	ConsumerRoster            []string           `koanf:"consumer_roster" yaml:"consumer_roster" secret:"false"`
 	AcknowledgmentAuthorities map[string]string  `koanf:"acknowledgment_authorities" yaml:"acknowledgment_authorities" secret:"false"`
 	AcceptedEventIDs          []string           `koanf:"accepted_event_ids" yaml:"accepted_event_ids" secret:"false"`

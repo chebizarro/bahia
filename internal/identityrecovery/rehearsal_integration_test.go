@@ -4,11 +4,13 @@ package identityrecovery
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -17,195 +19,279 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
 	"fiatjaf.com/nostr/khatru"
+	"github.com/google/uuid"
 	adapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/controlplane"
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
-	"go.uber.org/zap"
 )
-
-type rehearsalRelay struct {
-	pool *adapter.RelayPool
-	url  string
-}
-
-func (r rehearsalRelay) Publish(ctx context.Context, ev nostr.Event) error {
-	results, err := r.pool.PublishToRelaysWithResults(ctx, ev, []string{r.url})
-	if err != nil {
-		return err
-	}
-	if len(results) != 1 || results[0].RelayURL != r.url || !results[0].Succeeded() {
-		return errors.New("relay OK missing")
-	}
-	return nil
-}
-func (r rehearsalRelay) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
-	sub, err := r.pool.SubscribeWithOptions(ctx, []nostr.Filter{filter}, adapter.SubscribeOptions{Relays: []string{r.url}, AwaitUnavailableRelays: true, ValidateEvent: func(ev *nostr.Event) bool { return ev.CheckID() && ev.VerifySignature() }})
-	if err != nil {
-		return nil, err
-	}
-	defer sub.Close()
-	out := map[nostr.ID]nostr.Event{}
-	for {
-		select {
-		case ev, ok := <-sub.Events:
-			if !ok {
-				return nil, errors.New("relay closed before EOSE")
-			}
-			out[ev.ID] = *ev
-		case <-sub.EndOfStoredEvents:
-			if err := sub.StoredEventsIncomplete(nil); err != nil || !sub.AllRelaysReachedEOSE() {
-				return nil, errors.New("relay catch-up incomplete")
-			}
-			events := make([]nostr.Event, 0, len(out))
-			for _, ev := range out {
-				events = append(events, ev)
-			}
-			return events, nil
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-}
-
-type rehearsalDomain struct {
-	old        nostr.Event
-	source     rehearsalRelay
-	newPub     nostr.PubKey
-	reasserted nostr.ID
-}
-
-func (d *rehearsalDomain) Inventory(context.Context) ([]string, error) {
-	return []string{d.old.ID.Hex()}, nil
-}
-func (d *rehearsalDomain) Reassert(ctx context.Context, signer nostr.Keyer) ([]string, error) {
-	if d.reasserted != nostr.ZeroID {
-		return []string{d.reasserted.Hex()}, nil
-	}
-	ev := nostr.Event{Kind: d.old.Kind, CreatedAt: nostr.Timestamp(3000), Tags: slices.Clone(d.old.Tags), Content: d.old.Content}
-	if err := signer.SignEvent(ctx, &ev); err != nil {
-		return nil, err
-	}
-	if ev.PubKey != d.newPub {
-		return nil, errors.New("reassert signer mismatch")
-	}
-	if err := d.source.Publish(ctx, ev); err != nil {
-		return nil, err
-	}
-	d.reasserted = ev.ID
-	return []string{ev.ID.Hex()}, nil
-}
-func (d *rehearsalDomain) Verify(ctx context.Context) ([]string, error) {
-	if d.reasserted == nostr.ZeroID {
-		return nil, ErrIncomplete
-	}
-	events, err := d.source.Read(ctx, nostr.Filter{Kinds: []nostr.Kind{d.old.Kind}, Authors: []nostr.PubKey{d.newPub}})
-	if err != nil {
-		return nil, err
-	}
-	for _, ev := range events {
-		if ev.ID == d.reasserted {
-			return []string{ev.ID.Hex()}, nil
-		}
-	}
-	return nil, ErrIncomplete
-}
 
 type rehearsalInventory []string
 
 func (i rehearsalInventory) IDs(context.Context, string, string) ([]string, error) { return i, nil }
 
-func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+func rehearsalServer(t *testing.T) (string, *slicestore.SliceStore) {
+	t.Helper()
 	relay := khatru.NewRelay()
-	events := &slicestore.SliceStore{}
-	if err := events.Init(); err != nil {
+	store := &slicestore.SliceStore{}
+	if err := store.Init(); err != nil {
 		t.Fatal(err)
 	}
-	defer events.Close()
-	relay.UseEventstore(events, 500)
+	t.Cleanup(func() { store.Close() })
+	relay.UseEventstore(store, 500)
 	server := httptest.NewServer(relay)
-	defer server.Close()
-	url := "ws" + strings.TrimPrefix(server.URL, "http")
-	budget := nostrout.PurposeBudget{RatePerMinute: 100000, Burst: 100000}
-	admission := nostrout.New(nostrout.Config{Aggregate: budget, PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{
-		nostrout.PurposePriority: budget, nostrout.PurposeState: budget, nostrout.PurposeGeneral: budget, nostrout.PurposeBulk: budget, nostrout.PurposeSigner: budget}, RelayWire: budget, RelayWirePriority: budget})
-	pool := adapter.NewRelayPool([]string{url}, zap.NewNop(), adapter.WithOutboundAdmission(admission))
-	defer pool.Close()
-	pool.Connect(ctx)
-	source := rehearsalRelay{pool: pool, url: url}
+	t.Cleanup(server.Close)
+	return "ws" + strings.TrimPrefix(server.URL, "http"), store
+}
+
+func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	controlled, controlledStore := rehearsalServer(t)
+	cleanup, cleanupStore := rehearsalServer(t)
+	if controlled == cleanup {
+		t.Fatal("cleanup relay must be distinct")
+	}
 	operator, newKey, old := signer(t), signer(t), signer(t)
-	oldPub, newPub := pub(t, old), pub(t, newKey)
+	oldPub, newPub, root := pub(t, old), pub(t, newKey), pub(t, operator)
 	dir := t.TempDir()
 	daemonPath := filepath.Join(dir, "daemon.bolt")
 	ledgerPath := filepath.Join(dir, "recovery.bolt")
-	daemon, err := localstore.Open(daemonPath)
+	store, err := localstore.Open(daemonPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	domains := map[string]DomainRecoveryAdapter{}
 	var accepted []string
-	for i, name := range []string{"service", "environment", "deployment"} {
-		ev := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Timestamp(1000 + i), Tags: nostr.Tags{{"d", name + ":rehearsal"}, {"t", name + "-registry"}}, Content: `{"record":"rehearsal"}`}
-		if err := old.SignEvent(ctx, &ev); err != nil {
+	seed := func(ev nostr.Event) {
+		t.Helper()
+		if err := controlledStore.SaveEvent(ev); err != nil {
 			t.Fatal(err)
 		}
-		if err := source.Publish(ctx, ev); err != nil {
+		if err := cleanupStore.SaveEvent(ev); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := daemon.SaveEvent(ev); err != nil {
+		if _, err := store.SaveEvent(ev); err != nil {
 			t.Fatal(err)
 		}
 		accepted = append(accepted, ev.ID.Hex())
-		domains[name] = &rehearsalDomain{old: ev, source: source, newPub: newPub}
 	}
-	if err := daemon.Close(); err != nil {
+	now := time.Unix(1_700_000_000, 0).UTC()
+	svc := &domain.Service{ID: uuid.New(), OrgID: uuid.New(), Name: "api", ArtifactRepo: "registry.example/api", RuntimeType: domain.RuntimeTypeDocker, CreatedAt: now, UpdatedAt: now}
+	kind, tags, content := adapter.ServiceRegistryRecoveryRecord(svc, false)
+	seed(signedRegistryHead(t, old, kind, tags, content, 100))
+	recipe := &domain.BackupRecipe{ID: uuid.New(), OrgID: svc.OrgID, Name: "daily", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "service:api", CreatedAt: now, UpdatedAt: now}
+	backupTags, backupContent := adapter.BackupRecipeRegistryRecord(recipe, false)
+	backupKind, backupEnvelope := adapter.ControlStateEnvelope(adapter.KindBackupRecipeRegistry, adapter.BackupRecipeDTag(recipe.ID), false)
+	seed(signedRegistryHead(t, old, backupKind, append(backupEnvelope, backupTags...), backupContent, 101))
+	securityOCK, err := controlplane.GenerateOrgContentKey(kinds.FleetOCKScope, 1)
+	if err != nil {
 		t.Fatal(err)
 	}
-	oldRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("a", 64), Version: 1}
-	newRef := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("b", 64), Version: 2}
-	label := "bahia-system/rehearsal/k1"
-	updatesPath := filepath.Join(dir, "rotation.json")
+	securityContent, err := controlplane.EncryptConfidentialContent(ctx, securityOCK, []byte(`{"canonical":"unchanged"}`), controlplane.ConfidentialRecordContext{LegacyKind: adapter.KindSecurityTargetRecord, DTag: "security:target:rehearsal", Topic: securityRecoveryTopic(adapter.KindSecurityTargetRecord)}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	securityKind, securityEnvelope := adapter.ControlStateEnvelope(adapter.KindSecurityTargetRecord, "security:target:rehearsal", false)
+	securityTags := append(securityEnvelope, nostr.Tag{"target_key_hash", "rehearsal"}, nostr.Tag{"target_type", "sbom"}, nostr.Tag{"state_hash", hex.EncodeToString(make([]byte, 32))})
+	seed(signedRegistryHead(t, old, securityKind, securityTags, securityContent, 102))
+	channel := &domain.NotificationChannel{ID: uuid.New(), OrgID: svc.OrgID, Name: "oncall", ChannelType: domain.ChannelTypeWebhook, Config: map[string]any{"url": "https://private.invalid/hook", "secret": "test-secret"}, Enabled: true}
+	d := adapter.NotificationChannelDTag(channel.ID)
+	ock, err := controlplane.GenerateOrgContentKey(channel.OrgID.String(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, plain := adapter.NotificationChannelRegistryRecord(channel, false, true)
+	notificationContent, err := controlplane.EncryptConfidentialContent(ctx, ock, []byte(`{"id":"visible"}`), controlplane.ConfidentialRecordContext{LegacyKind: adapter.KindNotificationChannelRegistry, DTag: d, Topic: kinds.CPStateTopicNotificationChannelRegistry}, []byte(plain), func(ctx context.Context, p string) (string, error) { return old.Encrypt(ctx, p, oldPub) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	notificationKind, notificationTags := adapter.ControlStateEnvelope(adapter.KindNotificationChannelRegistry, d, false)
+	notificationOld := signedRegistryHead(t, old, notificationKind, notificationTags, notificationContent, 103)
+	seed(notificationOld)
+	for i, key := range []controlplane.OrgContentKey{securityOCK, ock} {
+		wrapped, err := controlplane.MarshalOCKWrap(key, oldPub.Hex())
+		if err != nil {
+			t.Fatal(err)
+		}
+		cipher, err := old.Encrypt(ctx, string(wrapped), oldPub)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dTag := "org-key:" + key.OrgID + ":v1:" + oldPub.Hex()
+		kind, tags := adapter.ControlStateEnvelope(adapter.KindOrgKeyEnvelope, dTag, false)
+		seed(signedRegistryHead(t, old, kind, tags, cipher, int64(105+i)))
+	}
+	// A historical old-key event visible only on the external cleanup relay is
+	// deliberately not accepted as canonical, but must still receive deletion.
+	externalOnly := signedRegistryHead(t, old, 1, nostr.Tags{{"t", "historical"}}, "historical", 104)
+	if err := cleanupStore.SaveEvent(externalOnly); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Defaults()
+	cfg.DB = config.DBConfig{}
+	cfg.Nostr.ServiceID = "rehearsal-service"
+	cfg.Nostr.OperatorRootPubkey = root.Hex()
+	cfg.Nostr.PublicKey = oldPub.Hex()
+	cfg.Nostr.LocalStore.Path = daemonPath
+	cfg.Nostr.ControlledRelays = []string{controlled}
+	cfg.Nostr.Relays = []string{controlled}
+	cfg.Nostr.ServiceRelays = []string{controlled}
+	cfg.Nostr.BrowserRelays = []string{controlled}
+	cfg.Nostr.ContextVMRelays = []string{controlled}
+	keys := map[string]nostr.Keyer{"operator": operator, "new": newKey, "old": old}
+	authorities := map[string]string{"daemon": newPub.Hex(), "cli": root.Hex(), "web": root.Hex(), "pinned-runtimes": root.Hex()}
+	for _, id := range []string{"sidecar", "dns", "loom", "soulfactory", "hiveci"} {
+		key := signer(t)
+		keys[id] = key
+		authorities[id] = pub(t, key).Hex()
+	}
+	signerConfig := func(key nostr.Keyer) config.ConfigFabricConfig {
+		return config.ConfigFabricConfig{PublicKey: pub(t, key).Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP55L}}
+	}
 	purgePath := filepath.Join(dir, "purge.json")
+	updatesPath := filepath.Join(dir, "rotation.json")
 	purgeRaw, _ := json.Marshal(map[string]string{"archive-artifacts": "archive-digest", "pg-backups": "backup-digest", "wal": "wal-digest", "controlled-re-encryption": "reencryption-digest"})
 	if err := os.WriteFile(purgePath, purgeRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{ServiceID: "rehearsal-service", OldPubkey: oldPub, ReasonCode: "compromised", ControlledRelays: []string{url}, ConsumerRoster: trustepoch.ConsumerIDs(), OperatorPubkey: pub(t, operator), LocalStorePath: daemonPath, AcceptedEventIDs: accepted}
-	open := func() *Ledger {
-		l, err := OpenLedger(ledgerPath, daemonPath)
+	cfg.IdentityRecovery = config.IdentityRecoveryConfig{LedgerPath: ledgerPath, OldPubkey: oldPub.Hex(), ReasonCode: "compromised", ControlledRelays: []string{controlled}, CleanupRelays: []string{controlled, cleanup}, ConsumerRoster: trustepoch.ConsumerIDs(), AcknowledgmentAuthorities: authorities, AcceptedEventIDs: accepted, PurgeEvidencePath: purgePath, Operator: signerConfig(operator), NewIdentity: signerConfig(newKey), OldSigner: signerConfig(old)}
+	cfg.SecretStore.SystemKeys.AssistantTranscript = []config.SystemKeyConfig{{KeyID: "k1", CredentialID: "cred_" + strings.Repeat("a", 64), Version: 1}}
+	budget := nostrout.PurposeBudget{RatePerMinute: 100000, Burst: 100000}
+	admission := nostrout.New(nostrout.Config{Aggregate: budget, PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{nostrout.PurposePriority: budget, nostrout.PurposeState: budget, nostrout.PurposeGeneral: budget, nostrout.PurposeBulk: budget, nostrout.PurposeSigner: budget}, RelayWire: budget, RelayWirePriority: budget})
+	opts := RuntimeOptions{OutboundAdmission: admission, RotationUpdatesPath: updatesPath, OpenSigner: func(_ context.Context, c config.ConfigFabricConfig) (nostr.Keyer, error) {
+		for _, key := range keys {
+			if pub(t, key).Hex() == c.PublicKey {
+				return key, nil
+			}
+		}
+		return nil, errors.New("unrecognized rehearsal signer")
+	}}
+	open := func() *ProductionRuntime {
+		runtime, err := NewProductionRuntime(ctx, cfg, opts)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return l
+		return runtime
 	}
-	engine := &Engine{Config: cfg, Ledger: open(), Source: source, Local: rehearsalLocal{path: daemonPath}, Operator: operator, NewSigner: func(context.Context) (nostr.Keyer, error) { return newKey, nil }, OldSigner: func(context.Context) (nostr.Keyer, error) { return old, nil }, Containment: testContain{}, Domains: domains, Purge: FilePurgeReceipts{Path: purgePath}, Acks: testAcks{}, Now: func() time.Time { return time.Unix(2000, 0).UTC() }}
-	defer engine.Ledger.Close()
-	tracker := &LedgerRotationTracker{Ledger: engine.Ledger, Source: rotationSource{refs: []SecretRef{{Provider: "signet", Label: label, Credential: oldRef}}}, UpdatesPath: updatesPath}
-	engine.Rotation = tracker
+	runtime := open()
+	defer func() {
+		if runtime != nil {
+			_ = runtime.Close()
+		}
+	}()
+	engine := runtime.Engine
+	if _, ok := engine.Acks.(*AcknowledgmentReader); !ok {
+		t.Fatal("production acknowledgment reader absent")
+	}
+	if _, ok := engine.Rotation.(*LedgerRotationTracker); !ok {
+		t.Fatal("production rotation tracker absent")
+	}
+	if _, ok := engine.Cleanup.(CleanupRelaySource); !ok {
+		t.Fatal("production cleanup publisher absent")
+	}
+	if _, ok := runtime.SQLDrafts.Rows.(PGReviewRows); !ok {
+		t.Fatal("production SQL reporter absent")
+	}
+	for _, name := range engine.RequiredDomains {
+		if engine.Domains[name] == nil {
+			t.Fatalf("production domain %s absent", name)
+		}
+	}
 	var resolved trustepoch.Resolution
 	for _, phase := range Phases {
-		if phase == RotateExternalSecrets {
-			refs, err := tracker.Inventory(ctx)
-			if err != nil || len(refs) != 1 {
-				t.Fatalf("rotation inventory: %v", err)
+		switch phase {
+		case Contain:
+			state, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
 			}
-			raw, _ := json.Marshal([]RotationUpdate{{RefID: refs[0].ID, NewRef: &newRef, SourceRotationEvidenceID: "source-rotation-digest"}})
+			marker := []byte(`{"incident_id":"` + state.IncidentID + `"}`)
+			if err := os.WriteFile(cfg.Nostr.LocalStore.ResolvedOutboxPath()+".identity-containment", marker, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		case CutActivateTrust:
+			if err := engine.Apply(ctx, phase); !errors.Is(err, ErrIncomplete) {
+				t.Fatalf("cut activated without readiness: %v", err)
+			}
+			for _, id := range trustepoch.ConsumerIDs() {
+				if err := engine.AttestReadiness(ctx, id, nil, "rehearsal_waiver"); err != nil {
+					t.Fatalf("readiness %s: %v", id, err)
+				}
+			}
+		case RotateExternalSecrets:
+			refs, err := engine.Rotation.Inventory(ctx)
+			if err != nil || len(refs) != 1 {
+				t.Fatalf("rotation inventory: %v %v", refs, err)
+			}
+			replacement := domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_" + strings.Repeat("b", 64), Version: 2}
+			raw, _ := json.Marshal([]RotationUpdate{{RefID: refs[0].ID, NewRef: &replacement, SourceRotationEvidenceID: "source-rotation-digest"}})
 			if err := os.WriteFile(updatesPath, raw, 0o600); err != nil {
 				t.Fatal(err)
 			}
+		case Verify:
+			if err := engine.Apply(ctx, phase); !errors.Is(err, ErrIncomplete) {
+				t.Fatalf("verification accepted missing consumer acks: %v", err)
+			}
+			state, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, id := range trustepoch.ConsumerIDs() {
+				if slices.Contains([]string{"cli", "web", "pinned-runtimes"}, id) {
+					if err := engine.AttestAcknowledgment(ctx, id); err != nil {
+						t.Fatalf("operator ack %s: %v", id, err)
+					}
+					continue
+				}
+				key := keys[id]
+				if id == "daemon" {
+					key = newKey
+				}
+				ack, err := trustepoch.NewAcknowledgmentForAuthority(resolved, id, nostr.Timestamp(state.ActivationBarrier+1), "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := key.SignEvent(ctx, &ack); err != nil {
+					t.Fatal(err)
+				}
+				if err := engine.Source.Publish(ctx, ack); err != nil {
+					t.Fatalf("component ack %s: %v", id, err)
+				}
+			}
 		}
-		var applyErr error
-		if phase == Declare {
-			applyErr = engine.Apply(ctx, phase)
-		} else {
-			applyErr = engine.Resume(ctx, phase)
+		if phase == Verify {
+			if err := engine.Resume(ctx, phase); !errors.Is(err, ErrIncomplete) {
+				t.Fatalf("pending consumers unexpectedly passed verification: %v", err)
+			}
+			state, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			missing, err := engine.Acks.Missing(ctx, state.Epoch, engine.Config.ConsumerRoster)
+			if err != nil || !slices.Contains(missing, "soulfactory") || !slices.Contains(missing, "pinned-runtimes") {
+				t.Fatalf("pending consumer policy not enforced: %v %v", missing, err)
+			}
+			if _, ok := state.Receipt(Verify); ok {
+				t.Fatal("verify completed despite pending enforcers")
+			}
+			if next, _ := state.Next(); next != Verify {
+				t.Fatal("blocked phase advanced")
+			}
+			if err := engine.Apply(ctx, RetireOldIdentity); err == nil {
+				t.Fatal("retired old identity without verification")
+			}
+			break
 		}
-		if applyErr != nil {
-			t.Fatalf("apply/resume %s: %v", phase, applyErr)
+		if err := engine.Resume(ctx, phase); err != nil {
+			t.Fatalf("resume %s: %v", phase, err)
 		}
 		state, err := engine.Status()
 		if err != nil {
@@ -213,10 +299,19 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 		}
 		receipt, ok := state.Receipt(phase)
 		if !ok || receipt.Status != "completed" || len(receipt.EvidenceIDs) == 0 {
-			t.Fatalf("%s receipt incomplete", phase)
+			t.Fatalf("%s completion receipt absent", phase)
 		}
-		if phase == CutActivateTrust {
-			heads, err := source.Read(ctx, nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{cfg.OperatorPubkey}, Tags: nostr.TagMap{"d": {"trust-epoch:" + cfg.ServiceID}}})
+		switch phase {
+		case Contain:
+			if !slices.Contains(receipt.EvidenceIDs, "containment:runtime-kill-switch:"+state.IncidentID) {
+				t.Fatal("seeded containment marker not verified")
+			}
+		case Inventory:
+			if len(state.Observed) != len(accepted)+1 || state.CleanupInventory[cleanup].Status != "eose" {
+				t.Fatal("historical external inventory or EOSE absent")
+			}
+		case CutActivateTrust:
+			heads, err := engine.Source.Read(ctx, nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{root}, Tags: nostr.TagMap{"d": {"trust-epoch:" + cfg.Nostr.ServiceID}}})
 			if err != nil || len(heads) != 1 {
 				t.Fatalf("trust head: %v %d", err, len(heads))
 			}
@@ -224,47 +319,94 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer persistence.Close()
-			verifier := trustepoch.Verifier{OperatorRoot: cfg.OperatorPubkey.Hex(), LegacyPubkey: oldPub.Hex(), Persistence: persistence, Inventory: rehearsalInventory(accepted)}
-			resolved, err = verifier.AcceptHead(ctx, cfg.ServiceID, heads[0])
+			verifier := trustepoch.Verifier{OperatorRoot: root.Hex(), LegacyPubkey: oldPub.Hex(), Persistence: persistence, Inventory: rehearsalInventory(accepted)}
+			resolved, err = verifier.AcceptHead(ctx, cfg.Nostr.ServiceID, heads[0])
 			if err != nil {
 				t.Fatal(err)
 			}
+			_ = persistence.Close()
 			hostile := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Timestamp(state.ActivationBarrier + 1), Content: "post-barrier"}
 			if err := old.SignEvent(ctx, &hostile); err != nil {
 				t.Fatal(err)
 			}
-			if decision := resolved.JudgeEvent(hostile); decision != trustepoch.Hostile {
-				t.Fatalf("post-barrier old key: %s", decision)
+			if resolved.JudgeEvent(hostile) != trustepoch.Hostile {
+				t.Fatal("post-barrier old key accepted")
 			}
 			if err := engine.Abort(ctx); !errors.Is(err, ErrForwardOnly) {
 				t.Fatalf("post-cut abort: %v", err)
 			}
-		}
-		if phase == DeleteAndPurge {
-			if !hasPurgeEvidence(receipt, state.DeletionIDs, cfg.ControlledRelays) {
-				t.Fatal("deletion or purge evidence incomplete")
+		case ReassertCanonicalState:
+			raw, readErr := os.ReadFile(runtime.SQLDrafts.ArtifactPath)
+			if readErr != nil {
+				t.Fatal(readErr)
 			}
-		}
-		if phase == ReassertCanonicalState {
+			var sqlReport SQLDraftReport
+			if json.Unmarshal(raw, &sqlReport) != nil || sqlReport.ReviewedRows != 0 || len(sqlReport.Drafts) != 0 {
+				t.Fatal("absent PostgreSQL projection misreported")
+			}
 			digest, count, err := InventoryDigest(state.Inventory)
 			if err != nil || digest != state.InventoryDigest || count != len(accepted) {
-				t.Fatal("inventory digest drift after reassert")
+				t.Fatal("canonical inventory digest drift")
 			}
-			for name, domain := range domains {
-				if _, err := domain.Verify(ctx); err != nil {
-					t.Fatalf("%s not reasserted: %v", name, err)
+			for _, name := range []string{"cp-state/service-registry", "backup-canonical-families", "security-canonical", "notification-channels"} {
+				if _, err := engine.Domains[name].Verify(ctx); err != nil {
+					t.Fatalf("%s verification: %v", name, err)
 				}
 			}
+			events, err := engine.Source.Read(ctx, nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{newPub}, Tags: nostr.TagMap{"d": {d}}})
+			if err != nil || len(events) != 1 {
+				t.Fatalf("new notification head: %v %d", err, len(events))
+			}
+			oldEnv, _ := controlplane.ParseConfidentialEnvelope(notificationOld.Content)
+			newEnv, _ := controlplane.ParseConfidentialEnvelope(events[0].Content)
+			encrypted := newEnv.ServiceInner
+			oldEnv.ServiceInner = ""
+			newEnv.ServiceInner = ""
+			if !reflect.DeepEqual(oldEnv, newEnv) {
+				t.Fatal("OCK-visible notification layer changed")
+			}
+			recovered, err := newKey.Decrypt(ctx, encrypted, newPub)
+			if err != nil || recovered != plain {
+				t.Fatal("notification decrypt/re-encrypt failed")
+			}
+		case DeleteAndPurge:
+			if !hasPurgeEvidence(receipt, state.DeletionIDs, cfg.IdentityRecovery.CleanupRelays) {
+				t.Fatal("cleanup relay OK or purge evidence absent")
+			}
+			if len(state.DeletionIDs) != 1 {
+				t.Fatal("expected one old-key deletion batch")
+			}
+			for _, relay := range []string{controlled, cleanup} {
+				if state.CleanupDeletions[state.DeletionIDs[0]][relay].Status != "ok" {
+					t.Fatalf("%s missing deletion OK", relay)
+				}
+			}
+			found := false
+			for ev := range cleanupStore.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{nostr.KindDeletion}, Authors: []nostr.PubKey{oldPub}}, 100) {
+				if ev.ID.Hex() == state.DeletionIDs[0] {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("external cleanup relay has no kind-5 deletion")
+			}
 		}
-		if err := engine.Ledger.Close(); err != nil {
+		if err := runtime.Close(); err != nil {
 			t.Fatal(err)
 		}
-		engine.Ledger = open()
-		tracker.Ledger = engine.Ledger
+		runtime = open()
+		engine = runtime.Engine
 		if next, has := state.Next(); has && next == phase {
-			t.Fatalf("phase %s not advanced", phase)
+			t.Fatalf("phase %s did not advance", phase)
 		}
+	}
+	if err := runtime.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runtime = open()
+	engine = runtime.Engine
+	if err := engine.Resume(ctx, Verify); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("restart bypassed pending consumer verification: %v", err)
 	}
 	if resolved.Record == nil || !resolved.Record.Activated {
 		t.Fatal("trust epoch not activated")
@@ -273,25 +415,7 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.ValidateReceipts(cfg.OperatorPubkey); err != nil {
-		t.Fatal(err)
+	if next, _ := state.Next(); next != Verify {
+		t.Fatalf("expected verified fail-closed boundary, got %s", next)
 	}
-}
-
-type rehearsalLocal struct{ path string }
-
-func (l rehearsalLocal) Events(ctx context.Context, pub nostr.PubKey) ([]nostr.Event, error) {
-	store, err := localstore.Open(l.path)
-	if err != nil {
-		return nil, err
-	}
-	defer store.Close()
-	var out []nostr.Event
-	for ev := range store.QueryEvents(nostr.Filter{Authors: []nostr.PubKey{pub}}) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		out = append(out, ev)
-	}
-	return out, nil
 }
