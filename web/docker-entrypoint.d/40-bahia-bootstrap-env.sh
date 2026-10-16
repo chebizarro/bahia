@@ -5,11 +5,26 @@ set -f
 SEED_SCRIPT=${BAHIA_BOOTSTRAP_SCRIPT_PATH:-/usr/share/nginx/html/bahia-bootstrap.js}
 BOOT_RELAYS=${PUBLIC_BAHIA_BOOTSTRAP_RELAYS:-}
 SERVICE_PUBKEYS=${PUBLIC_BAHIA_SERVICE_PUBKEYS:-${PUBLIC_BAHIA_SERVICE_PUBKEY:-}}
+SERVICE_ID=${PUBLIC_BAHIA_SERVICE_ID:-}
+OPERATOR_ROOT=${PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY:-}
+INVENTORY_IDS=${PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS:-}
 # Optional: publishers trusted for ops widgets (kind 30318). Unset denies all.
 WIDGET_PUBKEYS=${PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS:-}
 
 if [ -z "$BOOT_RELAYS" ] || [ -z "$SERVICE_PUBKEYS" ]; then
   echo 'bahia-web bootstrap env missing: PUBLIC_BAHIA_BOOTSTRAP_RELAYS and PUBLIC_BAHIA_SERVICE_PUBKEYS must be set' >&2
+  exit 1
+fi
+if [ -n "$SERVICE_ID" ] || [ -n "$OPERATOR_ROOT" ]; then
+  if ! printf '%s\n' "$SERVICE_ID" | grep -Eq '^[A-Za-z0-9._-]+$' ||
+     ! printf '%s\n' "$OPERATOR_ROOT" | grep -Eiq '^[0-9a-f]{64}$'; then
+    echo 'bahia-web trust epoch requires valid PUBLIC_BAHIA_SERVICE_ID and independent PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY' >&2
+    exit 1
+  fi
+  case ",$SERVICE_PUBKEYS," in *",$OPERATOR_ROOT,"*)
+    echo 'bahia-web operator root must be independent of service pubkeys' >&2; exit 1;; esac
+elif [ -n "$INVENTORY_IDS" ]; then
+  echo 'bahia-web inventory IDs require a trust epoch service ID and operator root' >&2
   exit 1
 fi
 
@@ -45,10 +60,11 @@ seed_array() {
 RELAYS_JSON=$(seed_array "$BOOT_RELAYS" relay)
 KEYS_JSON=$(seed_array "$SERVICE_PUBKEYS" "service pubkey")
 WIDGETS_JSON=$(seed_array "$WIDGET_PUBKEYS" "widget pubkey")
+INVENTORY_JSON=$(seed_array "$INVENTORY_IDS" "inventory event id")
 TEMP_SCRIPT=$(mktemp "${SEED_SCRIPT}.XXXXXX")
 trap 'rm -f "$TEMP_SCRIPT"' EXIT
-export RELAYS_JSON KEYS_JSON WIDGETS_JSON
-envsubst "\$RELAYS_JSON \$KEYS_JSON \$WIDGETS_JSON" > "$TEMP_SCRIPT" <<'TEMPLATE'
-window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:[$RELAYS_JSON],service_pubkeys:[$KEYS_JSON],widget_pubkeys:[$WIDGETS_JSON]};
+export RELAYS_JSON KEYS_JSON WIDGETS_JSON INVENTORY_JSON SERVICE_ID OPERATOR_ROOT
+envsubst "\$RELAYS_JSON \$KEYS_JSON \$WIDGETS_JSON \$INVENTORY_JSON \$SERVICE_ID \$OPERATOR_ROOT" > "$TEMP_SCRIPT" <<'TEMPLATE'
+window.__BAHIA_BOOTSTRAP__ = {schema:"bahia.bootstrap.v1",relay_urls:[$RELAYS_JSON],service_pubkeys:[$KEYS_JSON],widget_pubkeys:[$WIDGETS_JSON],service_id:"$SERVICE_ID",operator_root_pubkey:"$OPERATOR_ROOT",accepted_inventory_ids:[$INVENTORY_JSON]};
 TEMPLATE
 mv "$TEMP_SCRIPT" "$SEED_SCRIPT"

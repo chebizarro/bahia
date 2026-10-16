@@ -1,4 +1,4 @@
-import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey } from '../nostr/boot.js';
+import { boot, getEventStore, getPool, getRelayUrls, getServicePubkey, onStoreRefresh } from '../nostr/boot.js';
 import { toWebSocketUrl } from '../nostr/pool-utils.js';
 import { initStoreFirstSubscriptions, teardownStoreFirstSubscriptions } from './collections/store-first-subscriptions.js';
 import { markConnecting, markDisconnected, markError, markEventIngested, markRelayEose, markSyncing, resetSyncStatus } from './sync-status.svelte.js';
@@ -34,6 +34,7 @@ export const controlplaneConnection = $state({
 
 let bootstrapPromise = null;
 let stopConnectionStatus = null;
+let stopIdentityRefresh = null;
 let completedRelays = new Set();
 
 function observeConnections(pool) {
@@ -76,7 +77,7 @@ export async function bootstrapControlplane({ force = false } = {}) {
       markConnecting(relays);
       markSyncing();
       observeConnections(pool);
-      initStoreFirstSubscriptions({
+      const handlers = {
         onEvent: () => {
           controlplaneConnection.lastEventAt = new Date().toISOString();
           markEventIngested();
@@ -110,6 +111,21 @@ export async function bootstrapControlplane({ force = false } = {}) {
           controlplaneConnection.lastError = `${relay}: ${reason || 'relay closed'}`;
           if (!controlplaneConnection.bootstrapComplete) controlplaneConnection.status = 'disconnected';
         }
+      };
+      initStoreFirstSubscriptions(handlers);
+      stopIdentityRefresh?.();
+      stopIdentityRefresh = onStoreRefresh(() => {
+        const current = getServicePubkey();
+        if (!current || current === controlplaneConnection.servicePubkey) return;
+        teardownStoreFirstSubscriptions();
+        controlplaneConnection.servicePubkey = current;
+        controlplaneConnection.bootstrapComplete = false;
+        controlplaneConnection.protectedReadsReady = false;
+        controlplaneConnection.protectedReadError = null;
+        controlplaneConnection.status = 'syncing';
+        completedRelays = new Set();
+        markSyncing();
+        initStoreFirstSubscriptions(handlers);
       });
       return { ok: true };
     } catch (error) {
@@ -129,6 +145,8 @@ export function manualRetry() { return bootstrapControlplane({ force: true }); }
 
 export function disconnectControlplane() {
   teardownStoreFirstSubscriptions();
+  stopIdentityRefresh?.();
+  stopIdentityRefresh = null;
   stopConnectionStatus?.();
   stopConnectionStatus = null;
   controlplaneConnection.status = 'disconnected';

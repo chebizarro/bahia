@@ -46,7 +46,8 @@ The image contains no relay URLs or trust roots. At container start
 environment and renders `/bahia-bootstrap.js` with an explicit `envsubst`
 allowlist into a same-directory temporary file, then atomically renames
 that file. The result (`window.__BAHIA_BOOTSTRAP__ =
-{schema:"bahia.bootstrap.v1", relay_urls, service_pubkeys, widget_pubkeys}`)
+{schema:"bahia.bootstrap.v1", relay_urls, service_pubkeys, widget_pubkeys,
+service_id, operator_root_pubkey, accepted_inventory_ids}`)
 is served with `no-store` and loaded before the app. Startup fails if a value is missing or malformed, so a bad restart
 never leaves a partial seed. Rotating a trust root is a container restart,
 not a rebuild.
@@ -55,6 +56,9 @@ not a rebuild.
 |---|---|
 | `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` | Comma-separated `ws://`/`wss://` relay URLs the app dials first (required at runtime) |
 | `PUBLIC_BAHIA_SERVICE_PUBKEYS` | Comma-separated 64-hex service pubkeys whose discovery, state and published documentation the app trusts (required) |
+| `PUBLIC_BAHIA_SERVICE_ID` | Stable deployment ID for trust-epoch verification (set with the operator root) |
+| `PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY` | Independent 64-hex operator root; never the service key (set with the service ID) |
+| `PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS` | Optional comma-separated full accepted event-ID artifact; the browser verifies its signed digest and count before old-key replay |
 | `PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS` | Optional comma-separated 64-hex pubkeys allowed to publish ops widgets (kind `30318`); unset denies all widgets |
 | `PUBLIC_BAHIA_WEB_BASE_VERSION`, `PUBLIC_BAHIA_GIT_COMMIT`, `PUBLIC_BAHIA_WEB_VERSION` | Build-time version metadata shown under Settings → Build information |
 

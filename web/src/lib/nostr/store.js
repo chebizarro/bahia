@@ -19,6 +19,7 @@
 import { Repository } from '@welshman/net';
 import { matchFilters, getAddress } from '@welshman/util';
 import { validateForIngestion, isExpired } from './ingestion.js';
+import { createTrustEpochGuard } from './trust-epoch.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -230,9 +231,10 @@ function isAddressableKind(kind) {
  * @param {number} [options.maxBytes] - Eviction threshold (default 100 MB)
  * @returns {import('./store-interface.js').BahiaEventStore & { repository: Repository, clear: () => Promise<void> }}
  */
-export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_MAX_BYTES }) {
+export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_MAX_BYTES, trustEpoch = null }) {
   const dbName = `bahia-events-${servicePubkeyPrefix}`;
   const repository = new Repository();
+  const trustGuard = trustEpoch ? createTrustEpochGuard(trustEpoch) : null;
 
   /** @type {IDBDatabase | null} */
   let db = null;
@@ -257,7 +259,8 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     const events = await loadAllEvents(db);
     if (events.length > 0) {
       for (const event of events) if (event.kind === 5) indexDeletion(event);
-      const surviving = events.filter(event => !isTombstoned(event));
+      const surviving = (trustGuard ? trustGuard.hydrate(events) : events)
+        .filter(event => !isTombstoned(event));
       // IndexedDB getAll is ordered by id, not NIP-01 winner order. Load
       // older timestamps first and higher ids before lower ids on a tie.
       repository.load(surviving.sort((a, b) =>
@@ -323,9 +326,22 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
   }
 
   function ingest(event) {
+    // A present malformed root head poisons service admission rather than
+    // disappearing behind generic signature validation and restoring legacy.
+    if (trustGuard?.isHead(event)) {
+      try { trustGuard.observe(event); }
+      catch (error) {
+        pruneHostileServiceEvents();
+        console.warn('[BahiaEventStore] trust epoch head rejected:', error?.message || String(error));
+        return false;
+      }
+      pruneHostileServiceEvents();
+    }
     // 1. Validate structure + signature
     const check = validateForIngestion(event);
-    if (!check.valid) {
+    if (!check.valid) return false;
+    if (trustGuard && !trustGuard.isHead(event) && trustGuard.judgeEvent(event) === 'hostile') {
+      console.warn('[BahiaEventStore] hostile service event rejected', event.id, trustGuard.hostileCount);
       return false;
     }
 
@@ -377,6 +393,16 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     }
 
     return true;
+  }
+
+  function pruneHostileServiceEvents() {
+    if (!trustGuard) return;
+    for (const held of [...repository.eventsById.values()]) {
+      if (trustGuard.judgeEvent(held) !== 'hostile') continue;
+      repository.removeEvent(held.id);
+      if (db) deleteEvent(db, held.id).catch(err =>
+        console.error('[BahiaEventStore] trust epoch prune error:', err));
+    }
   }
 
   function notify(event) {
@@ -542,6 +568,8 @@ export function createBahiaEventStore({ servicePubkeyPrefix, maxBytes = DEFAULT_
     deleteTombstoned,
     sweepExpired,
     evict,
+    getTrustIdentity: () => trustGuard ? { pubkeys: trustGuard.pubkeys, epoch: trustGuard.epoch } : null,
+    get hostileTrustEpochEvents() { return trustGuard?.hostileCount || 0; },
     get count() {
       return repository.eventsById.size;
     },

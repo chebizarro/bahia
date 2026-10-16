@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import { KINDS, getDTag, getTagValues, parseJsonContent, upsertReplaceableEvent } from '../nostr/client.js';
-import { boot, getEventStore, getPool } from '../nostr/boot.js';
+import { boot, getEventStore, getPool, getServicePubkeys } from '../nostr/boot.js';
 import { toWebSocketUrl } from '../nostr/pool-utils.js';
 
 export const BOOTSTRAP_SCHEMA = 'bahia.bootstrap.v1';
@@ -45,7 +45,7 @@ function splitList(value) {
   return value.split(',').map((item) => item.trim()).filter(Boolean);
 }
 
-function validSeed(relayUrls, servicePubkeys) {
+function validSeed(relayUrls, servicePubkeys, trust = {}) {
   if (!Array.isArray(relayUrls) || !Array.isArray(servicePubkeys) || !relayUrls.length || !servicePubkeys.length) return null;
   if (relayUrls.some((url) => {
     if (typeof url !== 'string' || !/^wss?:\/\//.test(url) || /\s/.test(url)) return true;
@@ -57,10 +57,21 @@ function validSeed(relayUrls, servicePubkeys) {
     }
   })) return null;
   if (servicePubkeys.some((key) => typeof key !== 'string' || !/^[0-9a-f]{64}$/i.test(key))) return null;
+  const serviceID = trust.service_id || '';
+  const operatorRoot = trust.operator_root_pubkey || '';
+  const inventoryIDs = trust.accepted_inventory_ids ?? null;
+  if (Boolean(serviceID) !== Boolean(operatorRoot) ||
+      (serviceID && (typeof serviceID !== 'string' || !/^[A-Za-z0-9._-]+$/.test(serviceID) ||
+        !/^[0-9a-f]{64}$/i.test(operatorRoot) ||
+        servicePubkeys.some(key => key.toLowerCase() === operatorRoot.toLowerCase()))) ||
+      (inventoryIDs !== null && (!Array.isArray(inventoryIDs) || inventoryIDs.some(id => !/^[0-9a-f]{64}$/i.test(id)))) ||
+      (Array.isArray(inventoryIDs) && inventoryIDs.length > 0 && !serviceID)) return null;
   return {
     schema: BOOTSTRAP_SCHEMA,
     relay_urls: [...new Set(relayUrls)],
-    service_pubkeys: [...new Set(servicePubkeys.map((key) => key.toLowerCase()))]
+    service_pubkeys: [...new Set(servicePubkeys.map((key) => key.toLowerCase()))],
+    ...(serviceID ? { service_id: serviceID, operator_root_pubkey: operatorRoot.toLowerCase(),
+      accepted_inventory_ids: inventoryIDs?.map(id => id.toLowerCase()) ?? null } : {})
   };
 }
 
@@ -70,14 +81,17 @@ export function getBootstrapSeed() {
   if (window.__BAHIA_BOOTSTRAP__ !== undefined) {
     const injected = window.__BAHIA_BOOTSTRAP__;
     if (injected?.schema !== BOOTSTRAP_SCHEMA) return null;
-    return validSeed(injected.relay_urls, injected.service_pubkeys);
+    return validSeed(injected.relay_urls, injected.service_pubkeys, injected);
   }
 
   // Vite variables are only a local-development/test fallback, never merged into an injected seed.
   const env = import.meta.env || {};
   return validSeed(
     splitList(env.PUBLIC_BAHIA_BOOTSTRAP_RELAYS || env.VITE_BAHIA_BOOTSTRAP_RELAYS),
-    splitList(env.PUBLIC_BAHIA_SERVICE_PUBKEYS || env.VITE_BAHIA_SERVICE_PUBKEYS || env.PUBLIC_BAHIA_SERVICE_PUBKEY || env.VITE_BAHIA_SERVICE_PUBKEY)
+    splitList(env.PUBLIC_BAHIA_SERVICE_PUBKEYS || env.VITE_BAHIA_SERVICE_PUBKEYS || env.PUBLIC_BAHIA_SERVICE_PUBKEY || env.VITE_BAHIA_SERVICE_PUBKEY),
+    { service_id: env.PUBLIC_BAHIA_SERVICE_ID || env.VITE_BAHIA_SERVICE_ID,
+      operator_root_pubkey: env.PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY || env.VITE_BAHIA_OPERATOR_ROOT_PUBKEY,
+      accepted_inventory_ids: splitList(env.PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS || env.VITE_BAHIA_ACCEPTED_INVENTORY_IDS) }
   );
 }
 
@@ -206,46 +220,60 @@ export async function discoverSystemInfo({ force = false } = {}) {
     const relays = [...new Set(seed.relay_urls.map(toWebSocketUrl).filter(Boolean))];
     const filter = {
       kinds: [KINDS.BAHIA_SYSTEM_DISCOVERY, KINDS.NIP51_RELAY_SET],
-      authors: seed.service_pubkeys,
       '#d': [SYSTEM_DISCOVERY_DTAG, BROWSER_RELAY_SET_DTAG, CONTEXTVM_RELAY_SET_DTAG, SERVICE_RELAY_SET_DTAG]
     };
-    const snapshot = () => store.query(filter);
+    const snapshot = () => store.query({ ...filter, authors: getServicePubkeys() });
     const publishSnapshot = () => {
       const events = snapshot();
-      const normalized = normalizeDiscoveryEvents(events, seed.service_pubkeys);
+      const normalized = normalizeDiscoveryEvents(events, getServicePubkeys());
       if (normalized) publishDiscoveryInfo(seed, normalized, events);
       return normalized;
     };
 
     if (discoveryUnsubscribe) discoveryUnsubscribe();
     const cached = publishSnapshot();
-    const eose = new Set();
-    const closed = new Set();
+    let eose = new Set();
+    let closed = new Set();
     let settle;
     const caughtUp = new Promise((resolve, reject) => { settle = { resolve, reject }; });
     // A valid persisted discovery snapshot is usable even if relays close
     // before EOSE; consume the catch-up promise so its rejection is handled.
     if (cached) void caughtUp.catch(() => {});
-    const handle = pool.subscribe({
-      relays,
-      filters: [filter],
-      onEvent: () => {
-        try { publishSnapshot(); }
-        catch (error) { discoveryState.error = error?.message || String(error); }
-      },
-      onEose: (relay) => {
-        eose.add(toWebSocketUrl(relay));
-        if (eose.size + closed.size >= relays.length) settle.resolve(publishSnapshot());
-      },
-      onClosed: (reason, relay) => {
-        closed.add(toWebSocketUrl(relay));
-        if (eose.size + closed.size >= relays.length) {
-          if (eose.size) settle.resolve(publishSnapshot());
-          else settle.reject(new Error(`Discovery relays closed before EOSE: ${reason || 'no relay served history'}`));
+    let activeAuthors = '';
+    const subscribe = () => {
+      const authors = getServicePubkeys();
+      activeAuthors = authors.join(',');
+      eose = new Set();
+      closed = new Set();
+      const filters = [{ ...filter, authors }];
+      if (seed.service_id) filters.push({ kinds: [KINDS.CAS_CONTROL_STATE],
+        authors: [seed.operator_root_pubkey], '#d': [`trust-epoch:${seed.service_id}`] });
+      const handle = pool.subscribe({
+        relays, filters,
+        onEvent: () => {
+          try {
+            if (getServicePubkeys().join(',') !== activeAuthors) {
+              discoveryUnsubscribe?.();
+              subscribe();
+            }
+            publishSnapshot();
+          } catch (error) { discoveryState.error = error?.message || String(error); }
+        },
+        onEose: (relay) => {
+          eose.add(toWebSocketUrl(relay));
+          if (eose.size + closed.size >= relays.length) settle.resolve(publishSnapshot());
+        },
+        onClosed: (reason, relay) => {
+          closed.add(toWebSocketUrl(relay));
+          if (eose.size + closed.size >= relays.length) {
+            if (eose.size) settle.resolve(publishSnapshot());
+            else settle.reject(new Error(`Discovery relays closed before EOSE: ${reason || 'no relay served history'}`));
+          }
         }
-      }
-    });
-    discoveryUnsubscribe = () => handle.unsubscribe();
+      });
+      discoveryUnsubscribe = () => handle.unsubscribe();
+    };
+    subscribe();
     // Persisted, signature-checked events render immediately. EOSE is only
     // required when there is no local discovery state to display.
     return cached || caughtUp;

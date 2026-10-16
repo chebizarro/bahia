@@ -42,6 +42,9 @@ jobs:
       EDGE_HEALTH_HOST: 172.17.0.1
       PUBLIC_BAHIA_BOOTSTRAP_RELAYS: ${{ vars.PUBLIC_BAHIA_BOOTSTRAP_RELAYS }}
       PUBLIC_BAHIA_SERVICE_PUBKEYS: ${{ vars.PUBLIC_BAHIA_SERVICE_PUBKEYS }}
+      PUBLIC_BAHIA_SERVICE_ID: ${{ vars.PUBLIC_BAHIA_SERVICE_ID || '' }}
+      PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY: ${{ vars.PUBLIC_BAHIA_OPERATOR_ROOT_PUBKEY || '' }}
+      PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS: ${{ vars.PUBLIC_BAHIA_ACCEPTED_INVENTORY_IDS || '' }}
       # Optional ops-widget publisher allowlist forwarded to web.environment via
       # Compose interpolation. Empty is valid and denies every widget publisher.
       PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS: ${{ inputs.wheelhouse_allowed_pubkeys || vars.PUBLIC_WHEELHOUSE_ALLOWED_PUBKEYS || '' }}

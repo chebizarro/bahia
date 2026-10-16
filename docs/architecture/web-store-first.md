@@ -21,6 +21,14 @@ locally signed intents, and the daemon's HTTP API is not a data path. Code:
 - The service pubkey and relay URLs come from the validated runtime bootstrap
   seed (`/bahia-bootstrap.js`, injected at container start from
   `PUBLIC_BAHIA_*`).
+- When the seed includes `service_id` and an independent
+  `operator_root_pubkey`, its service pubkeys are candidates only. The store
+  verifies and persists the operator-root-signed trust-epoch head before
+  accepting a rotated key. It prunes non-inventoried old-key cache entries on
+  activation and rejects subsequent hostile old-key events at ingest. The
+  optional `accepted_inventory_ids` list is admitted only after exact digest
+  and count verification against the signed epoch; a missing artifact grants
+  no old-key replay. A present malformed head fails closed.
 - **No TTL.** Addressable and replaceable events are bounded by latest-wins and
   never evicted; regular events are LRU-pruned by size above 100 MB
   (`navigator.storage.estimate()`). NIP-09 deletions from the service pubkey
