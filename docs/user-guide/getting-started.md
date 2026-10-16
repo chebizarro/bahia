@@ -237,3 +237,7 @@ shares, relay endpoints, and injected round coordination plus a cross-process
 single-writer fence. Current daemon startup rejects it without those runtime
 dependencies; `local`, `nip46` and `nip55l` remain the deployment methods.
 See the [service signer runbook](../runbooks/service-signer.md#frostr-threshold-custody-contained-not-a-production-switch).
+
+## Operator identity recovery
+
+Set a deployment-stable `nostr.service_id` (default `bahia-service-v1`) before identity rotation. The separate `identity_recovery` block is required only by `bahia-recover`; its operator signer must use NIP-46 or NIP-55L and a mounted NIP-46 client-key file. See the [operator runbook](../runbooks/identity-recovery.md).
