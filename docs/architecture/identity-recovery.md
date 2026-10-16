@@ -176,3 +176,12 @@ publishers sign these records with no backup execution or scheduling source
 attached. Restore, standalone verification and retention-run families are not
 part of this registered group and require a separate adapter before they can
 be considered reasserted.
+
+Bahia-docs long-form topics (30023 with `t=bahia-docs`) are separately
+registered. Recovery uses the production topic builder with the accepted
+`published_at` tag and markdown, and fails if title, category, summary or
+content hash would drift. Notification channels and system discovery remain
+required but unregistered: notification `service_inner` is encrypted to the
+old service pubkey, while the system announcement is assembled from live
+configuration, capabilities and observations rather than a recoverable typed
+snapshot. Neither is silently copied or marked complete.

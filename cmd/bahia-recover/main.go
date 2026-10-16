@@ -130,11 +130,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"hostname-reservations-and-recovery": &identityrecovery.HostnameRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"bahia-docs":                         &identityrecovery.DocsRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 	}
 	engine.RequiredDomains = []string{
 		"cp-state/service-registry", "cp-state/environment-registry", "cp-state/adoption-binding",
 		"relay-settings-and-sets", "hostname-reservations-and-recovery", "backup-canonical-families",
-		"security-and-sbom", "notification-docs-discovery-system", "sql-only-review-drafts",
+		"security-canonical", "sbom-references-and-availability", "notification-channels", "bahia-docs", "discovery-system", "sql-only-review-drafts",
 	}
 	if r.OldSigner.PublicKey != "" {
 		engine.OldSigner = func(ctx context.Context) (nostr.Keyer, error) {
