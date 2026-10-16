@@ -120,10 +120,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	engine.NewSigner = func(ctx context.Context) (nostr.Keyer, error) {
 		return servicesigner.Open(ctx, config.NostrConfig{PublicKey: r.NewIdentity.PublicKey, Signer: r.NewIdentity.Signer}, servicesigner.Options{Logger: zap.NewNop()})
 	}
+	recoveryRelayPolicy := cfg.Nostr
+	recoveryRelayPolicy.ControlledRelays = append([]string(nil), r.ControlledRelays...)
 	engine.Domains = map[string]identityrecovery.DomainRecoveryAdapter{
 		"cp-state/service-registry":     &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindServiceRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"cp-state/environment-registry": &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindEnvironmentRegistry, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"cp-state/adoption-binding":     &identityrecovery.RegistryRecoveryAdapter{Family: adapter.KindAdoptionBindingRecord, OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"relay-settings-and-sets":       &identityrecovery.RelayRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Static: recoveryRelayPolicy},
 	}
 	engine.RequiredDomains = []string{
 		"cp-state/service-registry", "cp-state/environment-registry", "cp-state/adoption-binding",

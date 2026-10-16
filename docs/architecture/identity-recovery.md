@@ -146,3 +146,13 @@ preserved byte-for-byte when their recovery adapter is implemented; this does
 not apply to other confidential families that may carry `service_inner`.
 SBOM attestations are excluded from canonical reassertion and are regenerated
 under `bahia-4f10q.3.3`.
+
+Relay settings and the four advertised relay sets are recovered from accepted
+old-key heads, not from SQL or regenerated effective policy. Recovery validates
+the typed policy against the operator-controlled relay guard and requires the
+production serializers to reproduce the old tags and content exactly. The
+recovery relay pool is bootstrapped from `controlled_relays` in the recovery
+configuration; relay URLs carried by the signed policy or relay sets never
+select a destination for the reassertion itself. A historical settings head
+whose envelope or normalized content cannot be reproduced fails closed rather
+than silently changing its authority or topology.
