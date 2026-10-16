@@ -131,6 +131,16 @@ func (p *NotificationCanonicalPublisher) PublishChannelDeleted(ctx context.Conte
 	return p.publishConfidentialWithServiceInner(ctx, KindNotificationChannelRegistry, dTag, true, nil, content, nil, "notification_channel.projection", &channelID, orgID.String())
 }
 
+// PublishRecoveredEnvelope uses the normal notification cp-state signing path
+// after recovery has replaced only service_inner. The caller must validate
+// the accepted OCK envelope and its coordinate before invoking this method.
+func (p *NotificationCanonicalPublisher) PublishRecoveredEnvelope(ctx context.Context, dTag string, deleted bool, content string) error {
+	if p == nil || p.projector == nil || !p.projector.Enabled() || dTag == "" || content == "" {
+		return fmt.Errorf("notification recovery publisher unavailable")
+	}
+	return p.projector.publishControlState(ctx, KindNotificationChannelRegistry, dTag, deleted, nil, content, "notification_channel.projection", nil)
+}
+
 func (p *NotificationCanonicalPublisher) publishConfidentialWithServiceInner(ctx context.Context, legacyKind int, dTag string, deleted bool, extraTags gonostr.Tags, content string, serviceOnlyPlaintext []byte, entityType string, entityID *uuid.UUID, orgID string) error {
 	topic := ""
 	if fam, ok := cpStateFamilies[legacyKind]; ok {

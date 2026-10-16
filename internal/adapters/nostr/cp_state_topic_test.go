@@ -93,6 +93,9 @@ var cpStateTopicsByFamily = map[int]string{
 	kinds.RouteCanaryRecord:                          kinds.CPStateTopicRouteCanary,
 	int(kinds.CPStateFamilyHostnameReservation):      kinds.CPStateTopicHostnameReservation,
 	int(kinds.CPStateFamilyHostnameRecovery):         kinds.CPStateTopicHostnameRecovery,
+	int(kinds.CPStateFamilyIdentityIncident):         kinds.CPStateTopicIdentityIncident,
+	int(kinds.CPStateFamilyTrustEpoch):               kinds.CPStateTopicTrustEpoch,
+	int(kinds.CPStateFamilyIdentityRecoveryReceipt):  kinds.CPStateTopicIdentityRecoveryReceipt,
 	kinds.SoulRuntimePolicyRecord:                    kinds.CPStateTopicSoulRuntimePolicy,
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): kinds.CPStateTopicSoulFactoryAdapterLedger,
 	int(kinds.CPStateFamilyOperatorAllowlist):        kinds.CPStateTopicOperatorAllowlist,
@@ -124,6 +127,14 @@ func TestControlStateEnvelopeStampsFamilyTopic(t *testing.T) {
 		want, ok := cpStateTopicsByFamily[legacyKind]
 		if !ok {
 			t.Fatalf("cp-state family %d (%s) has no declared t topic", legacyKind, domainName)
+		}
+		// Recovery records are operator-authored with their own schema and
+		// coordinate builder; the projector only registers their read topics.
+		if legacyKind == int(kinds.CPStateFamilyIdentityIncident) || legacyKind == int(kinds.CPStateFamilyTrustEpoch) || legacyKind == int(kinds.CPStateFamilyIdentityRecoveryReceipt) {
+			if cpStateFamilies[legacyKind].topic != want || domainName != "identity" {
+				t.Fatalf("recovery family %d topic or domain drifted", legacyKind)
+			}
+			continue
 		}
 		if want != domainName+"-"+entity {
 			t.Fatalf("family %d topic %q does not follow <domain>-<entity> (%s-%s)", legacyKind, want, domainName, entity)

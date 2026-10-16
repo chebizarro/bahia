@@ -568,7 +568,11 @@ var cpStateFamilies = map[int]cpStateFamily{
 	kinds.RouteCanaryRecord:                     {"route", "canary", kinds.CPStateTopicRouteCanary},
 	int(kinds.CPStateFamilyHostnameReservation): {"hostname", "reservation", kinds.CPStateTopicHostnameReservation},
 	int(kinds.CPStateFamilyHostnameRecovery):    {"hostname", "recovery", kinds.CPStateTopicHostnameRecovery},
-	kinds.SoulRuntimePolicyRecord:               {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
+	// Recovery control records are independently operator-authored, not service projections.
+	int(kinds.CPStateFamilyIdentityIncident):        {"identity", "incident", kinds.CPStateTopicIdentityIncident},
+	int(kinds.CPStateFamilyTrustEpoch):              {"identity", "trust-epoch", kinds.CPStateTopicTrustEpoch},
+	int(kinds.CPStateFamilyIdentityRecoveryReceipt): {"identity", "recovery-receipt", kinds.CPStateTopicIdentityRecoveryReceipt},
+	kinds.SoulRuntimePolicyRecord:                   {"soul-factory", "runtime-policy", kinds.CPStateTopicSoulRuntimePolicy},
 	// Governed provisioning adapter ledger; published by the
 	// soulfactory package through the publisher seam, not the projector.
 	int(kinds.CPStateFamilySoulFactoryAdapterLedger): {"soul-factory", "adapter-ledger", kinds.CPStateTopicSoulFactoryAdapterLedger},
@@ -789,6 +793,14 @@ func shouldRefreshObservedDeploymentsProjection(eventType events.EventType) bool
 }
 
 func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg *config.Config) error {
+	tags, content, err := p.systemDiscoveryAnnouncementRecord(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	return p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, tags, content, "system.discovery", nil)
+}
+
+func (p *Projector) systemDiscoveryAnnouncementRecord(ctx context.Context, cfg *config.Config) (gonostr.Tags, string, error) {
 	observedDeployments, observedStatus := p.observedDeployments(ctx)
 	browserRelays := cfg.Nostr.BrowserRelayPolicyRelays()
 	encryptedRequestsEnabled := len(browserRelays) > 0 && p.signer != nil
@@ -837,9 +849,9 @@ func (p *Projector) publishSystemDiscoveryAnnouncement(ctx context.Context, cfg 
 	}
 	content, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal system discovery: %w", err)
+		return nil, "", fmt.Errorf("marshal system discovery: %w", err)
 	}
-	return p.publishSigned(ctx, kinds.ContextVMServerAnnouncement, systemDiscoveryAnnouncementTags(), string(content), "system.discovery", nil)
+	return systemDiscoveryAnnouncementTags(), string(content), nil
 }
 
 // discoveryAssistant advertises which assistant workflows can start new turns

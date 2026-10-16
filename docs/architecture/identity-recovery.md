@@ -223,10 +223,46 @@ Bahia-docs long-form topics (30023 with `t=bahia-docs`) are separately
 registered. Recovery uses the production topic builder with the accepted
 `published_at` tag and markdown, and fails if title, category, summary or
 content hash would drift. Notification channels and system discovery remain
-required but unregistered: notification `service_inner` is encrypted to the
-old service pubkey, while the system announcement is assembled from live
-configuration, capabilities and observations rather than a recoverable typed
-snapshot. Neither is silently copied or marked complete.
+separate required domains. Notification recovery keeps the OCK ciphertext,
+nonce, key metadata and associated data unchanged, decrypts `service_inner`
+only with the quarantined old signer, and encrypts that same plaintext to the
+new identity before the normal notification cp-state publisher signs it.
+Verification decrypts both inner layers and checks the unchanged OCK-visible
+envelope on relay and local heads; each coordinate and new event ID enters the
+phase receipt. A missing quarantined decryptor fails closed.
+Delete-and-purge requires those exact coordinate receipts in the signed
+reassertion receipt and carries them into its own receipt; retirement checks
+them again against the current relay/local new-key heads in addition to the
+operator's external controlled-re-encryption checklist evidence.
+
+SBOM reference heads (`30078`, `t=sbom-reference`) are re-signed with the
+production typed builder and identical content/tags. Availability heads
+(`30004`, `t=sbom-availability`) use the production builder too. Their
+author-dependent `a` tags and `referencePubkey`/`attestationId` content fields
+must point to accepted, newly signed reference coordinates; those fields are
+the sole allowed difference from the old availability head. The adapter
+checks every old and new reference linkage on both audited surfaces before
+completing. It does not regenerate attestation statements; that work belongs
+to `bahia-4f10q.3.3`.
+
+System discovery is a **regeneration** domain, not an equivalence domain.
+The adapter inventories accepted old `31974` or current `11316` announcement
+heads, then invokes the production discovery announcement publisher from
+current deployment configuration under the new identity. Verification
+requires a well-formed new-key `11316` head in both relay and local state.
+Content equivalence to the old head is intentionally not required because
+capabilities, advertised relays and observations are live-generated.
+
+The rotation source scans accepted canonical heads from the EOSE-complete
+controlled relays and durable store for nested `credential_ref`
+`{store, credential_id, version}` triples. It decrypts OCK-visible content
+using accepted old-key key-envelope heads and uses the quarantined signer to
+decrypt service-only inner content. Backup repositories/definitions/run
+snapshots, runtime desired-state secrets, and the secret registry are covered
+without consulting PostgreSQL; HiveCI mirror, LLM/ML provider, notification
+and deployment opaque secret IDs resolve through those canonical secret
+records. The tracker also includes configured system keys, hashes each
+stable label and credential version into a rotation ID, and deduplicates.
 
 `bahia-recover report-drafts --config FILE [--draft-report FILE]` writes an
 unsigned, mode-0600 JSON artifact without using a service signer or publishing

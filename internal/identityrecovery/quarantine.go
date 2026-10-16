@@ -55,6 +55,9 @@ func (q *QuarantinedOldSigner) SignDeletion(ctx context.Context, ev *nostr.Event
 	return deletionguard.CheckSigned(*ev, q.author, q.targets, nil)
 }
 func (e *Engine) deleteAndPurge(ctx context.Context, s *State) ([]string, error) {
+	if err := e.requireNotificationReencryption(ctx, *s, nil); err != nil {
+		return nil, err
+	}
 	if e.Purge == nil {
 		return nil, fmt.Errorf("purge: %w", ErrAdapterNotRegistered)
 	}
@@ -115,6 +118,13 @@ func (e *Engine) deleteAndPurge(ctx context.Context, s *State) ([]string, error)
 		return nil, fmt.Errorf("purge receipts: %w", err)
 	}
 	evidence := append([]string{"deletion-complete"}, s.DeletionIDs...)
+	if slices.Contains(e.RequiredDomains, "notification-channels") {
+		proof, err := e.Domains["notification-channels"].Verify(ctx)
+		if err != nil {
+			return nil, err
+		}
+		evidence = append(evidence, proof...)
+	}
 	for _, id := range s.DeletionIDs {
 		for _, relay := range e.Config.ControlledRelays {
 			sum := sha256.Sum256([]byte(relay))
