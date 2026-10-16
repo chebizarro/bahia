@@ -156,3 +156,9 @@ configuration; relay URLs carried by the signed policy or relay sets never
 select a destination for the reassertion itself. A historical settings head
 whose envelope or normalized content cannot be reproduced fails closed rather
 than silently changing its authority or topology.
+
+Hostname reservation and withdrawal-receipt recovery uses only the relay-first
+canonical record publisher. It decodes and validates the original typed plan,
+revision, deletion flag and withdrawal phase, then requires exact wire
+equivalence before signing. It never enters the hostname intent handler or
+route manager, so reassertion cannot re-run DNS, tunnel, Caddy or TLS effects.
