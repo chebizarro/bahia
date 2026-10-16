@@ -152,6 +152,7 @@ type Reactor struct {
 	backoff     *nostrpool.Backoff
 	caughtUp    atomic.Bool
 	delegations *DelegationLists
+	containment func() (bool, string)
 
 	kindCatalog     *nostrpool.KindCatalog
 	lastSeenByGroup map[string]nostr.Timestamp
@@ -221,6 +222,23 @@ type DeploymentRun struct {
 
 // ReactorOption configures optional reactor dependencies without breaking the existing constructor shape.
 type ReactorOption func(*Reactor)
+
+// WithIdentityContainment fences reactor-owned asynchronous mutation work;
+// canonical replay and read observation remain available.
+func WithIdentityContainment(active func() (bool, string)) ReactorOption {
+	return func(r *Reactor) { r.containment = active }
+}
+
+func (r *Reactor) mutationContained() bool {
+	if r.containment == nil {
+		return false
+	}
+	active, id := r.containment()
+	if active {
+		r.logger.Warn("dropping reactor mutation during identity containment", zap.String("incident_id", id))
+	}
+	return active
+}
 
 // WithLLMRegistry enables LLM Nostr lifecycle request handling.
 func WithLLMRegistry(registry *service.LLMRegistryService) ReactorOption {
@@ -657,6 +675,9 @@ func summarizePolicyBlockReason(evaluation *domain.PolicyEvaluation) string {
 }
 
 func (r *Reactor) handleToolApprovalResponse(_ context.Context, event *nostr.Event) error {
+	if r.mutationContained() {
+		return &IncidentRefusal{}
+	}
 	if event == nil || !event.CheckID() || !event.VerifySignature() || !r.isAuthorized(event.PubKey.Hex()) {
 		return fmt.Errorf("tool approval requires an authorized operator-signed event")
 	}
@@ -1253,6 +1274,9 @@ func (r *Reactor) cleanupRuns(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if r.mutationContained() {
+				continue
+			}
 			r.mu.Lock()
 			cutoff := time.Now().Add(-1 * time.Hour)
 			deleted := 0
@@ -1282,6 +1306,9 @@ func (r *Reactor) startMLWorkers(ctx context.Context) {
 					if !ok {
 						return
 					}
+					if r.mutationContained() {
+						continue
+					}
 					switch work.kind {
 					case mlWorkRecipeRun:
 						_ = r.mlRecipeExecutor.ProcessRecipeRun(bgCtx, work.runID)
@@ -1295,6 +1322,9 @@ func (r *Reactor) startMLWorkers(ctx context.Context) {
 }
 
 func (r *Reactor) submitMLWork(work mlWork) bool {
+	if r.mutationContained() {
+		return false
+	}
 	select {
 	case r.mlWorkCh <- work:
 		return true

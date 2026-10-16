@@ -37,9 +37,10 @@ type OSVVulnerabilityCachePruner interface {
 }
 
 type OCIUploadCleanupRunner struct {
-	cleaner  OCIUploadCleaner
-	interval time.Duration
-	logger   *zap.Logger
+	evidenceHold func() bool
+	cleaner      OCIUploadCleaner
+	interval     time.Duration
+	logger       *zap.Logger
 }
 
 func NewOCIUploadCleanupRunner(cleaner OCIUploadCleaner, interval time.Duration, logger *zap.Logger) *OCIUploadCleanupRunner {
@@ -54,6 +55,8 @@ func NewOCIUploadCleanupRunner(cleaner OCIUploadCleaner, interval time.Duration,
 
 func (r *OCIUploadCleanupRunner) Name() string { return "oci-upload-cleanup" }
 
+func (r *OCIUploadCleanupRunner) SetEvidenceHold(hold func() bool) { r.evidenceHold = hold }
+
 func (r *OCIUploadCleanupRunner) Run(ctx context.Context) error {
 	if r.cleaner == nil {
 		return nil
@@ -67,6 +70,9 @@ func (r *OCIUploadCleanupRunner) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			if r.evidenceHold != nil && r.evidenceHold() {
+				continue
+			}
 			count, err := r.cleaner.CleanupExpiredUploads(ctx, time.Now())
 			if err != nil {
 				r.logger.Warn("oci upload cleanup failed", zap.Error(err))
@@ -82,9 +88,10 @@ func (r *OCIUploadCleanupRunner) Run(ctx context.Context) error {
 const defaultOSVVulnerabilityCacheCleanupInterval = time.Hour
 
 type OSVVulnerabilityCacheCleanupRunner struct {
-	pruner   OSVVulnerabilityCachePruner
-	interval time.Duration
-	logger   *zap.Logger
+	evidenceHold func() bool
+	pruner       OSVVulnerabilityCachePruner
+	interval     time.Duration
+	logger       *zap.Logger
 }
 
 func NewOSVVulnerabilityCacheCleanupRunner(pruner OSVVulnerabilityCachePruner, interval time.Duration, logger *zap.Logger) *OSVVulnerabilityCacheCleanupRunner {
@@ -96,6 +103,8 @@ func NewOSVVulnerabilityCacheCleanupRunner(pruner OSVVulnerabilityCachePruner, i
 	}
 	return &OSVVulnerabilityCacheCleanupRunner{pruner: pruner, interval: interval, logger: logger}
 }
+
+func (r *OSVVulnerabilityCacheCleanupRunner) SetEvidenceHold(hold func() bool) { r.evidenceHold = hold }
 
 func (r *OSVVulnerabilityCacheCleanupRunner) Name() string {
 	return "osv-vulnerability-cache-cleanup"
@@ -114,6 +123,9 @@ func (r *OSVVulnerabilityCacheCleanupRunner) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			if r.evidenceHold != nil && r.evidenceHold() {
+				continue
+			}
 			count, err := r.pruner.PruneExpiredOSVVulnerabilityCache(ctx, time.Now())
 			if err != nil {
 				r.logger.Warn("osv vulnerability cache cleanup failed", zap.Error(err))
@@ -164,9 +176,10 @@ func (t ContextVMResponseRetention) Retire(ctx context.Context, now time.Time) (
 // expiry no event signals: on each interval it runs every RetentionTask in
 // turn. New retention work joins it as a task instead of adding a ticker.
 type RetentionRunner struct {
-	tasks    []RetentionTask
-	interval time.Duration
-	logger   *zap.Logger
+	evidenceHold func() bool
+	tasks        []RetentionTask
+	interval     time.Duration
+	logger       *zap.Logger
 }
 
 func NewRetentionRunner(interval time.Duration, logger *zap.Logger, tasks ...RetentionTask) *RetentionRunner {
@@ -178,6 +191,8 @@ func NewRetentionRunner(interval time.Duration, logger *zap.Logger, tasks ...Ret
 	}
 	return &RetentionRunner{tasks: append([]RetentionTask(nil), tasks...), interval: interval, logger: logger}
 }
+
+func (r *RetentionRunner) SetEvidenceHold(hold func() bool) { r.evidenceHold = hold }
 
 func (r *RetentionRunner) Name() string { return "retention" }
 
@@ -201,7 +216,13 @@ func (r *RetentionRunner) Run(ctx context.Context) error {
 // retire runs every task once. A failing task is logged and does not hold
 // back the others; it is retried on the next wakeup.
 func (r *RetentionRunner) retire(ctx context.Context, now time.Time) {
+	if r.evidenceHold != nil && r.evidenceHold() {
+		return
+	}
 	for _, task := range r.tasks {
+		if r.evidenceHold != nil && r.evidenceHold() {
+			return
+		}
 		if ctx.Err() != nil {
 			return
 		}

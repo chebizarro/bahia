@@ -77,6 +77,19 @@ authorizes any part of recovery.
   the signer has already rotated. The root never defaults to the service key. The web deployment
   bootstrap carries the same pair; CLI reads use `--service-id` and
   `--operator-root-pubkey` with explicit relay URLs when epoch mode is enabled.
+- Missing/garbled epoch state fails CLOSED (no fallback to the old key).
+- The old-key daemon contains itself as soon as it verifies an operator-root
+  incident declaration naming its own service pubkey. It persists the incident
+  head in the durable local outbox store and keeps a separate containment
+  marker beside the outbox. Outbound EVENT/AUTH admission, old-key signing,
+  mutating intents, assistant async/mutation tools, and evidence-retention
+  passes remain fenced across process restarts. Reads remain available.
+- A verified `aborted=true` replacement lifts daemon containment only before
+  `cut-activate-trust` and only after the incident subscription catches up on
+  every configured relay. EOSE is not absence proof: a missing declaration
+  never clears a durable marker. An activated trust-epoch does not lift the
+  old-key daemon's containment; recovery deploys a daemon under the new
+  identity instead.
 - Registered consumers: daemon bootstrap trust, relay sidecar read-auth/NIP-42,
   web bootstrap seed, CLI fleet pools, DNS, Loom, SoulFactory, HiveCI, pinned
   runtimes. The last five are registered as `enforcement=pending` and verify

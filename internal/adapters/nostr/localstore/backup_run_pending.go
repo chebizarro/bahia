@@ -126,12 +126,18 @@ func putBackupRunPending(tx *bbolt.Tx, record BackupRunPending) error {
 // executor's terminal status has exact publisher-quorum proof. Until then the
 // executor still needs the full request to recover an interrupted effect.
 func (o *Outbox) CompactBackupRunAccepted(intentID, coordinate, requestEventID string, terminal nostr.Event, target string) error {
+	if o != nil && o.shared != nil && o.shared.evidenceHold.Load() {
+		return nil
+	}
 	if o == nil || o.shared == nil || o.shared.readOnly || terminal.ID == nostr.ZeroID || target == "" {
 		return ErrReadOnly
 	}
 	o.shared.backupRunStatusMu.Lock()
 	defer o.shared.backupRunStatusMu.Unlock()
 	return o.shared.db.Update(func(tx *bbolt.Tx) error {
+		if o.shared.evidenceHold.Load() {
+			return nil
+		}
 		var record BackupRunPending
 		raw := tx.Bucket(backupRunPendingBucket).Get([]byte(intentID))
 		if raw == nil || json.Unmarshal(raw, &record) != nil || !validRetainedBackupRunIdentity(record) ||

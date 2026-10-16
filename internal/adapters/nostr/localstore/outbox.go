@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -153,6 +154,7 @@ type sharedOutbox struct {
 	// Serializes backup admission with generic status publication through
 	// its relay round. All handles in this process share this lock.
 	backupRunStatusMu sync.Mutex
+	evidenceHold      atomic.Bool
 }
 
 var openOutboxes = struct {
@@ -1097,15 +1099,25 @@ func (o *Outbox) Counts() (OutboxCounts, error) {
 	return counts, nil
 }
 
+// SetEvidenceHold suspends destructive retention while the old service
+// identity is contained. Every handle sharing this outbox sees the same gate.
+func (o *Outbox) SetEvidenceHold(active bool) { o.shared.evidenceHold.Store(active) }
+
 // Prune deletes published entries settled before publishedBefore and failed
 // entries settled before failedBefore, and returns how many it removed.
 // Pending entries are never pruned.
 func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
+	if o.shared.evidenceHold.Load() {
+		return 0, nil
+	}
 	if o.shared.readOnly {
 		return 0, ErrReadOnly
 	}
 	removed := 0
 	err := o.shared.db.Update(func(tx *bbolt.Tx) error {
+		if o.shared.evidenceHold.Load() {
+			return nil
+		}
 		entries := tx.Bucket(outboxEntriesBucket)
 		for state, before := range map[string]time.Time{OutboxPublished: publishedBefore, OutboxFailed: failedBefore} {
 			index := tx.Bucket(settledBucket(state))
@@ -1116,6 +1128,9 @@ func (o *Outbox) Prune(publishedBefore, failedBefore time.Time) (int, error) {
 				expired = append(expired, bytes.Clone(key))
 			}
 			for _, key := range expired {
+				if o.shared.evidenceHold.Load() {
+					return nil
+				}
 				var id nostr.ID
 				copy(id[:], key[8:])
 				pinned, err := backupRunAdmissionUnresolved(tx, id)

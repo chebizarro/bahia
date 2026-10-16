@@ -23,6 +23,8 @@ type runtimeObservationBatchDeleter interface {
 // RuntimeObservationRetentionRunner drains the derived PostgreSQL history in
 // paced, independently committed batches without participating in readiness.
 type RuntimeObservationRetentionRunner struct {
+	evidenceHold                      func() bool
+	containmentChanged                func() <-chan struct{}
 	deleter                           runtimeObservationBatchDeleter
 	logger                            *zap.Logger
 	now                               func() time.Time
@@ -39,6 +41,10 @@ func NewRuntimeObservationRetentionRunner(deleter runtimeObservationBatchDeleter
 	}
 }
 
+func (r *RuntimeObservationRetentionRunner) SetEvidenceHold(hold func() bool, changed func() <-chan struct{}) {
+	r.evidenceHold, r.containmentChanged = hold, changed
+}
+
 func (*RuntimeObservationRetentionRunner) Name() string { return "runtime-observation-retention" }
 
 func (r *RuntimeObservationRetentionRunner) Run(ctx context.Context) error {
@@ -50,7 +56,22 @@ func (r *RuntimeObservationRetentionRunner) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		count, err := r.deleter.DeleteExpiredBatch(ctx, r.now().UTC().Add(-runtimeObservationRetention), runtimeObservationBatchSize)
+		if r.evidenceHold != nil && r.containmentChanged != nil {
+			changed := r.containmentChanged()
+			if r.evidenceHold() {
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-changed:
+					continue
+				}
+			}
+		}
+		var count int64
+		var err error
+		if r.evidenceHold == nil || !r.evidenceHold() {
+			count, err = r.deleter.DeleteExpiredBatch(ctx, r.now().UTC().Add(-runtimeObservationRetention), runtimeObservationBatchSize)
+		}
 		if ctx.Err() != nil {
 			return nil
 		}

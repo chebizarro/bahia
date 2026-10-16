@@ -105,6 +105,9 @@ func (s *Store) ClaimContextVMRequest(req ContextVMRequest, now time.Time) (Cont
 	}
 	var claim ContextVMClaim
 	err := s.backend().DB.Update(func(tx *bbolt.Tx) error {
+		if s.shared.evidenceHold.Load() {
+			return nil
+		}
 		requests, keys, deliveries, err := contextVMBuckets(tx)
 		if err != nil {
 			return err
@@ -260,6 +263,9 @@ func (s *Store) ContextVMLedgerEpoch(now time.Time) (time.Time, error) {
 // and the oldest event its resume filter can fetch, so a pruned entry can
 // never be needed again.
 func (s *Store) PruneContextVMLedger(cutoff time.Time) (int, error) {
+	if s.shared.evidenceHold.Load() {
+		return 0, nil
+	}
 	limit := cutoff.Unix()
 	removed := 0
 	err := s.backend().DB.Update(func(tx *bbolt.Tx) error {

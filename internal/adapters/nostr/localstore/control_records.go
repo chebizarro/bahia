@@ -66,6 +66,29 @@ func (o *Outbox) ListControlRecords(family string) ([][]byte, error) {
 	return values, err
 }
 
+// ControlRecordsByID returns exact durable keys as well as values so
+// security-sensitive readers can reject records stored under a mismatched
+// coordinate instead of trusting a value-only listing.
+func (o *Outbox) ControlRecordsByID(family string) (map[string][]byte, error) {
+	if o == nil || o.shared == nil || family == "" {
+		return nil, fmt.Errorf("control record store and family are required")
+	}
+	values := make(map[string][]byte)
+	prefix := []byte(family + "\x00")
+	err := o.shared.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(controlRecordsBucket)
+		if bucket == nil {
+			return nil
+		}
+		cursor := bucket.Cursor()
+		for key, value := cursor.Seek(prefix); bytes.HasPrefix(key, prefix); key, value = cursor.Next() {
+			values[string(key[len(prefix):])] = bytes.Clone(value)
+		}
+		return nil
+	})
+	return values, err
+}
+
 func (o *Outbox) DeleteControlRecord(family, id string) (bool, error) {
 	if o == nil || o.shared == nil || family == "" || id == "" {
 		return false, fmt.Errorf("control record store and key are required")

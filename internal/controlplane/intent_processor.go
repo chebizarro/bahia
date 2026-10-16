@@ -122,6 +122,8 @@ type IntentProcessorConfig struct {
 	// EnabledDomains is the set of domain families for which intents are
 	// processed. An intent for a domain not in this set is silently ignored.
 	EnabledDomains map[string]bool
+	// Containment reports the runtime old-identity fence and public incident id.
+	Containment func() (bool, string)
 }
 
 // IntentProcessor is the pipeline for signed relay and in-process MCP intents.
@@ -158,6 +160,29 @@ func NewIntentProcessor(
 	}
 }
 
+// IncidentRefusal is a redacted, typed refusal for an in-process mutation.
+// Relay mutations are logged and dropped without a service-signed status.
+type IncidentRefusal struct{ IncidentID string }
+
+func (*IncidentRefusal) Error() string {
+	return "identity incident containment active; mutation refused"
+}
+
+func (p *IntentProcessor) refuseContained(inProcess bool) (bool, error) {
+	if p.config.Containment == nil {
+		return false, nil
+	}
+	active, id := p.config.Containment()
+	if !active {
+		return false, nil
+	}
+	p.logger.Warn("dropping mutation during identity containment", zap.String("incident_id", id))
+	if inProcess {
+		return true, &IncidentRefusal{IncidentID: id}
+	}
+	return true, nil
+}
+
 // RegisterHandler registers a domain handler. F2/F3/F4 call this at startup.
 func (p *IntentProcessor) RegisterHandler(domain string, handler DomainHandler) {
 	p.mu.Lock()
@@ -183,6 +208,9 @@ func (p *IntentProcessor) Handler(domain string) DomainHandler {
 // Untrusted authors are dropped silently. Known principals lacking
 // permission get a bounded rejection status.
 func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Event) error {
+	if contained, _ := p.refuseContained(false); contained {
+		return nil
+	}
 	intent, err := ParseIntent(ev)
 	if err != nil {
 		if isLLMLifecycleIntent(intent) {
@@ -228,6 +256,9 @@ func (p *IntentProcessor) ProcessRelayIntent(ctx context.Context, ev *nostr.Even
 // and idempotency store as signed relay intents. The caller must already be
 // authenticated and authorized; Actor identifies that caller, not the daemon.
 func (p *IntentProcessor) ProcessInProcess(ctx context.Context, intent *Intent) error {
+	if contained, err := p.refuseContained(true); contained {
+		return err
+	}
 	if intent == nil {
 		return fmt.Errorf("intent is required")
 	}
@@ -280,6 +311,9 @@ func (p *IntentProcessor) validateLLMLifecycleAdmission(intent *Intent) error {
 }
 
 func (p *IntentProcessor) process(ctx context.Context, intent *Intent, inProcess bool) error {
+	if contained, err := p.refuseContained(inProcess); contained {
+		return err
+	}
 	// Step 0: Check domain is enabled.
 	if !p.config.EnabledDomains[intent.Domain] {
 		if inProcess {

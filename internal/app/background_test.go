@@ -69,6 +69,38 @@ type testOSVVulnerabilityCachePruner struct {
 	err   error
 }
 
+type testOCIUploadCleaner struct{ calls chan struct{} }
+
+func (c *testOCIUploadCleaner) CleanupExpiredUploads(context.Context, time.Time) (int, error) {
+	c.calls <- struct{}{}
+	return 0, nil
+}
+
+func TestOCIUploadCleanupSuspendedDuringIdentityContainment(t *testing.T) {
+	cleaner := &testOCIUploadCleaner{calls: make(chan struct{}, 1)}
+	checked := make(chan struct{}, 1)
+	runner := NewOCIUploadCleanupRunner(cleaner, time.Millisecond, zap.NewNop())
+	runner.SetEvidenceHold(func() bool {
+		select {
+		case checked <- struct{}{}:
+		default:
+		}
+		return true
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- runner.Run(ctx) }()
+	select {
+	case <-checked:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("OCI cleanup did not check containment")
+	}
+	cancel()
+	require.NoError(t, <-done)
+	require.Empty(t, cleaner.calls)
+}
+
 func (p *testOSVVulnerabilityCachePruner) PruneExpiredOSVVulnerabilityCache(_ context.Context, now time.Time) (int64, error) {
 	select {
 	case p.calls <- now:
