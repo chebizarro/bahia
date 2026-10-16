@@ -19,6 +19,7 @@ import (
 // executor. Publisher and Subscriber are interfaces so the wiring can be
 // exercised against a deterministic relay.
 type assistantExecutionDeps struct {
+	Containment     func() bool
 	Logger          *zap.Logger
 	Config          *config.Config
 	MCPServer       *mcp.Server
@@ -132,6 +133,7 @@ func buildAssistantExecution(deps assistantExecutionDeps) (*assistantExecutionWi
 		MCPServer:   assistantMCPRuntimeAdapter{server: deps.MCPServer, externalTools: deps.ExternalMCP.clients},
 		Registry:    registry,
 		Permissions: permissionEngine,
+		Containment: deps.Containment,
 		Hooks:       hooks,
 	})
 	status := service.NewAssistantStatusEventPublisher(deps.Publisher, deps.Signer, deps.Identity)

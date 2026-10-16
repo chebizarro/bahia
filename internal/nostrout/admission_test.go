@@ -915,3 +915,41 @@ func TestProcessControllerIsFixedAfterFirstInitialization(t *testing.T) {
 	require.ErrorIs(t, err, ErrConfigFixed)
 	require.Equal(t, "/run/stop", p.admission.killSwitchFile, "a rejected init must not touch the controller in effect")
 }
+
+func TestRuntimeIncidentKillSwitchPersistsAndFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "outbox.bolt.identity-containment")
+	a := New(Config{})
+	require.NoError(t, a.ConfigureRuntimeKillSwitch(path))
+	require.NoError(t, a.ActivateRuntimeKillSwitch("019a0000-0000-7000-8000-000000000001"))
+	require.ErrorIs(t, a.AdmitAuth(t.Context(), relayA), ErrKillSwitch)
+	require.True(t, a.State().KillSwitchActive)
+	require.NoError(t, os.Remove(path))
+	require.ErrorContains(t, a.ConfigureRuntimeKillSwitch(path), "missing")
+	require.True(t, a.State().KillSwitchActive)
+	require.NoError(t, a.ActivateRuntimeKillSwitch("019a0000-0000-7000-8000-000000000001"))
+
+	restarted := New(Config{})
+	require.NoError(t, restarted.ConfigureRuntimeKillSwitch(path))
+	active, id := restarted.RuntimeKillSwitch()
+	require.True(t, active)
+	require.Equal(t, "019a0000-0000-7000-8000-000000000001", id)
+	require.ErrorIs(t, restarted.AdmitAuth(t.Context(), relayA), ErrKillSwitch)
+
+	require.NoError(t, restarted.ReleaseRuntimeKillSwitch())
+	active, _ = restarted.RuntimeKillSwitch()
+	require.False(t, active)
+	clean := New(Config{})
+	require.NoError(t, clean.ConfigureRuntimeKillSwitch(path))
+	require.False(t, clean.State().KillSwitchActive)
+
+	require.NoError(t, os.WriteFile(path, []byte("invalid marker"), 0600))
+	corrupt := New(Config{})
+	require.ErrorContains(t, corrupt.ConfigureRuntimeKillSwitch(path), "malformed")
+	require.True(t, corrupt.State().KillSwitchActive)
+	require.NoError(t, os.WriteFile(path, []byte(`{"incident_id":"secret-bearing or malformed input"}`), 0600))
+	malformedID := New(Config{})
+	require.ErrorContains(t, malformedID.ConfigureRuntimeKillSwitch(path), "malformed")
+	active, id = malformedID.RuntimeKillSwitch()
+	require.True(t, active)
+	require.Empty(t, id, "untrusted marker content must not be exposed through health")
+}

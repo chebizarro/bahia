@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fiatjaf.com/nostr"
@@ -85,7 +86,8 @@ type sharedStore struct {
 	refs    int
 	// saveMu serialises SaveEvent: its "already held?" check and the write
 	// must not interleave with another save of the same id or coordinate.
-	saveMu sync.Mutex
+	saveMu       sync.Mutex
+	evidenceHold atomic.Bool
 }
 
 var openStores = struct {
@@ -443,6 +445,8 @@ func (s *Store) pagedQuery(filter nostr.Filter, limit int) iter.Seq[nostr.Event]
 	}
 }
 
+func (s *Store) SetEvidenceHold(active bool) { s.shared.evidenceHold.Store(active) }
+
 // PruneRegularEvents deletes stored regular (non-replaceable, non-addressable)
 // events created before cutoff and returns how many it removed. It keeps the
 // store bounded: the replay window of every cursor is far shorter than
@@ -450,6 +454,9 @@ func (s *Store) pagedQuery(filter nostr.Filter, limit int) iter.Seq[nostr.Event]
 // new by an ordinary resume. NIP-09 deletion requests are kept: they are
 // tombstones for state that never expires, reconciled in full like it.
 func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
+	if s.shared.evidenceHold.Load() {
+		return 0, nil
+	}
 	until := nostr.Timestamp(cutoff.Unix())
 	if until <= 0 {
 		return 0, nil
@@ -461,6 +468,9 @@ func (s *Store) PruneRegularEvents(cutoff time.Time) (int, error) {
 		}
 	}
 	for i, id := range expired {
+		if s.shared.evidenceHold.Load() {
+			return i, nil
+		}
 		if err := s.DeleteEvent(id); err != nil {
 			return i, fmt.Errorf("prune local event %s: %w", id.Hex(), err)
 		}
@@ -499,6 +509,9 @@ func assistantCheckpointEvent(ev nostr.Event) bool {
 // retention sweep; without it, latest-wins coordinates would stay for good.
 // Events without a parsable expiration are kept.
 func (s *Store) PruneExpiredEvents(now time.Time) (int, error) {
+	if s.shared.evidenceHold.Load() {
+		return 0, nil
+	}
 	deadline := now.Unix()
 	var expired []nostr.ID
 	for ev := range s.QueryEvents(nostr.Filter{}) {
@@ -507,6 +520,9 @@ func (s *Store) PruneExpiredEvents(now time.Time) (int, error) {
 		}
 	}
 	for i, id := range expired {
+		if s.shared.evidenceHold.Load() {
+			return i, nil
+		}
 		if err := s.DeleteEvent(id); err != nil {
 			return i, fmt.Errorf("prune expired local event %s: %w", id.Hex(), err)
 		}

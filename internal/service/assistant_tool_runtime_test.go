@@ -279,3 +279,30 @@ func TestAssistantRuntimeSubagentChildCallsAreGatedAndSyncOnly(t *testing.T) {
 		t.Fatalf("child dispatch invokes=%d calls=%d internal=%d", server.invokeCount(), server.callCount(), calls)
 	}
 }
+
+func TestAssistantRuntimeIdentityContainmentRefusesAsyncAndAllowsRead(t *testing.T) {
+	active := true
+	server := &assistantRuntimeMCPServer{}
+	async := AssistantToolRuntimeToolDescriptor{Name: "mutate", ExecutionMode: domain.AssistantToolExecutionModeAsync, Effect: domain.AssistantToolEffectMutation, DefaultRisk: domain.AssistantToolRiskLow, InputSchema: map[string]any{"type": "object"}}
+	runtime := NewAssistantToolRuntime(AssistantToolRuntimeConfig{MCPServer: server, Registry: assistantRuntimeRegistryWith(syncDescriptor("read"), async), Permissions: NewAssistantPermissionEngine(config.AssistantPermissionsConfig{Mode: domain.AssistantPermissionModeAudited}, nil), Containment: func() bool { return active }})
+	execution := domain.AssistantExecution{Version: 2, SessionID: "session", RunID: "run", Workflow: domain.AssistantWorkflowIterative}
+	mutation := domain.AssistantWorkItem{WorkID: "run:mutation", OriginID: "mutation", ToolName: "mutate", Arguments: map[string]any{}}
+	var denial *AssistantWorkDenial
+	if _, err := runtime.PrepareWork(context.Background(), execution, mutation); !errors.As(err, &denial) || !strings.Contains(denial.Reason, "identity incident") {
+		t.Fatalf("async mutation not refused by containment: %v", err)
+	}
+	prepared := AssistantPreparedWork{Execution: execution, Work: mutation, Descriptor: async}
+	obs, receipt, err := runtime.DispatchPreparedWork(context.Background(), prepared)
+	if err != nil || receipt != nil || obs == nil || server.invokeCount() != 0 {
+		t.Fatalf("pre-prepared async mutation escaped containment: obs=%+v receipt=%v err=%v", obs, receipt, err)
+	}
+	read := domain.AssistantWorkItem{WorkID: "run:read", OriginID: "read", ToolName: "read", Arguments: map[string]any{}}
+	readPrepared, err := runtime.PrepareWork(context.Background(), execution, read)
+	if err != nil {
+		t.Fatalf("read refused during containment: %v", err)
+	}
+	obs, receipt, err = runtime.DispatchPreparedWork(context.Background(), readPrepared)
+	if err != nil || receipt != nil || obs == nil || server.callCount() != 1 {
+		t.Fatalf("read unavailable during containment: obs=%+v receipt=%v err=%v", obs, receipt, err)
+	}
+}

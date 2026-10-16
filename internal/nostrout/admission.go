@@ -15,12 +15,14 @@ package nostrout
 import (
 	"container/list"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -307,7 +309,11 @@ type Admission struct {
 	breakerUntil      time.Time
 	breakerGeneration uint64
 
-	killSwitchFile string
+	killSwitchFile        string
+	runtimeKillSwitchPath string
+	runtimeKilled         bool
+	runtimeIncidentID     string
+	runtimeChanged        chan struct{}
 
 	duplicateTTL   time.Duration
 	duplicateLimit int
@@ -425,6 +431,7 @@ func newWithClock(cfg Config, clk clock) *Admission {
 		breakerMin:          cfg.BreakerMin,
 		breakerMax:          cfg.BreakerMax,
 		killSwitchFile:      strings.TrimSpace(cfg.KillSwitchFile),
+		runtimeChanged:      make(chan struct{}),
 		duplicateTTL:        cfg.DuplicateTTL,
 		duplicateLimit:      cfg.DuplicateLimit,
 		receipts:            make(map[receiptKey]*list.Element),
@@ -625,9 +632,182 @@ func killSwitchActive(path string) (bool, error) {
 	}
 }
 
+// ConfigureRuntimeKillSwitch binds a durable incident marker next to the outbox.
+// A malformed or unreadable marker remains an active kill switch. Rebinding is
+// used when a reload candidate opens the same outbox.
+func (a *Admission) ConfigureRuntimeKillSwitch(path string) error {
+	if a == nil || strings.TrimSpace(path) == "" {
+		return ErrNotConfigured
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.runtimeKilled && a.runtimeKillSwitchPath != "" && a.runtimeKillSwitchPath != path {
+		return errors.New("active incident containment marker cannot be rebound")
+	}
+	a.runtimeKillSwitchPath = path
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if a.runtimeKilled {
+			return errors.New("active incident containment marker is missing")
+		}
+		a.runtimeIncidentID = ""
+		return nil
+	}
+	a.runtimeKilled = true
+	a.runtimeIncidentID = ""
+	a.signalRuntimeChangedLocked()
+	if err != nil {
+		return fmt.Errorf("read incident containment marker: %w", err)
+	}
+	var marker struct {
+		IncidentID string `json:"incident_id"`
+	}
+	if err := json.Unmarshal(raw, &marker); err != nil || !validRuntimeIncidentID(marker.IncidentID) {
+		return errors.New("incident containment marker is malformed")
+	}
+	a.runtimeIncidentID = marker.IncidentID
+	return nil
+}
+
+// ActivateRuntimeKillSwitch fences this process before writing its durable
+// marker. A write failure never clears the in-memory fence.
+func (a *Admission) ActivateRuntimeKillSwitch(incidentID string) error {
+	if a == nil || strings.TrimSpace(incidentID) == "" {
+		return ErrNotConfigured
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.runtimeKilled = true
+	if !validRuntimeIncidentID(incidentID) {
+		incidentID = "invalid-state"
+	}
+	a.runtimeIncidentID = incidentID
+	a.signalRuntimeChangedLocked()
+	if a.runtimeKillSwitchPath == "" {
+		return errors.New("incident containment marker path is not configured")
+	}
+	raw, _ := json.Marshal(struct {
+		IncidentID string `json:"incident_id"`
+	}{incidentID})
+	return writeRuntimeKillSwitchMarker(a.runtimeKillSwitchPath, raw)
+}
+
+// ReleaseRuntimeKillSwitch is called only after a verified pre-cutover abort
+// and complete relay catch-up. The in-memory fence remains on removal failure.
+func (a *Admission) ReleaseRuntimeKillSwitch() error {
+	if a == nil {
+		return ErrNotConfigured
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.runtimeKillSwitchPath == "" {
+		return errors.New("incident containment marker path is not configured")
+	}
+	if err := os.Remove(a.runtimeKillSwitchPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("remove incident containment marker: %w", err)
+	}
+	if err := syncRuntimeKillSwitchDir(filepath.Dir(a.runtimeKillSwitchPath)); err != nil {
+		return err
+	}
+	a.runtimeKilled, a.runtimeIncidentID = false, ""
+	a.signalRuntimeChangedLocked()
+	return nil
+}
+
+func (a *Admission) RuntimeKillSwitchSignal() <-chan struct{} {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.runtimeChanged
+}
+
+func (a *Admission) signalRuntimeChangedLocked() {
+	if a.runtimeChanged != nil {
+		close(a.runtimeChanged)
+	}
+	a.runtimeChanged = make(chan struct{})
+}
+
+func (a *Admission) RuntimeKillSwitch() (bool, string) {
+	if a == nil {
+		return true, ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.runtimeKilled, a.runtimeIncidentID
+}
+
+// Incident IDs exposed by health are either a canonical UUIDv7 or the fixed
+// malformed-state sentinel, never arbitrary marker content.
+func validRuntimeIncidentID(id string) bool {
+	if id == "invalid-state" {
+		return true
+	}
+	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' || id[14] != '7' {
+		return false
+	}
+	if id[19] != '8' && id[19] != '9' && id[19] != 'a' && id[19] != 'b' {
+		return false
+	}
+	for i := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			continue
+		}
+		if id[i] < '0' || id[i] > '9' {
+			if id[i] < 'a' || id[i] > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func writeRuntimeKillSwitchMarker(path string, raw []byte) error {
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(dir, ".identity-containment-*")
+	if err != nil {
+		return fmt.Errorf("create incident containment marker: %w", err)
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(raw); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	return syncRuntimeKillSwitchDir(dir)
+}
+
+func syncRuntimeKillSwitchDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = dir.Close() }()
+	return dir.Sync()
+}
+
 // killSwitchLocked rejects when the operator kill switch is active or its
 // configured file cannot be read safely.
 func (a *Admission) killSwitchLocked() error {
+	if a.runtimeKilled {
+		a.metrics.KillSwitchRejected++
+		return ErrKillSwitch
+	}
 	active, err := killSwitchActive(a.killSwitchFile)
 	if err != nil {
 		a.metrics.KillSwitchRejected++
@@ -880,7 +1060,7 @@ func (a *Admission) State() State {
 		CircuitOpen: a.clock.Now().Before(a.breakerUntil),
 	}
 	active, err := killSwitchActive(a.killSwitchFile)
-	state.KillSwitchActive = active || err != nil
+	state.KillSwitchActive = a.runtimeKilled || active || err != nil
 	if err != nil {
 		state.KillSwitchError = err.Error()
 	}

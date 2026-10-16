@@ -112,6 +112,7 @@ type AssistantInternalTool struct {
 // The runtime never owns execution state: the executor checkpoints every
 // transition and calls PrepareWork/DispatchPreparedWork.
 type AssistantToolRuntimeConfig struct {
+	Containment func() bool
 	MCPServer   AssistantToolRuntimeMCPServer
 	Registry    AssistantToolRuntimeRegistry
 	Permissions AssistantToolPermissionEvaluator
@@ -124,6 +125,7 @@ type AssistantToolRuntimeConfig struct {
 // assistant work. It normalizes sync MCP results, internal-tool results and
 // async receipts into AssistantToolObservation/receipt values for the executor.
 type AssistantToolRuntime struct {
+	containment func() bool
 	mcpServer   AssistantToolRuntimeMCPServer
 	registry    AssistantToolRuntimeRegistry
 	permissions AssistantToolPermissionEvaluator
@@ -147,6 +149,7 @@ func NewAssistantToolRuntime(config AssistantToolRuntimeConfig) *AssistantToolRu
 	}
 	return &AssistantToolRuntime{
 		mcpServer:   config.MCPServer,
+		containment: config.Containment,
 		registry:    config.Registry,
 		permissions: config.Permissions,
 		hooks:       config.Hooks,
@@ -382,6 +385,9 @@ func (r *AssistantToolRuntime) PrepareWork(ctx context.Context, execution domain
 	if !ok {
 		return AssistantPreparedWork{}, denyAssistantWork("tool %q is not registered", work.ToolName)
 	}
+	if r.containment != nil && r.containment() && (descriptor.ExecutionMode == domain.AssistantToolExecutionModeAsync || descriptor.Effect != domain.AssistantToolEffectRead) {
+		return AssistantPreparedWork{}, denyAssistantWork("identity incident containment active")
+	}
 	if _, internal := r.internalTool(work.ToolName); internal && execution.Workflow != domain.AssistantWorkflowIterative {
 		// Internal tools keep their separate registration and are not part of
 		// the batch catalog.
@@ -511,6 +517,9 @@ func (r *AssistantToolRuntime) DispatchPreparedWork(ctx context.Context, prepare
 	work := prepared.Work
 	call := domain.AssistantAgentToolCall{ID: work.OriginID, Name: work.ToolName, Arguments: work.Arguments}
 	descriptor := prepared.Descriptor
+	if r.containment != nil && r.containment() && (descriptor.ExecutionMode == domain.AssistantToolExecutionModeAsync || descriptor.Effect != domain.AssistantToolEffectRead) {
+		return r.failedObservation(call, descriptor, prepared.Permission, "identity incident containment active"), nil, nil
+	}
 	// The one place tool calls get their principal: the operator this work
 	// acts as, from the persisted execution (so recovery and re-dispatch use
 	// the same operator). It covers the provider call, PostToolUse hooks,

@@ -60,6 +60,18 @@ part of recovery.
   pubkey as the service identity and treat old-key events as hostile unless the
   event id is in the accepted inventory AND created_at ≤ activation_barrier.
 - Missing/garbled epoch state fails CLOSED (no fallback to the old key).
+- The old-key daemon contains itself as soon as it verifies an operator-root
+  incident declaration naming its own service pubkey. It persists the incident
+  head in the durable local outbox store and keeps a separate containment
+  marker beside the outbox. Outbound EVENT/AUTH admission, old-key signing,
+  mutating intents, assistant async/mutation tools, and evidence-retention
+  passes remain fenced across process restarts. Reads remain available.
+- A verified `aborted=true` replacement lifts daemon containment only before
+  `cut-activate-trust` and only after the incident subscription catches up on
+  every configured relay. EOSE is not absence proof: a missing declaration
+  never clears a durable marker. An activated trust-epoch does not lift the
+  old-key daemon's containment; recovery deploys a daemon under the new
+  identity instead.
 - Registered consumers: daemon bootstrap trust, relay sidecar read-auth/NIP-42,
   web bootstrap seed, CLI fleet pools, DNS, Loom, SoulFactory, HiveCI, pinned
   runtimes. Each either publishes an acknowledgment or is verified fail-closed

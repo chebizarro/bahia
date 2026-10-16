@@ -73,7 +73,7 @@ func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *
 		cancel()
 		return nil, nil, err
 	}
-	signer := &serviceSigner{keyer: keyer, config: nostrCfg, holders: 1, close: func() {
+	signer := &serviceSigner{keyer: keyer, guarded: containmentKeyer{Keyer: keyer, admission: admission}, config: nostrCfg, holders: 1, close: func() {
 		cancel()
 		if closer, ok := keyer.(io.Closer); ok {
 			_ = closer.Close()
@@ -88,7 +88,8 @@ func newServiceKeyer(cfg *config.Config, admission *nostrout.Admission, logger *
 // application never closes a session the new one uses, a failed candidate
 // leaves it to the old one, and it closes exactly once at final shutdown.
 type serviceSigner struct {
-	keyer nostr.Keyer
+	keyer   nostr.Keyer
+	guarded nostr.Keyer
 	// config is the signer config the session was opened with, its client
 	// key file resolved to the key it held then.
 	config config.NostrConfig
@@ -103,7 +104,37 @@ func (s *serviceSigner) Keyer() nostr.Keyer {
 	if s == nil {
 		return nil
 	}
+	if s.guarded != nil {
+		return s.guarded
+	}
 	return s.keyer
+}
+
+// ErrServiceSignerQuarantined is deliberately redacted: a contained daemon
+// never asks its old identity to sign, including relay AUTH and status events.
+var ErrServiceSignerQuarantined = errors.New("service signer quarantined by identity incident")
+
+type containmentKeyer struct {
+	nostr.Keyer
+	admission *nostrout.Admission
+}
+
+func (k containmentKeyer) SignEvent(ctx context.Context, event *nostr.Event) error {
+	if k.admission != nil {
+		if active, _ := k.admission.RuntimeKillSwitch(); active {
+			return ErrServiceSignerQuarantined
+		}
+	}
+	return k.Keyer.SignEvent(ctx, event)
+}
+
+// Preserve the optional local-key capability used by legacy readers without
+// exposing it for a remote signer that never held key material.
+func (k containmentKeyer) ServiceKeyMaterial() string {
+	if holder, ok := k.Keyer.(nostrutil.ServiceKeyMaterialHolder); ok {
+		return holder.ServiceKeyMaterial()
+	}
+	return ""
 }
 
 // acquire adds a holder. It fails once the session has closed.

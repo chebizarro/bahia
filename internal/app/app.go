@@ -104,6 +104,7 @@ type App struct {
 	hiveCIInitiator           *giteaAdapter.Initiator
 	localEventStore           *localstore.Store
 	localOutbox               *localstore.Outbox
+	IdentityIncidents         *controlplane.IdentityIncidents
 	runtimeResolver           *runtime.ConfigRuntimeResolver
 	reloadMu                  sync.Mutex
 
@@ -191,6 +192,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	outboundAdmission, err := nostrout.InitDefault(cfg.Nostr.Outbound.Admission())
 	if err != nil {
 		return nil, fmt.Errorf("configuring nostr outbound admission: %w", err)
+	}
+	if err := outboundAdmission.ConfigureRuntimeKillSwitch(cfg.Nostr.LocalStore.ResolvedOutboxPath() + ".identity-containment"); err != nil {
+		logger.Error("incident containment marker could not be read; outbound remains fenced", zap.Error(err))
 	}
 
 	signerSession, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger, runningSigner)
@@ -362,6 +366,17 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if aside := localOutbox.MovedAside(); aside != "" {
 		logger.Error("local Nostr publish outbox was unreadable and was moved aside; events still pending in it were not delivered",
 			zap.String("moved_to", aside))
+	}
+	identityContainment := newIdentityContainment(outboundAdmission, localEventStore, localOutbox)
+	var identityIncidents *controlplane.IdentityIncidents
+	if servicePubkey != "" && len(cfg.Nostr.AuthorizedPubkeys) > 0 {
+		identityIncidents, err = controlplane.NewIdentityIncidents(controlPlanePool, localEventStore, localOutbox, identityContainment, cfg.Nostr.AuthorizedPubkeys, servicePubkey, logger)
+		if err != nil {
+			return nil, fmt.Errorf("configure identity incident consumer: %w", err)
+		}
+		if err := identityIncidents.Load(); err != nil {
+			logger.Error("durable identity incident state invalid; outbound remains fenced", zap.Error(err))
+		}
 	}
 	if relayPolicyProjectionRepo == nil {
 		// Without PostgreSQL the accepted relay policy head is a durable local
@@ -810,10 +825,15 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	// Background runner manager and startup health provider.
 	bgManager := NewBackgroundManager(logger)
+	if identityIncidents != nil {
+		bgManager.RegisterWithOptions(identityIncidents, RunnerRequired(false))
+	}
 	bgManager.RegisterWithOptions(nostrPub)
 	bgManager.RegisterWithOptions(controlPlanePub)
 	if pgObservations, ok := obsRepo.(*repository.PgRuntimeObservationRepository); ok {
-		bgManager.RegisterWithOptions(NewRuntimeObservationRetentionRunner(pgObservations, logger), RunnerRequired(false))
+		runner := NewRuntimeObservationRetentionRunner(pgObservations, logger)
+		runner.SetEvidenceHold(identityContainment.Active, outboundAdmission.RuntimeKillSwitchSignal)
+		bgManager.RegisterWithOptions(runner, RunnerRequired(false))
 	}
 	if managedInstanceSupervisor != nil {
 		bgManager.RegisterWithOptions(managedInstanceSupervisor, RunnerRequired(false))
@@ -825,7 +845,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		bgManager.RegisterWithOptions(loomSignetManager, RunnerRequired(false))
 	}
 	if securityRepo != nil {
-		bgManager.RegisterWithOptions(NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger))
+		runner := NewOSVVulnerabilityCacheCleanupRunner(securityRepo, defaultOSVVulnerabilityCacheCleanupInterval, logger)
+		runner.SetEvidenceHold(identityContainment.Active)
+		bgManager.RegisterWithOptions(runner)
 	}
 	var staleRunDetector *workflow.StaleRunDetector
 	if cfg.Nostr.PublishEnabled && serviceKeyer != nil {
@@ -836,6 +858,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		logger.Info("deployment-run stale health awaits durable Loom kind-30100 catch-up on every configured relay")
 	}
 	healthProvider := NewHealthProvider(nil, bgManager)
+	healthProvider.RegisterCheck("identity_containment", func() HealthCheck { return identityContainmentHealth(identityContainment, identityIncidents) })
 	if requested, effective, capped := cfg.Nostr.ResolveControlPlanePublishQuorum(len(controlPlanePool.URLs())); capped {
 		logger.Warn("control-plane publish quorum capped by its relay pool",
 			zap.Int("requested_quorum", requested), zap.Int("effective_quorum", effective),
@@ -1079,7 +1102,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	}
 	intentProcessor := controlplane.NewIntentProcessor(
 		trustSet, localEventStore, intentStatus,
-		controlplane.IntentProcessorConfig{EnabledDomains: enabledDomains},
+		controlplane.IntentProcessorConfig{EnabledDomains: enabledDomains, Containment: identityContainment.RuntimeKillSwitch},
 		logger,
 	)
 
@@ -1916,7 +1939,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		retentionTasks = append(retentionTasks, soulFactoryRuntime.retention)
 	}
 	if len(retentionTasks) > 0 {
-		bgManager.RegisterWithOptions(NewRetentionRunner(defaultRetentionInterval, logger, retentionTasks...), RunnerRequired(false))
+		runner := NewRetentionRunner(defaultRetentionInterval, logger, retentionTasks...)
+		runner.SetEvidenceHold(identityContainment.Active)
+		bgManager.RegisterWithOptions(runner, RunnerRequired(false))
 	}
 
 	// create encrypted canonical publisher for org state.
@@ -2226,7 +2251,9 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		}
 		nip98Validator := auth.NewNIP98Validator(auth.DefaultNIP98Config(), auth.NewPGNIP98ReplayStore(pool))
 		ociHandler = handlers.NewOCIRegistryHandler(ociSvc, nip98Validator, cfg.OCI)
-		bgManager.RegisterWithOptions(NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger))
+		ociCleanup := NewOCIUploadCleanupRunner(ociSvc, cfg.OCI.UploadExpiry, logger)
+		ociCleanup.SetEvidenceHold(identityContainment.Active)
+		bgManager.RegisterWithOptions(ociCleanup)
 		logger.Info("oci registry enabled", zap.String("host", cfg.OCI.PublicHost))
 	}
 
@@ -2830,6 +2857,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		// Historical sessions are resolved from validated relay events on demand.
 		// PostgreSQL is a derived index and must not seed assistant authority.
 		assistantExecution, err := buildAssistantExecution(assistantExecutionDeps{
+			Containment:      identityContainment.Active,
 			Config:           cfg,
 			MCPServer:        mcpServer,
 			ContextBuilder:   contextBuilder,
@@ -3201,6 +3229,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		})
 		reactorOpts := appendControlPlaneAuditOption([]controlplane.ReactorOption{
 			controlplane.WithDelegationLists(delegationLists),
+			controlplane.WithIdentityContainment(identityContainment.RuntimeKillSwitch),
 			controlplane.WithBackupRegistry(backupRegistry),
 			controlplane.WithToolProvisioningRepository(toolProvisionRepo),
 			controlplane.WithToolResponder(controlplane.NewToolResponder(controlPlanePool, serviceKeyer, logger, nostrEventRepo)),
@@ -3358,6 +3387,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		hiveCIInitiator:           hiveCIInitiator,
 		localEventStore:           localEventStore,
 		localOutbox:               localOutbox,
+		IdentityIncidents:         identityIncidents,
 		runtimeResolver:           runtimeResolver,
 		secretStore:               secretStore,
 		systemKeys:                systemKeys,
