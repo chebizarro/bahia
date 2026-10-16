@@ -141,9 +141,13 @@ Security state uses the fleet OCK (`SecurityCanonicalPublisher.publishConfidenti
 and attribution edges use the subject organization's OCK
 (`SecurityCanonicalPublisher.PublishAttribution`). Both call
 `EncryptConfidential` with no service-only plaintext, so those records have
-no service-key-derived `service_inner`. Their existing ciphertext can be
-preserved byte-for-byte when their recovery adapter is implemented; this does
-not apply to other confidential families that may carry `service_inner`.
+no service-key-derived `service_inner`. The registered security adapter
+validates the public typed envelope, OCK scope and associated-data coordinate,
+requires no `service_inner`, and preserves the accepted ciphertext and keyed
+`state_hash` byte-for-byte through the production projector signing path. It
+does not possess OCK keys or decrypt the payload; provenance is the accepted
+old-key inventory and exact new-key read-back. This does not apply to other
+confidential families that may carry `service_inner`.
 SBOM attestations are excluded from canonical reassertion and are regenerated
 under `bahia-4f10q.3.3`.
 

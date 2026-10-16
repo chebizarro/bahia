@@ -129,6 +129,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		"relay-settings-and-sets":            &identityrecovery.RelayRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger, Static: recoveryRelayPolicy},
 		"hostname-reservations-and-recovery": &identityrecovery.HostnameRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 		"backup-canonical-families":          &identityrecovery.BackupRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
+		"security-canonical":                 &identityrecovery.SecurityRecoveryAdapter{OldPubkey: old, Source: engine.Source, Local: localSource{path: cfg.Nostr.LocalStore.Path}, Ledger: ledger},
 	}
 	engine.RequiredDomains = []string{
 		"cp-state/service-registry", "cp-state/environment-registry", "cp-state/adoption-binding",
