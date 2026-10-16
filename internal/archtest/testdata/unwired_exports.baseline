@@ -4,7 +4,6 @@
 # Format: <count>\t<key>
 1	internal/adapters/agentmemory.Client.GetAgentContext
 1	internal/adapters/alerting.NewDispatcher
-1	internal/adapters/backup.NewKopiaBackend
 1	internal/adapters/backup.NewPgBackend
 1	internal/adapters/backup.NewQdrantBackend
 1	internal/adapters/backup.NewVeleroBackend
@@ -35,7 +34,6 @@
 1	internal/adapters/llm.AvatarProviderReplicate
 1	internal/adapters/llm.AvatarStylePresetByID
 1	internal/adapters/llm.IsContextTooLarge
-1	internal/adapters/llm.NewHTTPGatewayRouteManager
 1	internal/adapters/llm.NewRuntimeProvisioner
 1	internal/adapters/llm.WithHTTPClient
 1	internal/adapters/llm.WithRuntimeFactory
@@ -91,7 +89,6 @@
 1	internal/adapters/runtime.IsComposeOwnershipError
 1	internal/adapters/runtime.MustRuntime
 1	internal/adapters/runtime.NewComposeDesiredStateApplierWithRunner
-1	internal/adapters/runtime.NewComposeRuntime
 1	internal/adapters/runtime.NewComposeRuntimeWithEndpoint
 1	internal/adapters/runtime.NewObserver
 1	internal/adapters/runtime.NormalizeKubernetesPod
@@ -240,6 +237,7 @@
 1	internal/domain.SigningPolicy.TrustsSigner
 1	internal/domain.ValidateServiceContinuityProfile
 1	internal/kinds.BackupRequestKinds
+1	internal/kinds.CPStateTopicIdentityIncident
 1	internal/kinds.DNSReadModelKinds
 1	internal/kinds.DNSRequestKinds
 1	internal/kinds.DNSResultKinds
@@ -376,4 +374,5 @@
 1	internal/soulfactory.StatusSyncHandler.RegisterSoul
 1	internal/soulfactory.VoiceProviderRegistry.SetCacheTTL
 1	internal/soulfactory.WithProvisioningEngine
+1	internal/trustepoch.MissingAcknowledgments
 1	internal/workflow.WithDeploymentLoomClient

@@ -1,0 +1,204 @@
+package trustepoch
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/stretchr/testify/require"
+)
+
+type testSource struct {
+	event   *nostr.Event
+	present bool
+	err     error
+}
+
+func (s *testSource) Head(context.Context, string, string) (*nostr.Event, bool, error) {
+	return s.event, s.present, s.err
+}
+
+type testInventory struct {
+	ids []string
+	err error
+}
+
+func (s testInventory) IDs(context.Context, string, string) ([]string, error) { return s.ids, s.err }
+
+func signed(t *testing.T, key nostr.SecretKey, tags nostr.Tags, content string) nostr.Event {
+	t.Helper()
+	ev := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: 100, Tags: tags, Content: content}
+	require.NoError(t, ev.Sign(key))
+	return ev
+}
+
+func fixture(t *testing.T) (nostr.Event, Epoch, nostr.SecretKey, nostr.SecretKey, nostr.SecretKey) {
+	t.Helper()
+	root := nostr.MustSecretKeyFromHex(strings.Repeat("1", 64))
+	old := nostr.MustSecretKeyFromHex(strings.Repeat("2", 64))
+	newKey := nostr.MustSecretKeyFromHex(strings.Repeat("3", 64))
+	sum := sha256.Sum256(nil)
+	body := Epoch{IncidentID: "0199f4a6-3700-7000-8000-000000000001", Epoch: 1,
+		OldPubkey: old.Public().Hex(), NewPubkey: newKey.Public().Hex(),
+		ControlledRelays: []string{"wss://relay.example"}, ActivationBarrier: 150,
+		InventoryDigest: hex.EncodeToString(sum[:]), InventoryCount: 0,
+		ConsumerRoster: ConsumerIDs(), Activated: true}
+	content, err := json.Marshal(body)
+	require.NoError(t, err)
+	tags := nostr.Tags{{"d", "trust-epoch:deployment-a"}, {"t", Topic}, {"domain", Domain},
+		{"schema", Schema}, {"legacy_kind", kinds.CPStateFamilyTrustEpoch.TagValue()},
+		{"epoch", "1"}, {"deleted", "false"}}
+	return signed(t, root, tags, string(content)), body, root, old, newKey
+}
+
+func TestResolveAndRejectRegressions(t *testing.T) {
+	ev, body, root, old, _ := fixture(t)
+	state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	source := &testSource{}
+	v := &Verifier{OperatorRoot: root.Public().Hex(), LegacyPubkey: old.Public().Hex(), Source: source, Persistence: state}
+	r, err := v.ServiceIdentity(t.Context(), "deployment-a")
+	require.NoError(t, err)
+	require.Equal(t, old.Public().Hex(), r.Pubkey)
+	source.event, source.present = &ev, true
+	r, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.NoError(t, err)
+	require.Equal(t, body.NewPubkey, r.Pubkey)
+	require.Equal(t, uint64(1), r.Epoch)
+	_, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.NoError(t, err, "same signed head is idempotent")
+	source.present = false
+	_, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.ErrorIs(t, err, ErrRegression)
+	source.present = true
+	changed := ev
+	changed.Content = "{}"
+	source.event = &changed
+	_, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.ErrorIs(t, err, ErrUnverifiable)
+}
+
+func TestInventoryAndHostility(t *testing.T) {
+	ev, body, root, old, newKey := fixture(t)
+	oldEvent := nostr.Event{Kind: 1, CreatedAt: 140, Content: "old"}
+	require.NoError(t, oldEvent.Sign(old))
+	ids := []string{oldEvent.ID.Hex()}
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	body.InventoryDigest = hex.EncodeToString(sum[:])
+	body.InventoryCount = 1
+	content, err := json.Marshal(body)
+	require.NoError(t, err)
+	ev.Content = string(content)
+	require.NoError(t, ev.Sign(root))
+	state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	source := &testSource{event: &ev, present: true}
+	v := &Verifier{OperatorRoot: root.Public().Hex(), LegacyPubkey: old.Public().Hex(), Source: source, Persistence: state}
+	r, err := v.ServiceIdentity(t.Context(), "deployment-a")
+	require.NoError(t, err)
+	require.Equal(t, Hostile, r.JudgeEvent(oldEvent), "digest alone is not inventory")
+	v.Inventory = testInventory{ids: []string{strings.Repeat("a", 64)}}
+	r, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.NoError(t, err)
+	require.Equal(t, Hostile, r.JudgeEvent(oldEvent), "wrong artifact fails closed")
+	v.Inventory = testInventory{ids: ids}
+	r, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.NoError(t, err)
+	require.Equal(t, PreEpochAccepted, r.JudgeEvent(oldEvent))
+	late := nostr.Event{Kind: 1, CreatedAt: 151, Content: "late"}
+	require.NoError(t, late.Sign(old))
+	require.Equal(t, Hostile, r.JudgeEvent(late))
+	newEvent := nostr.Event{Kind: 1, CreatedAt: 151, Content: "new"}
+	require.NoError(t, newEvent.Sign(newKey))
+	require.Equal(t, Accept, r.JudgeEvent(newEvent))
+}
+
+func TestUnverifiableHeadFailsClosed(t *testing.T) {
+	ev, _, root, old, _ := fixture(t)
+	state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	source := &testSource{event: &ev, present: true}
+	v := &Verifier{OperatorRoot: old.Public().Hex(), LegacyPubkey: old.Public().Hex(), Source: source, Persistence: state}
+	_, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.ErrorIs(t, err, ErrUnverifiable)
+	v.OperatorRoot = root.Public().Hex()
+	source.err = errors.New("relay unavailable")
+	_, err = v.ServiceIdentity(t.Context(), "deployment-a")
+	require.ErrorContains(t, err, "relay unavailable")
+}
+
+func TestAckEnvelopeRoundTrip(t *testing.T) {
+	ev, body, _, _, newKey := fixture(t)
+	r := Resolution{ServiceID: "deployment-a", Pubkey: body.NewPubkey, Epoch: body.Epoch,
+		Record: &body, EventID: ev.ID.Hex()}
+	ack, err := NewAcknowledgment(r, "daemon", 200)
+	require.NoError(t, err)
+	require.NoError(t, ack.Sign(newKey))
+	require.NoError(t, VerifyAcknowledgment(ack, r, "daemon"))
+	wire, err := json.Marshal(ack)
+	require.NoError(t, err)
+	var recovered nostr.Event
+	require.NoError(t, json.Unmarshal(wire, &recovered))
+	require.Equal(t, string(wire), mustJSON(t, recovered))
+	require.NoError(t, VerifyAcknowledgment(recovered, r, "daemon"))
+	ack.Tags[0][1] = "trust-epoch-ack:deployment-a:cli"
+	require.Error(t, VerifyAcknowledgment(ack, r, "daemon"))
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	return string(raw)
+}
+
+func TestPendingConsumersAlwaysMissing(t *testing.T) {
+	all := map[string]bool{}
+	for _, id := range ConsumerIDs() {
+		all[id] = true
+	}
+	require.Equal(t, []string{"dns", "loom", "soulfactory", "hiveci", "pinned-runtimes"}, MissingAcknowledgments(all))
+}
+
+func TestSharedEpochAndAckEnvelopeFixture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "web", "tests", "fixtures", "trust-epoch-envelopes.json"))
+	require.NoError(t, err)
+	var fixture struct {
+		RootPubkey string      `json:"root_pubkey"`
+		OldPubkey  string      `json:"old_pubkey"`
+		NewPubkey  string      `json:"new_pubkey"`
+		Epoch      nostr.Event `json:"epoch"`
+		Ack        nostr.Event `json:"ack"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &fixture))
+	body, err := Parse(fixture.Epoch, "deployment-a", fixture.RootPubkey)
+	require.NoError(t, err)
+	require.Equal(t, fixture.OldPubkey, body.OldPubkey)
+	require.Equal(t, fixture.NewPubkey, body.NewPubkey)
+	require.Equal(t, string(mustMarshal(t, body)), fixture.Epoch.Content)
+	resolved := Resolution{ServiceID: "deployment-a", Pubkey: fixture.NewPubkey,
+		Epoch: body.Epoch, Record: &body, EventID: fixture.Epoch.ID.Hex()}
+	require.NoError(t, VerifyAcknowledgment(fixture.Ack, resolved, "daemon"))
+	ack, err := NewAcknowledgment(resolved, "daemon", 200)
+	require.NoError(t, err)
+	require.Equal(t, fixture.Ack.Tags, ack.Tags)
+	require.Equal(t, fixture.Ack.Content, ack.Content)
+}
+
+func mustMarshal(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	return raw
+}

@@ -690,6 +690,12 @@ type NostrConfig struct {
 	// set, must match nostr.private_key. Startup fails if the signer reports
 	// any other pubkey.
 	PublicKey string `koanf:"public_key" yaml:"public_key" secret:"false"`
+	// ServiceID survives service-key rotation. OperatorRootPubkey is an
+	// independent FleetOps trust root; neither value is inferred from the
+	// service signer. Both are required to enable trust-epoch enforcement.
+	ServiceID               string `koanf:"service_id" yaml:"service_id" secret:"false"`
+	OperatorRootPubkey      string `koanf:"operator_root_pubkey" yaml:"operator_root_pubkey" secret:"false"`
+	TrustEpochInventoryPath string `koanf:"trust_epoch_inventory_path" yaml:"trust_epoch_inventory_path" secret:"false"`
 	// Signer selects how the service identity signs and NIP-44-encrypts.
 	Signer NostrSignerConfig `koanf:"signer" yaml:"signer"`
 
@@ -903,6 +909,21 @@ func (n *NostrConfig) validateServiceSigner() error {
 	signer.Frostr.ShareFile = strings.TrimSpace(signer.Frostr.ShareFile)
 	signer.Frostr.TransportKeyFile = strings.TrimSpace(signer.Frostr.TransportKeyFile)
 	n.PublicKey = strings.ToLower(strings.TrimSpace(n.PublicKey))
+	n.ServiceID = strings.TrimSpace(n.ServiceID)
+	n.OperatorRootPubkey = strings.ToLower(strings.TrimSpace(n.OperatorRootPubkey))
+	n.TrustEpochInventoryPath = strings.TrimSpace(n.TrustEpochInventoryPath)
+	if (n.ServiceID == "") != (n.OperatorRootPubkey == "") {
+		return fmt.Errorf("config validation failed: nostr.service_id and nostr.operator_root_pubkey must be configured together")
+	}
+	if n.ServiceID != "" && (strings.ContainsAny(n.ServiceID, ": \t\r\n") || !isHexKey(n.OperatorRootPubkey)) {
+		return fmt.Errorf("config validation failed: invalid nostr.service_id or nostr.operator_root_pubkey")
+	}
+	if n.ServiceID != "" && !isHexKey(n.PublicKey) {
+		return fmt.Errorf("config validation failed: trust epoch requires explicit nostr.public_key as the legacy identity")
+	}
+	if n.OperatorRootPubkey != "" && n.OperatorRootPubkey == n.PublicKey {
+		return fmt.Errorf("config validation failed: nostr.operator_root_pubkey must be independent of nostr.public_key")
+	}
 	if signer.Timeout < 0 {
 		return fmt.Errorf("config validation failed: nostr.signer.timeout must not be negative")
 	}
