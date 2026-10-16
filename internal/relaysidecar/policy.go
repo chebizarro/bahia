@@ -23,6 +23,7 @@ type policy struct {
 	now           func() nostr.Timestamp
 	admin         *adminPolicy
 	servicePubkey string
+	trust         *sidecarTrustEpoch
 
 	// intentAuthors is the set of pubkeys (hex) that may publish intent events
 	// (kind 30900 + t=bahia-intent) through the sidecar. These pubkeys are NOT
@@ -39,11 +40,21 @@ func newPolicy(servicePubkey nostr.PubKey) *policy {
 }
 
 func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, string) {
+	if p.trust != nil {
+		if reject, err := p.trust.judgeWrite(event); reject {
+			return true, "blocked: " + err.Error()
+		}
+	}
 	if !event.CheckID() {
 		return true, "invalid: id is computed incorrectly"
 	}
 	if !event.VerifySignature() {
 		return true, "invalid: signature is invalid"
+	}
+	// An engine-verified inventory entry is an exact historical replay, not a
+	// new old-key publication. Admit it before ordinary age/admin policy.
+	if p.trust != nil && p.trust.isVerifiedReplay(event) {
+		return false, ""
 	}
 	if event.CreatedAt > p.now()+nostr.Timestamp(maxEventFutureSkew.Seconds()) {
 		return true, "invalid: created_at too far in the future"
@@ -54,7 +65,17 @@ func (p *policy) acceptEvent(ctx context.Context, event nostr.Event) (bool, stri
 	if expired(event, p.now()) {
 		return true, "invalid: event has expired (NIP-40)"
 	}
-	if p.admin != nil && event.PubKey.Hex() != p.servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
+	if p.trust != nil {
+		if event.Kind == 30900 && event.PubKey.Hex() == p.trust.verifier.OperatorRoot &&
+			event.Tags.GetD() == "trust-epoch:"+p.trust.serviceID() {
+			return false, ""
+		}
+	}
+	servicePubkey := p.servicePubkey
+	if p.trust != nil {
+		servicePubkey = p.trust.servicePubkey()
+	}
+	if p.admin != nil && event.PubKey.Hex() != servicePubkey && !p.admin.admits(event.PubKey.Hex()) {
 		// Intent write policy: kind 30900 + t=bahia-intent events from
 		// pubkeys in the intentAuthors set are admitted even when not on the
 		// general admin allowlist. The daemon updates intentAuthors via the

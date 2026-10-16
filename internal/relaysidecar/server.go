@@ -48,6 +48,7 @@ type Server struct {
 	swept       sweepCounters
 	policy      *adminPolicy
 	admission   *policy // event admission policy (wraps adminPolicy + intent authors)
+	trustEpoch  *sidecarTrustEpoch
 	readAuth    *readAuthPolicy
 	httpServer  *http.Server
 	logger      *zap.Logger
@@ -117,8 +118,30 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		nostrCfg.Sidecar.NegentropyMaxEvents = config.DefaultRelaySidecarNegentropyMaxEvents
 	}
 	retention := newRetentionPolicy(nostrCfg.Sidecar)
+	store, err := openEventStore(context.Background(), nostrCfg.Sidecar.DataDir, logger)
+	if err != nil {
+		return nil, err
+	}
+	trust, err := openSidecarTrustEpoch(ctx, nostrCfg, store, logger)
+	if err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("resolve sidecar trust epoch: %w", err)
+	}
+	owned := false
+	defer func() {
+		if !owned {
+			if trust != nil {
+				_ = trust.state.Close()
+			}
+			_ = store.Close()
+		}
+	}()
+	if trust != nil && trust.resolution.Pubkey != servicePubkey.Hex() {
+		return nil, fmt.Errorf("relay sidecar signer does not match resolved trust epoch")
+	}
 
 	pol := newPolicy(servicePubkey)
+	pol.trust = trust
 	admin, err := openAdminPolicy(nostrCfg.Sidecar)
 	if err != nil {
 		return nil, err
@@ -126,10 +149,6 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	pol.admin = admin
 	readAuth := newReadAuthPolicy(nostrCfg.Sidecar, pol, logger)
 
-	store, err := openEventStore(context.Background(), nostrCfg.Sidecar.DataDir, logger)
-	if err != nil {
-		return nil, err
-	}
 	var mirror *mirrorForwarder
 	if nostrCfg.Sidecar.MirrorExternal {
 		mirror, err = newMirrorForwarder(ctx, nostrCfg, signer, store, pol, logger, options.mirrorTransport)
@@ -276,7 +295,11 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
 		fanout.dispatch(event)
 	}
+	if err := acknowledgeSidecarEpoch(ctx, trust, signer, store, relay); err != nil {
+		return nil, err
+	}
 
+	owned = true
 	return &Server{
 		cfg:         nostrCfg.Sidecar,
 		relay:       relay,
@@ -284,6 +307,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		retention:   retention,
 		policy:      admin,
 		admission:   pol,
+		trustEpoch:  trust,
 		readAuth:    readAuth,
 		logger:      logger,
 		consumer:    consumer,
@@ -395,13 +419,16 @@ func (s *Server) Close() error {
 	if s.mirror != nil {
 		s.mirror.transport.Close()
 	}
+	if s.trustEpoch != nil {
+		_ = s.trustEpoch.state.Close()
+	}
 	return s.store.Close()
 }
 
 // Run starts the sidecar HTTP server and shuts it down when ctx is cancelled.
 func (s *Server) Run(ctx context.Context) (runErr error) {
 	defer func() {
-		if err := s.store.Close(); err != nil && runErr == nil {
+		if err := s.Close(); err != nil && runErr == nil {
 			runErr = fmt.Errorf("close relay sidecar store: %w", err)
 		}
 	}()
