@@ -162,3 +162,13 @@ canonical record publisher. It decodes and validates the original typed plan,
 revision, deletion flag and withdrawal phase, then requires exact wire
 equivalence before signing. It never enters the hostname intent handler or
 route manager, so reassertion cannot re-run DNS, tunnel, Caddy or TLS effects.
+
+Backup recovery covers the recipe, policy, repository and definition registry
+records plus backup run-state heads. The signed `org` tag must equal content
+`org_id` for every head, including tombstones; tombstone-only tag fields are
+reconstructed before exact comparison. An embedded run verification is taken
+from the accepted run head, not looked up in PostgreSQL. The normal canonical
+publishers sign these records with no backup execution or scheduling source
+attached. Restore, standalone verification and retention-run families are not
+part of this registered group and require a separate adapter before they can
+be considered reasserted.
