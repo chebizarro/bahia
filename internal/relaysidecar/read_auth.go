@@ -340,7 +340,9 @@ func (r *readAuthPolicy) checkReadAuth(ctx context.Context, filter nostr.Filter)
 // allowed sets.
 func (r *readAuthPolicy) isAllowedReader(pubkey string) bool {
 	if r.admission.trust != nil {
-		if r.admission.trust.isPoisoned() { return false }
+		if r.admission.trust.isPoisoned() {
+			return false
+		}
 		if known, allowed := r.admission.trust.readDecision(pubkey); known {
 			return allowed
 		}
