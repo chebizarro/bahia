@@ -29,46 +29,47 @@ import (
 
 // Config is the top-level configuration for Bahia.
 type Config struct {
-	Mode            string                    `koanf:"mode" yaml:"mode" secret:"false"`
-	DevMode         bool                      `koanf:"dev_mode" yaml:"dev_mode" secret:"false"`
-	Server          ServerConfig              `koanf:"server"`
-	DB              DBConfig                  `koanf:"db"`
-	Harbor          HarborConfig              `koanf:"harbor"`
-	Loom            LoomConfig                `koanf:"loom"`
-	Nostr           NostrConfig               `koanf:"nostr"`
-	Reconcile       ReconcileConfig           `koanf:"reconcile"`
-	Supervision     SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
-	Runtime         RuntimeConfig             `koanf:"runtime"`
-	Virtualization  VirtualizationConfig      `koanf:"virtualization"`
-	Log             LogConfig                 `koanf:"log"`
-	Auth            AuthConfig                `koanf:"auth"`
-	Adoption        AdoptionConfig            `koanf:"adoption"`
-	DirectRuntime   DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
-	CORS            CORSConfig                `koanf:"cors"`
-	Blossom         BlossomConfig             `koanf:"blossom"`
-	SBOM            SBOMConfig                `koanf:"sbom" yaml:"sbom"`
-	OCI             OCIServerConfig           `koanf:"oci"`
-	HiveCI          HiveCIConfig              `koanf:"hiveci"`
-	Cashu           CashuConfig               `koanf:"cashu"`
-	Qdrant          QdrantConfig              `koanf:"qdrant"`
-	Telemetry       TelemetryConfig           `koanf:"telemetry"`
-	WorkerPressure  WorkerPressureConfig      `koanf:"worker_pressure"`
-	WorkerCleanup   WorkerCleanupConfig       `koanf:"worker_cleanup"`
-	Hygiene         HygieneConfig             `koanf:"hygiene" yaml:"hygiene"`
-	Notifications   NotificationsConfig       `koanf:"notifications"`
-	Registry        RegistryAdapterConfig     `koanf:"registry"`
-	LLM             LLMControlplaneConfig     `koanf:"llm"`
-	Packages        PackageControlplaneConfig `koanf:"packages"`
-	Assistant       AssistantConfig           `koanf:"assistant"`
-	ConfigFabric    ConfigFabricConfig        `koanf:"config_fabric" yaml:"config_fabric"`
-	DNS             DNSConfig                 `koanf:"dns"`
-	EdgeRouting     EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
-	InternalRouting InternalRoutingConfig     `koanf:"internal_routing" yaml:"internal_routing"`
-	RouteCanaries   RouteCanaryConfig         `koanf:"route_canaries" yaml:"route_canaries"`
-	FIPS            FIPSConfig                `koanf:"fips"`
-	SoulFactory     SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
-	SecretStore     SecretStoreConfig         `koanf:"secret_store" yaml:"secret_store"`
-	BackupRun       BackupRunConfig           `koanf:"backup_run" yaml:"backup_run"`
+	Mode             string                    `koanf:"mode" yaml:"mode" secret:"false"`
+	DevMode          bool                      `koanf:"dev_mode" yaml:"dev_mode" secret:"false"`
+	Server           ServerConfig              `koanf:"server"`
+	DB               DBConfig                  `koanf:"db"`
+	Harbor           HarborConfig              `koanf:"harbor"`
+	Loom             LoomConfig                `koanf:"loom"`
+	Nostr            NostrConfig               `koanf:"nostr"`
+	Reconcile        ReconcileConfig           `koanf:"reconcile"`
+	Supervision      SupervisionConfig         `koanf:"supervision" yaml:"supervision"`
+	Runtime          RuntimeConfig             `koanf:"runtime"`
+	Virtualization   VirtualizationConfig      `koanf:"virtualization"`
+	Log              LogConfig                 `koanf:"log"`
+	Auth             AuthConfig                `koanf:"auth"`
+	Adoption         AdoptionConfig            `koanf:"adoption"`
+	DirectRuntime    DirectRuntimeConfig       `koanf:"direct_runtime_actions"`
+	CORS             CORSConfig                `koanf:"cors"`
+	Blossom          BlossomConfig             `koanf:"blossom"`
+	SBOM             SBOMConfig                `koanf:"sbom" yaml:"sbom"`
+	OCI              OCIServerConfig           `koanf:"oci"`
+	HiveCI           HiveCIConfig              `koanf:"hiveci"`
+	Cashu            CashuConfig               `koanf:"cashu"`
+	Qdrant           QdrantConfig              `koanf:"qdrant"`
+	Telemetry        TelemetryConfig           `koanf:"telemetry"`
+	WorkerPressure   WorkerPressureConfig      `koanf:"worker_pressure"`
+	WorkerCleanup    WorkerCleanupConfig       `koanf:"worker_cleanup"`
+	Hygiene          HygieneConfig             `koanf:"hygiene" yaml:"hygiene"`
+	Notifications    NotificationsConfig       `koanf:"notifications"`
+	Registry         RegistryAdapterConfig     `koanf:"registry"`
+	LLM              LLMControlplaneConfig     `koanf:"llm"`
+	Packages         PackageControlplaneConfig `koanf:"packages"`
+	Assistant        AssistantConfig           `koanf:"assistant"`
+	ConfigFabric     ConfigFabricConfig        `koanf:"config_fabric" yaml:"config_fabric"`
+	IdentityRecovery IdentityRecoveryConfig    `koanf:"identity_recovery" yaml:"identity_recovery"`
+	DNS              DNSConfig                 `koanf:"dns"`
+	EdgeRouting      EdgeRoutingConfig         `koanf:"edge_routing" yaml:"edge_routing"`
+	InternalRouting  InternalRoutingConfig     `koanf:"internal_routing" yaml:"internal_routing"`
+	RouteCanaries    RouteCanaryConfig         `koanf:"route_canaries" yaml:"route_canaries"`
+	FIPS             FIPSConfig                `koanf:"fips"`
+	SoulFactory      SoulFactoryConfig         `koanf:"soul_factory" yaml:"soul_factory"`
+	SecretStore      SecretStoreConfig         `koanf:"secret_store" yaml:"secret_store"`
+	BackupRun        BackupRunConfig           `koanf:"backup_run" yaml:"backup_run"`
 }
 
 // BackupRunConfig is an explicit opt-in; canonical async admission is off by default.
@@ -684,6 +685,7 @@ const RelayAuthUnavailableExcludeAndFail = "exclude_and_fail"
 
 // NostrConfig holds Nostr relay and identity settings.
 type NostrConfig struct {
+	ServiceID  string `koanf:"service_id" yaml:"service_id" secret:"false"`
 	PrivateKey string `koanf:"private_key" secret:"true"`
 	// PublicKey pins Bahia's service identity (64-char hex). Required with a
 	// remote nostr.signer.method; with a local key it is optional and, when
@@ -790,6 +792,19 @@ type NostrConfig struct {
 	// every Bahia publisher crosses before relay I/O (internal/nostrout;
 	// docs/runbooks/nostr-outbound-admission.md).
 	Outbound NostrOutboundConfig `koanf:"outbound" yaml:"outbound"`
+}
+
+// IdentityRecoveryConfig is operator-only; the daemon never opens its ledger or signers.
+type IdentityRecoveryConfig struct {
+	LedgerPath       string             `koanf:"ledger_path" yaml:"ledger_path" secret:"false"`
+	OldPubkey        string             `koanf:"old_pubkey" yaml:"old_pubkey" secret:"false"`
+	ReasonCode       string             `koanf:"reason_code" yaml:"reason_code" secret:"false"`
+	ControlledRelays []string           `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
+	ConsumerRoster   []string           `koanf:"consumer_roster" yaml:"consumer_roster" secret:"false"`
+	AcceptedEventIDs []string           `koanf:"accepted_event_ids" yaml:"accepted_event_ids" secret:"false"`
+	Operator         ConfigFabricConfig `koanf:"operator" yaml:"operator"`
+	NewIdentity      ConfigFabricConfig `koanf:"new_identity" yaml:"new_identity"`
+	OldSigner        ConfigFabricConfig `koanf:"old_signer" yaml:"old_signer"`
 }
 
 // ConfigFabricConfig pins the independent operator identity used by daemon
@@ -1744,6 +1759,7 @@ func Defaults() *Config {
 			JobTimeout: 30 * time.Minute,
 		},
 		Nostr: NostrConfig{
+			ServiceID:                  "bahia-service-v1",
 			ContextVMRelays:            []string{},
 			PublishEnabled:             true,
 			PublishQuorum:              PublishQuorumDefault,

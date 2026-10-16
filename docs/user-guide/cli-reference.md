@@ -80,6 +80,10 @@ Updates carry the record's canonical `updated_at` as `expected_updated_at`; on a
 
 Two operations are confidential request/response calls instead of intents: `logs run` (`deployments/run-logs-get`) and secret reveal (`services/secrets-reveal`, used by the web app). `logs run` waits for its reply subscription to reach EOSE before publishing, then republishes the same keyed request up to `--result-retries` times after each timeout so the daemon can replay its cached response.
 
+## Operator identity recovery
+
+`bahia-recover` is a separate operator tool, not a daemon subcommand. It uses a remote operator-root signer, controlled relays, and a dedicated recovery ledger. See the [identity recovery runbook](../runbooks/identity-recovery.md) for configuration, phase confirmations, and the forward-only cutover rule.
+
 ## Commands
 
 ### auth
