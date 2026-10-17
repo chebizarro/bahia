@@ -145,7 +145,8 @@ func TestProductionReadinessRequiresAttestationOrWaiverForEveryConsumer(t *testi
 	for i, id := range proof.Missing {
 		value := trustepoch.Readiness{ServiceID: "deployment-a", ConsumerID: id,
 			Epoch: 1, IncidentID: incident, EnforcingPubkey: newKey.Public().Hex(),
-			Waived: true, ReasonCode: "component_not_enforced"}
+			Waived: true, ReasonCode: trustepoch.WaiverConsumerDisabled,
+			EvidenceIDs: []string{fmt.Sprintf("%064x", i+50)}}
 		ev, err := trustepoch.NewReadiness(value, nostr.Timestamp(200+i))
 		if err != nil {
 			t.Fatal(err)
@@ -158,6 +159,28 @@ func TestProductionReadinessRequiresAttestationOrWaiverForEveryConsumer(t *testi
 	proof, err = reader.Readiness(t.Context(), 1, incident, newKey.Public().Hex(), trustepoch.ConsumerIDs())
 	if err != nil || len(proof.Missing) != 0 || len(proof.Waivers) != 2 {
 		t.Fatalf("signed waivers not recorded: %+v %v", proof, err)
+	}
+	invalid := trustepoch.Readiness{ServiceID: "deployment-a", ConsumerID: "soulfactory",
+		Epoch: 1, IncidentID: incident, EnforcingPubkey: newKey.Public().Hex(),
+		Waived: true, ReasonCode: trustepoch.WaiverConsumerDisabled}
+	content, err := json.Marshal(invalid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidEvent, err := trustepoch.NewReadiness(trustepoch.Readiness{ServiceID: invalid.ServiceID,
+		ConsumerID: invalid.ConsumerID, Epoch: invalid.Epoch, IncidentID: invalid.IncidentID,
+		EnforcingPubkey: invalid.EnforcingPubkey, Waived: true, ReasonCode: invalid.ReasonCode,
+		EvidenceIDs: []string{fmt.Sprintf("%064x", 60)}}, 250)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidEvent.Content = string(content)
+	if err := invalidEvent.Sign(root); err != nil {
+		t.Fatal(err)
+	}
+	src.events = append(src.events, invalidEvent)
+	if proof, err := reader.Readiness(t.Context(), 1, incident, newKey.Public().Hex(), trustepoch.ConsumerIDs()); err == nil || len(proof.Waivers) != 0 {
+		t.Fatalf("zero-evidence waiver counted at read: %+v %v", proof, err)
 	}
 	for i, id := range []string{"soulfactory", "pinned-runtimes"} {
 		value := trustepoch.Readiness{ServiceID: "deployment-a", ConsumerID: id,

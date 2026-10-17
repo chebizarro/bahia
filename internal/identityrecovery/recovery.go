@@ -111,9 +111,15 @@ type ConsumerAcknowledgments interface {
 }
 
 type CutoverReadiness struct {
-	EvidenceIDs []string
-	Waivers     map[string]string
-	Missing     []string
+	EvidenceIDs   []string
+	Waivers       map[string]string
+	WaiverDetails map[string]WaiverEvidence
+	Missing       []string
+}
+
+type WaiverEvidence struct {
+	ReasonCode  string   `json:"reason_code"`
+	EvidenceIDs []string `json:"evidence_ids"`
 }
 
 type Incident struct {
@@ -138,13 +144,14 @@ type TrustEpoch struct {
 	Activated         bool     `json:"activated"`
 }
 type Receipt struct {
-	IncidentID     string            `json:"incident_id"`
-	Phase          Phase             `json:"phase"`
-	Status         string            `json:"status"`
-	InputDigest    string            `json:"input_digest"`
-	EvidenceIDs    []string          `json:"evidence_ids"`
-	WaiverEventIDs map[string]string `json:"waiver_event_ids,omitempty"`
-	CompletedAt    string            `json:"completed_at"`
+	IncidentID     string                    `json:"incident_id"`
+	Phase          Phase                     `json:"phase"`
+	Status         string                    `json:"status"`
+	InputDigest    string                    `json:"input_digest"`
+	EvidenceIDs    []string                  `json:"evidence_ids"`
+	WaiverEventIDs map[string]string         `json:"waiver_event_ids,omitempty"`
+	WaiverDetails  map[string]WaiverEvidence `json:"waiver_details,omitempty"`
+	CompletedAt    string                    `json:"completed_at"`
 }
 type InventoryEvent struct {
 	ID        string `json:"id"`
@@ -166,6 +173,7 @@ type State struct {
 	Epoch                 int64                               `json:"epoch"`
 	ActivationBarrier     int64                               `json:"activation_barrier"`
 	CutoverWaiverEventIDs map[string]string                   `json:"cutover_waiver_event_ids,omitempty"`
+	CutoverWaiverDetails  map[string]WaiverEvidence           `json:"cutover_waiver_details,omitempty"`
 	Aborted               bool                                `json:"aborted"`
 	LastTimestamp         int64                               `json:"last_timestamp"`
 	Records               map[string]nostr.Event              `json:"records"`

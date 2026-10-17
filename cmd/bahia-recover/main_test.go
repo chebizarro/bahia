@@ -78,6 +78,15 @@ identity_recovery:
 			t.Fatalf("%s mutated ledger: %v", args[0], err)
 		}
 	}
+	for _, args := range [][]string{
+		{"attest-readiness", "--config", cfgPath, "--consumer", "dns", "--waiver-reason", "consumer_disabled"},
+		{"attest-readiness", "--config", cfgPath, "--consumer", "dns", "--evidence-ids", fmt.Sprintf("%064x", 1), "--waiver-reason", "free_form"},
+	} {
+		var out, errbuf bytes.Buffer
+		if code := run(context.Background(), args, &out, &errbuf); code != 2 {
+			t.Fatalf("invalid waiver arguments accepted: code=%d, stderr=%s", code, errbuf.String())
+		}
+	}
 }
 func TestMissingConfigFailsClosed(t *testing.T) {
 	var out, errbuf bytes.Buffer

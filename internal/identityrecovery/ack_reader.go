@@ -168,7 +168,7 @@ func (r *AcknowledgmentReader) Readiness(ctx context.Context, epoch int64, incid
 	if err != nil {
 		return CutoverReadiness{}, err
 	}
-	proof := CutoverReadiness{Waivers: map[string]string{}}
+	proof := CutoverReadiness{Waivers: map[string]string{}, WaiverDetails: map[string]WaiverEvidence{}}
 	ready := map[string]bool{}
 	for _, id := range roster {
 		if _, _, err := r.authority(id, newPubkey); err != nil {
@@ -206,6 +206,7 @@ func (r *AcknowledgmentReader) Readiness(ctx context.Context, epoch int64, incid
 		}
 		if body.Waived {
 			proof.Waivers[id] = latest.ID.Hex()
+			proof.WaiverDetails[id] = WaiverEvidence{ReasonCode: body.ReasonCode, EvidenceIDs: slices.Clone(body.EvidenceIDs)}
 		} else {
 			ready[id] = true
 		}

@@ -207,15 +207,18 @@ func TestReadinessEnvelopeIsOperatorBoundAndByteStable(t *testing.T) {
 	require.NoError(t, VerifyReadiness(ev, value, root.Public().Hex()))
 	require.Error(t, VerifyReadiness(ev, value, newKey.Public().Hex()))
 	waiver := value
-	waiver.EvidenceIDs = nil
 	waiver.Waived = true
-	waiver.ReasonCode = "component_unavailable"
+	waiver.ReasonCode = WaiverConsumerDisabled
 	ev, err = NewReadiness(waiver, 200)
 	require.NoError(t, err)
 	require.NoError(t, ev.Sign(root))
 	require.NoError(t, VerifyReadiness(ev, waiver, root.Public().Hex()))
 	waiver.ReasonCode = "contains secret"
 	_, err = NewReadiness(waiver, 201)
+	require.Error(t, err)
+	waiver.ReasonCode = WaiverConsumerDisabled
+	waiver.EvidenceIDs = nil
+	_, err = NewReadiness(waiver, 202)
 	require.Error(t, err)
 }
 

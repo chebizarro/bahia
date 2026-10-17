@@ -13,12 +13,13 @@ import (
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/identityrecovery"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 )
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts|attest-readiness|attest-ack} --config FILE [--confirm-phase PHASE|--confirm-abort|--consumer ID --evidence-ids IDS|--waiver-reason CODE] [--confirm-daemon-unreachable] [--rotation-updates FILE]")
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts|attest-readiness|attest-ack} --config FILE [--confirm-phase PHASE|--confirm-abort|--consumer ID --evidence-ids IDS [--waiver-reason consumer_disabled|consumer_isolated|consumer_decommissioned]] [--confirm-daemon-unreachable] [--rotation-updates FILE]")
 		return 2
 	}
 	op := args[0]
@@ -35,8 +36,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	rotationUpdates := flags.String("rotation-updates", "", "operator-supplied credential rotation evidence JSON")
 	draftPath := flags.String("draft-report", "", "unsigned SQL review draft artifact path")
 	consumer := flags.String("consumer", "", "consumer id for operator-signed readiness or waiver")
-	evidenceIDs := flags.String("evidence-ids", "", "comma-separated event IDs proving enforcement")
-	waiverReason := flags.String("waiver-reason", "", "machine-readable per-consumer waiver reason code")
+	evidenceIDs := flags.String("evidence-ids", "", "comma-separated event IDs proving enforcement or consumer isolation")
+	waiverReason := flags.String("waiver-reason", "", "consumer_disabled, consumer_isolated, or consumer_decommissioned")
 	if err := flags.Parse(args[1:]); err != nil || *path == "" || len(flags.Args()) != 0 {
 		_, _ = fmt.Fprintln(stderr, "config file and valid flags required")
 		return 2
@@ -92,8 +93,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "--confirm-phase required")
 		return 2
 	}
-	if op == "attest-readiness" && (*consumer == "" || (*evidenceIDs == "") == (*waiverReason == "")) {
-		_, _ = fmt.Fprintln(stderr, "attest-readiness requires --consumer and exactly one of --evidence-ids or --waiver-reason")
+	if op == "attest-readiness" && (*consumer == "" || *evidenceIDs == "" || (*waiverReason != "" && !trustepoch.ValidWaiverReason(*waiverReason))) {
+		_, _ = fmt.Fprintln(stderr, "attest-readiness requires --consumer, --evidence-ids, and an optional closed-enum --waiver-reason")
 		return 2
 	}
 	if op == "attest-ack" && (*consumer != "cli" && *consumer != "web" && *consumer != "pinned-runtimes" && *consumer != "loom" && *consumer != "hiveci") {

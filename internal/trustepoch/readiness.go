@@ -13,6 +13,21 @@ import (
 
 const ReadinessSchema = "bahia.trust-epoch-readiness.v1"
 
+const (
+	WaiverConsumerDisabled       = "consumer_disabled"
+	WaiverConsumerIsolated       = "consumer_isolated"
+	WaiverConsumerDecommissioned = "consumer_decommissioned"
+)
+
+func ValidWaiverReason(reason string) bool {
+	switch reason {
+	case WaiverConsumerDisabled, WaiverConsumerIsolated, WaiverConsumerDecommissioned:
+		return true
+	default:
+		return false
+	}
+}
+
 // Readiness is an operator-signed, pre-activation verification or explicit
 // per-consumer waiver. It cannot substitute for the post-activation ack.
 type Readiness struct {
@@ -33,17 +48,10 @@ func validReadiness(value Readiness) bool {
 		return false
 	}
 	if value.Waived {
-		if value.ReasonCode == "" || len(value.ReasonCode) > 64 || len(value.EvidenceIDs) != 0 {
+		if !ValidWaiverReason(value.ReasonCode) || len(value.EvidenceIDs) == 0 {
 			return false
 		}
-		for _, r := range value.ReasonCode {
-			if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyz0123456789-_", r) {
-				return false
-			}
-		}
-		return true
-	}
-	if value.ReasonCode != "" || len(value.EvidenceIDs) == 0 {
+	} else if value.ReasonCode != "" || len(value.EvidenceIDs) == 0 {
 		return false
 	}
 	seen := map[string]bool{}

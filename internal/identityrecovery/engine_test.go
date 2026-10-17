@@ -122,7 +122,16 @@ type testWaiverAcks struct{ testAcks }
 
 func (testWaiverAcks) Readiness(_ context.Context, _ int64, _, _ string, _ []string) (CutoverReadiness, error) {
 	id := fmt.Sprintf("%064x", 42)
-	return CutoverReadiness{EvidenceIDs: []string{id}, Waivers: map[string]string{"daemon": id}}, nil
+	return CutoverReadiness{EvidenceIDs: []string{id}, Waivers: map[string]string{"daemon": id},
+		WaiverDetails: map[string]WaiverEvidence{"daemon": {ReasonCode: "consumer_disabled", EvidenceIDs: []string{fmt.Sprintf("%064x", 43)}}}}, nil
+}
+
+type testEmptyWaiverAcks struct{ testWaiverAcks }
+
+func (testEmptyWaiverAcks) Readiness(ctx context.Context, epoch int64, incidentID, newPubkey string, roster []string) (CutoverReadiness, error) {
+	proof, err := (testWaiverAcks{}).Readiness(ctx, epoch, incidentID, newPubkey, roster)
+	proof.WaiverDetails["daemon"] = WaiverEvidence{ReasonCode: "consumer_disabled"}
+	return proof, err
 }
 func signer(t *testing.T) nostr.Keyer {
 	t.Helper()
@@ -256,6 +265,10 @@ func TestCutReceiptCarriesSignedWaiverEventID(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	e.Acks = testEmptyWaiverAcks{}
+	if err := e.Apply(t.Context(), CutActivateTrust); !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("zero-evidence waiver activated cut: %v", err)
+	}
 	e.Acks = testWaiverAcks{}
 	if err := e.Apply(t.Context(), CutActivateTrust); err != nil {
 		t.Fatal(err)
@@ -265,7 +278,9 @@ func TestCutReceiptCarriesSignedWaiverEventID(t *testing.T) {
 		t.Fatal(err)
 	}
 	receipt, ok := s.Receipt(CutActivateTrust)
-	if !ok || receipt.WaiverEventIDs["daemon"] != fmt.Sprintf("%064x", 42) {
+	if !ok || receipt.WaiverEventIDs["daemon"] != fmt.Sprintf("%064x", 42) ||
+		receipt.WaiverDetails["daemon"].ReasonCode != "consumer_disabled" ||
+		!slices.Equal(receipt.WaiverDetails["daemon"].EvidenceIDs, []string{fmt.Sprintf("%064x", 43)}) {
 		t.Fatalf("waiver absent from signed phase receipt: %+v", receipt)
 	}
 }
