@@ -708,7 +708,7 @@ raw environment values, Docker TLS material or credentials:
 
 ## Identity recovery control state
 
-Identity recovery uses operator-authored `30900` cp-state families:
+Identity recovery uses `30900` cp-state families:
 `legacy_kind=32051`, `t=identity-incident`, `domain=identity`,
 `d=identity-incident:<incident-id>`; `legacy_kind=32052`, `t=trust-epoch`,
 `domain=identity`, `d=trust-epoch:<service-id>`; and `legacy_kind=32053`,
@@ -716,8 +716,11 @@ Identity recovery uses operator-authored `30900` cp-state families:
 `d=identity-incident:<incident-id>:phase:<phase>` and consumer acknowledgment
 `d=trust-epoch-ack:<service-id>:<consumer-id>`. These are exceptions to the
 service-authored cp-state rule: the independent operator root signs the
-incident, epoch, and phase receipts; the new service identity signs only
-consumer acknowledgments. The precise tags, schemas, content, and validation
+incident, epoch, and phase receipts. The activated service identity signs the
+daemon acknowledgment; sidecar and DNS use independent component keys; CLI,
+web, Loom, HiveCI, SoulFactory, and pinned runtimes use operator-signed
+verification acknowledgments. Pending consumers still block `verify`. The
+precise tags, schemas, content, and validation
 rules are in [identity recovery](architecture/identity-recovery.md).
 
 ## Public hostname reservations

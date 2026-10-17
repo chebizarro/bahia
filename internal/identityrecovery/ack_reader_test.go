@@ -51,11 +51,11 @@ func TestProductionAcknowledgmentReaderUsesPinnedConsumerAuthorities(t *testing.
 	}
 	authorities := map[string]string{"daemon": fixture.NewPubkey,
 		"cli": fixture.RootPubkey, "web": fixture.RootPubkey, "pinned-runtimes": fixture.RootPubkey}
-	for i, id := range []string{"sidecar", "dns", "soulfactory"} {
+	for i, id := range []string{"sidecar", "dns"} {
 		key := nostr.MustSecretKeyFromHex(strings.Repeat(string(rune('4'+i)), 64))
 		authorities[id] = key.Public().Hex()
 	}
-	authorities["loom"], authorities["hiveci"] = fixture.RootPubkey, fixture.RootPubkey
+	authorities["loom"], authorities["hiveci"], authorities["soulfactory"] = fixture.RootPubkey, fixture.RootPubkey, fixture.RootPubkey
 	source := &testSource{events: []nostr.Event{fixture.Epoch}}
 	reader := &AcknowledgmentReader{Source: source, Local: testLocal{events: []nostr.Event{fixture.Ack}},
 		Ledger: ledger, ServiceID: "deployment-a", OperatorRoot: fixture.RootPubkey,
@@ -110,11 +110,11 @@ func TestProductionReadinessRequiresAttestationOrWaiverForEveryConsumer(t *testi
 	}
 	authorities := map[string]string{"daemon": newKey.Public().Hex(), "cli": root.Public().Hex(),
 		"web": root.Public().Hex(), "pinned-runtimes": root.Public().Hex()}
-	for i, id := range []string{"sidecar", "dns", "soulfactory"} {
+	for i, id := range []string{"sidecar", "dns"} {
 		key := nostr.MustSecretKeyFromHex(strings.Repeat(string(rune('4'+i)), 64))
 		authorities[id] = key.Public().Hex()
 	}
-	authorities["loom"], authorities["hiveci"] = root.Public().Hex(), root.Public().Hex()
+	authorities["loom"], authorities["hiveci"], authorities["soulfactory"] = root.Public().Hex(), root.Public().Hex(), root.Public().Hex()
 	src := &testSource{}
 	reader := &AcknowledgmentReader{Source: src, Local: testLocal{}, Ledger: ledger,
 		ServiceID: "deployment-a", OperatorRoot: root.Public().Hex(),
@@ -256,10 +256,10 @@ func TestOperatorAcknowledgmentPublisherBindsWebAttestationToActivatedEpoch(t *t
 	}
 	authorities := map[string]string{"daemon": fixture.NewPubkey,
 		"cli": fixture.RootPubkey, "web": fixture.RootPubkey, "pinned-runtimes": fixture.RootPubkey}
-	for i, id := range []string{"sidecar", "dns", "soulfactory"} {
+	for i, id := range []string{"sidecar", "dns"} {
 		authorities[id] = nostr.MustSecretKeyFromHex(strings.Repeat(string(rune('4'+i)), 64)).Public().Hex()
 	}
-	authorities["loom"], authorities["hiveci"] = fixture.RootPubkey, fixture.RootPubkey
+	authorities["loom"], authorities["hiveci"], authorities["soulfactory"] = fixture.RootPubkey, fixture.RootPubkey, fixture.RootPubkey
 	source := &testSource{events: []nostr.Event{fixture.Epoch}}
 	reader := &AcknowledgmentReader{Source: source, Local: testLocal{}, Ledger: ledger,
 		ServiceID: "deployment-a", OperatorRoot: fixture.RootPubkey,

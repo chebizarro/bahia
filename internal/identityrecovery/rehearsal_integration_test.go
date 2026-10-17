@@ -148,12 +148,12 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 	cfg.Nostr.ContextVMRelays = []string{controlled}
 	keys := map[string]nostr.Keyer{"operator": operator, "new": newKey, "old": old}
 	authorities := map[string]string{"daemon": newPub.Hex(), "cli": root.Hex(), "web": root.Hex(), "pinned-runtimes": root.Hex()}
-	for _, id := range []string{"sidecar", "dns", "soulfactory"} {
+	for _, id := range []string{"sidecar", "dns"} {
 		key := signer(t)
 		keys[id] = key
 		authorities[id] = pub(t, key).Hex()
 	}
-	authorities["loom"], authorities["hiveci"] = root.Hex(), root.Hex()
+	authorities["loom"], authorities["hiveci"], authorities["soulfactory"] = root.Hex(), root.Hex(), root.Hex()
 	signerConfig := func(key nostr.Keyer) config.ConfigFabricConfig {
 		return config.ConfigFabricConfig{PublicKey: pub(t, key).Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP55L}}
 	}

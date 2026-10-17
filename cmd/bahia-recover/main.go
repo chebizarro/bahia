@@ -97,8 +97,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "attest-readiness requires --consumer, --evidence-ids, and an optional closed-enum --waiver-reason")
 		return 2
 	}
-	if op == "attest-ack" && (*consumer != "cli" && *consumer != "web" && *consumer != "pinned-runtimes" && *consumer != "loom" && *consumer != "hiveci") {
-		_, _ = fmt.Fprintln(stderr, "attest-ack requires --consumer cli, web, pinned-runtimes, loom, or hiveci")
+	if op == "attest-ack" && (*consumer != "cli" && *consumer != "web" && *consumer != "pinned-runtimes" && *consumer != "loom" && *consumer != "hiveci" && *consumer != "soulfactory") {
+		_, _ = fmt.Fprintln(stderr, "attest-ack requires --consumer cli, web, pinned-runtimes, loom, hiveci, or soulfactory")
 		return 2
 	}
 	runtime, err := identityrecovery.NewProductionRuntime(ctx, cfg, identityrecovery.RuntimeOptions{ConfirmDaemonUnreachable: *daemonUnreachable, RotationUpdatesPath: *rotationUpdates, DraftPath: *draftPath})

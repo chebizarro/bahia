@@ -140,7 +140,10 @@ Identity recovery uses three `30900` cp-state families: `32051`
 also the `trust-epoch-ack:<service-id>:<consumer-id>` coordinate).
 Unlike service-authored cp-state projections, incident, epoch, and phase
 receipt records are signed by the configured independent operator root.
-Only consumer acknowledgments use the new service identity. Consumers filter
-by the operator author and indexed `#t`, and validate the full envelope and
-monotonic epoch before trusting a record. See
+Only the daemon acknowledgment uses the new service identity. Sidecar and DNS
+acknowledgments use distinct component identities; CLI, web, Loom, HiveCI,
+SoulFactory, and pinned runtimes use operator authority. Consumers filter
+trust epochs by the operator author and acknowledgments by each pinned
+consumer authority, then validate the full envelope and monotonic epoch
+before trusting a record. See
 [identity recovery](architecture/identity-recovery.md).

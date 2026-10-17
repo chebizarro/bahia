@@ -22,9 +22,9 @@ identity_recovery:
     web: <operator-root-pubkey-hex>
     cli: <operator-root-pubkey-hex>
     dns: <dns-agent-pubkey-hex>
-    loom: <loom-component-pubkey-hex>
-    soulfactory: <soulfactory-component-pubkey-hex>
-    hiveci: <hiveci-component-pubkey-hex>
+    loom: <operator-root-pubkey-hex>
+    soulfactory: <operator-root-pubkey-hex>
+    hiveci: <operator-root-pubkey-hex>
     pinned-runtimes: <operator-root-pubkey-hex>
   accepted_event_ids: [<reviewed-event-id-hex>]
   operator:
@@ -50,6 +50,7 @@ bahia-recover abort --config /etc/bahia/config.yaml --confirm-abort
 bahia-recover attest-readiness --config /etc/bahia/config.yaml --consumer dns --evidence-ids <verified-event-id>
 bahia-recover attest-readiness --config /etc/bahia/config.yaml --consumer pinned-runtimes --evidence-ids <isolation-attestation-event-id> --waiver-reason consumer_isolated
 bahia-recover attest-ack --config /etc/bahia/config.yaml --consumer web
+bahia-recover attest-ack --config /etc/bahia/config.yaml --consumer loom
 ```
 
 `plan` and `status` do not create a ledger or contact signers or relays. `apply` and `resume` require the exact next phase; a pending signed event is republished unchanged after interruption. Every controlled relay must acknowledge canonical publication. The quarantined old-key kind-5 e-tag deletion alone is sent to cleanup relays; every cleanup relay must return an OK (or protocol duplicate) for each deletion batch. OK-false, unresolved AUTH/CLOSED, and unreachable relays remain incomplete in the ledger and block phase completion. EOSE proves only that a relay finished its stored-event answer, never that old-key events were absent. Aborting is refused once an activated trust transition has been signed or observed, even if its phase receipt was interrupted. After cutover the workflow is forward-only.
