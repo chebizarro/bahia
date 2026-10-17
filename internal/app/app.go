@@ -529,7 +529,7 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		nostrAdapter.WithPublisherSigner(serviceKeyer),
 		nostrAdapter.WithLocalOutbox(localOutbox, localEventStore))
 	if trustVerifier != nil {
-		if err := enqueueDaemonEpochAck(ctx, trustResolution, serviceKeyer, localEventStore, controlPlanePub); err != nil {
+		if err := enqueueDaemonEpochAck(ctx, trustResolution, cfg.Nostr.OperatorRootPubkey, serviceKeyer, localEventStore, controlPlanePub); err != nil {
 			return nil, fmt.Errorf("record daemon trust epoch acknowledgment: %w", err)
 		}
 	}

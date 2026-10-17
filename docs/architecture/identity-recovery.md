@@ -47,7 +47,9 @@ authorizes any part of recovery.
 - content: `incident_id`, `phase`, `status` (`started|completed|failed`),
   `input_digest`, `evidence_ids[]` (event ids / commit SHAs / artifact digests),
   `completed_at`. A completed cut receipt also carries `waiver_event_ids`, a
-  consumer-id to operator-signed waiver-event-id map. Latest-wins; a resumed
+  consumer-id to operator-signed waiver-event-id map, and `waiver_details`,
+  binding each waived consumer to its reason code and evidence event IDs.
+  Latest-wins; a resumed
   phase reuses the same `d`.
 
 ## Phases (ordered; each restart-safe, idempotent, receipt-bearing)
@@ -106,11 +108,14 @@ Before `cut-activate-trust`, `bahia-recover attest-readiness --consumer ID
 --evidence-ids ID[,ID]` publishes a per-consumer operator-root-signed
 `bahia.trust-epoch-readiness.v1` verification record binding service-id,
 consumer-id, incident-id, epoch and enforcing pubkey. If capability cannot be
-proved, `--waiver-reason CODE` publishes an explicit per-consumer waiver in
-the same signed envelope. Cutover re-reads all records through controlled
+proved, `--waiver-reason consumer_disabled|consumer_isolated|consumer_decommissioned`
+and required `--evidence-ids ID[,ID]` publish an explicit per-consumer waiver
+in the same signed envelope. A reason alone is invalid; evidence must identify
+a shutdown, isolation, or decommissioning record showing the consumer cannot
+ingest old-key events. Cutover re-reads all records through controlled
 relays and the local store; every consumer must have a valid verification
-attestation or waiver, and waiver IDs enter the signed completed phase
-receipt. A pending roster entry still blocks the post-cut verify phase even
+attestation or waiver, and each waiver's event ID, reason, and evidence IDs
+enter the signed completed phase receipt. A pending roster entry still blocks the post-cut verify phase even
 when a waiver authorized activation.
 
 ## Acknowledgments
@@ -130,18 +135,18 @@ when a waiver authorized activation.
 | sidecar | Dedicated relay acknowledgment key from `nostr.sidecar.ack_private_key_file`, distinct from the service and operator keys |
 | CLI | Operator signer, after verifying CLI enforcement |
 | DNS | DNS agent's own configured signing identity |
-| Loom | Loom component's configured signing identity |
-| SoulFactory | SoulFactory component's configured signing identity |
-| HiveCI | HiveCI component's configured signing identity |
+| Loom | Operator-signed verification attestation (`attested_by`); its guard is daemon-hosted and the optional projection signer is not its authority |
+| SoulFactory | Operator-signed verification attestation (`attested_by`); enforcement remains pending |
+| HiveCI | Operator-signed verification attestation (`attested_by`); its guard is daemon-hosted and has no independent signer |
 | web | Operator-signed verification attestation (`attested_by`) |
 | pinned-runtimes | Operator-signed verification attestation (`attested_by`) |
 
-The operator publishes CLI, web and pinned-runtime post-cut receipts with
+The operator publishes CLI, web, Loom, HiveCI, SoulFactory and pinned-runtime post-cut receipts with
 `bahia-recover attest-ack --config FILE --consumer ID` only after verifying
 their enforcement. The command refuses a non-operator authority or a missing
-activated epoch. DNS, Loom, SoulFactory and HiveCI must publish their own
-receipts under their configured component signing keys; the recovery CLI
-cannot impersonate those identities.
+activated epoch. Sidecar and DNS publish their own receipts under their
+configured component signing keys; the recovery CLI cannot impersonate those
+identities. An operator receipt does not override a pending roster entry.
 
 The recovery acknowledgment reader queries scoped subscriptions on **every**
 controlled relay and the durable local store, verifies the exact signed
@@ -149,7 +154,7 @@ envelope against the authority table, and reports missing consumers through
 `trustepoch.MissingAcknowledgments`. EOSE completes a backfill; it is not
 evidence that a missing event never existed. The Go and web fixture asserts
 the daemon acknowledgment byte-for-byte; web verifies this envelope, while
-web and pinned-runtime readiness is operator-attested rather than self-signed.
+web, Loom, HiveCI, SoulFactory and pinned-runtime readiness is operator-attested rather than self-signed.
 
 ## Sources of truth during recovery
 Audited relay events, the durable local Nostr store, and verified pre-compromise

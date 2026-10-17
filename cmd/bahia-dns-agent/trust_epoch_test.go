@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"fiatjaf.com/nostr"
+	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"github.com/stretchr/testify/require"
@@ -21,10 +22,14 @@ type dnsEpochSource struct {
 	err   error
 }
 
-type dnsAckOutput struct{ event nostr.Event }
+type dnsAckOutput struct {
+	event nostr.Event
+	count int
+}
 
 func (o *dnsAckOutput) Publish(_ context.Context, ev nostr.Event) (int, error) {
 	o.event = ev
+	o.count++
 	return 1, nil
 }
 
@@ -61,12 +66,18 @@ func TestDNSAdmissionRejectsPostBarrierOldKeyAndUnverifiableEpoch(t *testing.T) 
 	require.NoError(t, err)
 	guard := &dnsTrustEpoch{verifier: verifier, resolution: resolved, healthy: true,
 		updates: make(chan struct{}, 1)}
+	store, err := localstore.Open(filepath.Join(t.TempDir(), "dns-events.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	guard.store = store
 	ackSigner := nostr.MustSecretKeyFromHex(strings.Repeat("4", 64))
 	output := &dnsAckOutput{}
 	guard.ackSigner, guard.ackOutput = ackSigner, output
 	require.NoError(t, guard.publishAck(t.Context(), resolved))
 	require.NoError(t, trustepoch.VerifyAcknowledgmentAuthority(output.event, resolved,
 		"dns", ackSigner.Public().Hex(), false))
+	require.NoError(t, guard.publishAck(t.Context(), resolved))
+	require.Equal(t, 1, output.count, "same epoch must not be published twice")
 	late := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: 151, Content: "late"}
 	require.NoError(t, late.Sign(old))
 	require.Error(t, guard.Judge(t.Context(), late))

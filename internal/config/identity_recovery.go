@@ -92,7 +92,7 @@ func (c *Config) ValidateIdentityRecovery() error {
 			if authority != r.NewIdentity.PublicKey {
 				return errors.New("daemon acknowledgment authority must be new service key")
 			}
-		case "cli", "web", "pinned-runtimes":
+		case "cli", "web", "pinned-runtimes", "loom", "hiveci", "soulfactory":
 			if authority != r.Operator.PublicKey {
 				return fmt.Errorf("%s acknowledgment authority must be operator root", id)
 			}

@@ -187,8 +187,12 @@ ownership. See the [event spec](event-spec.md#public-hostname-reservations).
 Identity recovery adds `30900` cp-state families `32051` (incident), `32052`
 (trust epoch), and `32053` (phase receipt/consumer acknowledgment) in the
 `identity` domain. Unlike ordinary service projections, the incident, epoch,
-and phase receipts are authored by the independent operator root. Only a
-post-activation consumer acknowledgment is new-service-authored. Readers
-subscribe by operator author and `#t`, verify the exact schemas and
-coordinates, and reject regressions. See
+and phase receipts are authored by the independent operator root. The daemon's
+post-activation acknowledgment is new-service-authored; sidecar and DNS
+acknowledgments use their independent component identities; CLI, web, Loom,
+HiveCI, SoulFactory, and pinned-runtime acknowledgments use the operator
+authority according to the per-consumer verification model. SoulFactory and
+pinned runtimes remain pending and cannot satisfy `verify` by acknowledgment
+alone. Readers subscribe by the pinned authority and `#t`, verify the exact
+schemas and coordinates, and reject regressions. See
 [identity recovery](architecture/identity-recovery.md).

@@ -26,7 +26,7 @@ func TestPlanAndStatusDoNotCreateLedger(t *testing.T) {
 		return pub.Hex()
 	}
 	old, root, next := key(), key(), key()
-	sidecar, dns, loom, soulfactory, hiveci := key(), key(), key(), key(), key()
+	sidecar, dns := key(), key()
 	yaml := fmt.Sprintf(`nostr:
   service_id: bahia-service-v1
   operator_root_pubkey: %s
@@ -60,7 +60,7 @@ identity_recovery:
     signer:
       method: nip55l
 `, root, old, filepath.Join(dir, "daemon.bolt"), ledger, old,
-		next, sidecar, root, root, dns, loom, soulfactory, hiveci, root, root, next)
+		next, sidecar, root, root, dns, root, root, root, root, root, next)
 	if err := os.WriteFile(cfgPath, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +76,15 @@ identity_recovery:
 		}
 		if _, err := os.Stat(ledger); !os.IsNotExist(err) {
 			t.Fatalf("%s mutated ledger: %v", args[0], err)
+		}
+	}
+	for _, args := range [][]string{
+		{"attest-readiness", "--config", cfgPath, "--consumer", "dns", "--waiver-reason", "consumer_disabled"},
+		{"attest-readiness", "--config", cfgPath, "--consumer", "dns", "--evidence-ids", fmt.Sprintf("%064x", 1), "--waiver-reason", "free_form"},
+	} {
+		var out, errbuf bytes.Buffer
+		if code := run(context.Background(), args, &out, &errbuf); code != 2 {
+			t.Fatalf("invalid waiver arguments accepted: code=%d, stderr=%s", code, errbuf.String())
 		}
 	}
 }

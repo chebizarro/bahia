@@ -15,7 +15,7 @@ func (e *Engine) AttestAcknowledgment(ctx context.Context, consumerID string) er
 	if err := e.validate(ctx); err != nil {
 		return err
 	}
-	if consumerID != "cli" && consumerID != "web" && consumerID != "pinned-runtimes" {
+	if consumerID != "cli" && consumerID != "web" && consumerID != "pinned-runtimes" && consumerID != "loom" && consumerID != "hiveci" && consumerID != "soulfactory" {
 		return fmt.Errorf("consumer does not use operator acknowledgment authority")
 	}
 	s, err := e.Status()

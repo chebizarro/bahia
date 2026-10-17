@@ -187,31 +187,17 @@ func acknowledgeSidecarEpoch(ctx context.Context, trust *sidecarTrustEpoch, ackK
 	if err != nil {
 		return fmt.Errorf("invalid relay acknowledgment identity")
 	}
-	pubkey := key.Public()
-	if pubkey.Hex() == trust.resolution.Pubkey || pubkey.Hex() == trust.resolution.Record.OldPubkey ||
-		pubkey.Hex() == trust.verifier.OperatorRoot {
-		return fmt.Errorf("relay acknowledgment identity must be independent")
-	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)},
-		Authors: []nostr.PubKey{pubkey},
-		Tags:    nostr.TagMap{"d": []string{"trust-epoch-ack:" + trust.resolution.ServiceID + ":sidecar"}}}
-	for ev := range store.Query(ctx, filter, 0) {
-		if trustepoch.VerifyAcknowledgmentAuthority(ev, trust.resolution, "sidecar", pubkey.Hex(), false) == nil {
-			return nil
-		}
-	}
-	ack, err := trustepoch.NewAcknowledgment(trust.resolution, "sidecar", nostr.Now())
-	if err != nil {
-		return err
-	}
-	if err := ack.Sign(key); err != nil {
-		return fmt.Errorf("sign sidecar trust epoch ack: %w", err)
-	}
-	if err := trustepoch.VerifyAcknowledgmentAuthority(ack, trust.resolution, "sidecar", pubkey.Hex(), false); err != nil {
-		return err
-	}
-	if _, err := relay.AddEvent(ctx, ack); err != nil {
-		return fmt.Errorf("store sidecar trust epoch ack: %w", err)
-	}
-	return nil
+	return (trustepoch.AckPublisher{ConsumerID: "sidecar", Authority: key.Public().Hex(),
+		OperatorRoot: trust.verifier.OperatorRoot,
+		Existing: func(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
+			var events []nostr.Event
+			for ev := range store.Query(ctx, filter, 0) {
+				events = append(events, ev)
+			}
+			return events, ctx.Err()
+		}, Sign: func(_ context.Context, ev *nostr.Event) error { return ev.Sign(key) },
+		Publish: func(ctx context.Context, ev nostr.Event) error {
+			_, err := relay.AddEvent(ctx, ev)
+			return err
+		}}).Acknowledge(ctx, trust.resolution)
 }

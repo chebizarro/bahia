@@ -11,6 +11,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/trustepoch"
 )
 
 type Engine struct {
@@ -244,6 +245,7 @@ func (e *Engine) receipt(ctx context.Context, s *State, p Phase, status string, 
 	r := Receipt{IncidentID: s.IncidentID, Phase: p, Status: status, InputDigest: digestInput(*s, p), EvidenceIDs: evidence, CompletedAt: e.clock().Format(time.RFC3339)}
 	if p == CutActivateTrust && status == "completed" {
 		r.WaiverEventIDs = s.CutoverWaiverEventIDs
+		r.WaiverDetails = s.CutoverWaiverDetails
 	}
 	return e.record(ctx, s, kinds.CPStateTopicIdentityRecoveryReceipt, "identity-incident:"+s.IncidentID+":phase:"+string(p), "bahia.identity-recovery-receipt.v1", kinds.CPStateFamilyIdentityRecoveryReceipt, nostr.Tags{{"incident", s.IncidentID}}, r)
 }
@@ -482,8 +484,28 @@ func (e *Engine) cutoverReadiness(ctx context.Context, s *State, epoch int64, ne
 	if len(proof.EvidenceIDs) < len(e.Config.ConsumerRoster) {
 		return CutoverReadiness{}, fmt.Errorf("%w: incomplete consumer readiness evidence", ErrIncomplete)
 	}
+	if len(proof.Waivers) != len(proof.WaiverDetails) {
+		return CutoverReadiness{}, fmt.Errorf("%w: incomplete waiver evidence", ErrIncomplete)
+	}
+	for consumer, eventID := range proof.Waivers {
+		detail, exists := proof.WaiverDetails[consumer]
+		if !exists || !trustepoch.Registered(consumer) || !trustepoch.ValidWaiverReason(detail.ReasonCode) || len(detail.EvidenceIDs) == 0 || !validEvidenceID(eventID) {
+			return CutoverReadiness{}, fmt.Errorf("%w: invalid waiver evidence", ErrIncomplete)
+		}
+		for _, id := range detail.EvidenceIDs {
+			if !validEvidenceID(id) {
+				return CutoverReadiness{}, fmt.Errorf("%w: invalid waiver evidence ID", ErrIncomplete)
+			}
+		}
+	}
 	s.CutoverWaiverEventIDs = proof.Waivers
+	s.CutoverWaiverDetails = proof.WaiverDetails
 	return proof, nil
+}
+
+func validEvidenceID(value string) bool {
+	id, err := nostr.IDFromHex(value)
+	return err == nil && id.Hex() == value
 }
 func (e *Engine) reassert(ctx context.Context) ([]string, error) {
 	if err := e.requireDomains(); err != nil {
