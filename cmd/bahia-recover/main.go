@@ -14,10 +14,17 @@ import (
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/identityrecovery"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
+	"github.com/openagentsinc/bahia/internal/version"
 )
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	// The staging gate verifies the binary inside the immutable release image
+	// matches the image's OCI revision; print both forms for that check.
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "version") {
+		_, _ = fmt.Fprintf(stdout, "%s commit=%s\n", version.Semantic(), version.Commit)
+		return 0
+	}
 	if len(args) == 0 {
 		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts|attest-readiness|attest-ack} --config FILE [--confirm-phase PHASE|--confirm-abort|--consumer ID --evidence-ids IDS [--waiver-reason consumer_disabled|consumer_isolated|consumer_decommissioned]] [--confirm-daemon-unreachable] [--rotation-updates FILE]")
 		return 2

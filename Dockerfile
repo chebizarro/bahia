@@ -77,6 +77,14 @@ RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
     -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
     -o /bin/bahia-relay ./cmd/relay
 
+# The identity-compromise recovery CLI must run from the exact immutable
+# release image during the staging rehearsal and live cutover; side-loading
+# or separately compiled copies invalidate the staging gate.
+RUN VERSION_VALUE="${VERSION:-${VERSION_BASE}-${GIT_COMMIT}}" && \
+    CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-X github.com/openagentsinc/bahia/internal/version.Base=${VERSION_BASE} -X github.com/openagentsinc/bahia/internal/version.Commit=${GIT_COMMIT} -X github.com/openagentsinc/bahia/internal/version.Full=${VERSION_VALUE}" \
+    -o /bin/bahia-recover ./cmd/bahia-recover
+
 # Runtime stage
 # alpine:3.24
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
@@ -106,6 +114,7 @@ USER bahia
 COPY --from=builder /bin/bahia-server /usr/local/bin/bahia-server
 COPY --from=builder /bin/bahia /usr/local/bin/bahia
 COPY --from=builder /bin/bahia-relay /usr/local/bin/bahia-relay
+COPY --from=builder /bin/bahia-recover /usr/local/bin/bahia-recover
 COPY --from=builder /bin/fips-bahia-bridge /usr/local/bin/fips-bahia-bridge
 COPY --from=builder /bin/openclaw-soulfactory-sidecar /usr/local/bin/openclaw-soulfactory-sidecar
 COPY --from=builder /bin/openclaw-soulfactory-control /usr/local/bin/openclaw-soulfactory-control
