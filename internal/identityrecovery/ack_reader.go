@@ -33,7 +33,7 @@ func (r *AcknowledgmentReader) authority(id, newPubkey string) (string, bool, er
 		}
 	}
 	seenComponents := map[string]string{}
-	for _, component := range []string{"sidecar", "dns", "loom", "soulfactory", "hiveci"} {
+	for _, component := range []string{"sidecar", "dns", "soulfactory"} {
 		key := r.Authorities[component]
 		if prior, ok := seenComponents[key]; ok {
 			return "", false, fmt.Errorf("shared acknowledgment authority for %s and %s", prior, component)
@@ -45,13 +45,16 @@ func (r *AcknowledgmentReader) authority(id, newPubkey string) (string, bool, er
 	if err != nil || parsed.Hex() != authority {
 		return "", false, fmt.Errorf("invalid acknowledgment authority for %s", id)
 	}
-	operatorAttested := id == "web" || id == "pinned-runtimes"
+	// Loom and HiveCI enforcement is hosted by the daemon. Neither guard
+	// possesses an independent production signer; the optional Loom projection
+	// signer is not the guard's authority.
+	operatorAttested := id == "web" || id == "pinned-runtimes" || id == "loom" || id == "hiveci"
 	switch id {
 	case "daemon":
 		if authority != newPubkey {
 			return "", false, fmt.Errorf("daemon acknowledgment authority differs from new identity")
 		}
-	case "cli", "web", "pinned-runtimes":
+	case "cli", "web", "pinned-runtimes", "loom", "hiveci":
 		if authority != r.OperatorRoot {
 			return "", false, fmt.Errorf("operator acknowledgment authority mismatch for %s", id)
 		}

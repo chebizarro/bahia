@@ -51,10 +51,11 @@ func TestProductionAcknowledgmentReaderUsesPinnedConsumerAuthorities(t *testing.
 	}
 	authorities := map[string]string{"daemon": fixture.NewPubkey,
 		"cli": fixture.RootPubkey, "web": fixture.RootPubkey, "pinned-runtimes": fixture.RootPubkey}
-	for i, id := range []string{"sidecar", "dns", "loom", "soulfactory", "hiveci"} {
+	for i, id := range []string{"sidecar", "dns", "soulfactory"} {
 		key := nostr.MustSecretKeyFromHex(strings.Repeat(string(rune('4'+i)), 64))
 		authorities[id] = key.Public().Hex()
 	}
+	authorities["loom"], authorities["hiveci"] = fixture.RootPubkey, fixture.RootPubkey
 	source := &testSource{events: []nostr.Event{fixture.Epoch}}
 	reader := &AcknowledgmentReader{Source: source, Local: testLocal{events: []nostr.Event{fixture.Ack}},
 		Ledger: ledger, ServiceID: "deployment-a", OperatorRoot: fixture.RootPubkey,
@@ -109,10 +110,11 @@ func TestProductionReadinessRequiresAttestationOrWaiverForEveryConsumer(t *testi
 	}
 	authorities := map[string]string{"daemon": newKey.Public().Hex(), "cli": root.Public().Hex(),
 		"web": root.Public().Hex(), "pinned-runtimes": root.Public().Hex()}
-	for i, id := range []string{"sidecar", "dns", "loom", "soulfactory", "hiveci"} {
+	for i, id := range []string{"sidecar", "dns", "soulfactory"} {
 		key := nostr.MustSecretKeyFromHex(strings.Repeat(string(rune('4'+i)), 64))
 		authorities[id] = key.Public().Hex()
 	}
+	authorities["loom"], authorities["hiveci"] = root.Public().Hex(), root.Public().Hex()
 	src := &testSource{}
 	reader := &AcknowledgmentReader{Source: src, Local: testLocal{}, Ledger: ledger,
 		ServiceID: "deployment-a", OperatorRoot: root.Public().Hex(),
@@ -231,9 +233,10 @@ func TestOperatorAcknowledgmentPublisherBindsWebAttestationToActivatedEpoch(t *t
 	}
 	authorities := map[string]string{"daemon": fixture.NewPubkey,
 		"cli": fixture.RootPubkey, "web": fixture.RootPubkey, "pinned-runtimes": fixture.RootPubkey}
-	for i, id := range []string{"sidecar", "dns", "loom", "soulfactory", "hiveci"} {
+	for i, id := range []string{"sidecar", "dns", "soulfactory"} {
 		authorities[id] = nostr.MustSecretKeyFromHex(strings.Repeat(string(rune('4'+i)), 64)).Public().Hex()
 	}
+	authorities["loom"], authorities["hiveci"] = fixture.RootPubkey, fixture.RootPubkey
 	source := &testSource{events: []nostr.Event{fixture.Epoch}}
 	reader := &AcknowledgmentReader{Source: source, Local: testLocal{}, Ledger: ledger,
 		ServiceID: "deployment-a", OperatorRoot: fixture.RootPubkey,
@@ -248,11 +251,21 @@ func TestOperatorAcknowledgmentPublisherBindsWebAttestationToActivatedEpoch(t *t
 		ConsumerRoster: trustepoch.ConsumerIDs(), OperatorPubkey: root.Public(),
 		LocalStorePath: filepath.Join(t.TempDir(), "daemon.db")},
 		Ledger: ledger, Source: source, Cleanup: source, Local: testLocal{}, Operator: operator, Acks: reader}
+	authorities["loom"] = nostr.MustSecretKeyFromHex(strings.Repeat("9", 64)).Public().Hex()
+	if err := engine.AttestAcknowledgment(t.Context(), "loom"); err == nil {
+		t.Fatal("accepted a fabricated Loom component authority")
+	}
+	authorities["loom"] = fixture.RootPubkey
 	if err := engine.AttestAcknowledgment(t.Context(), "web"); err != nil {
 		t.Fatal(err)
 	}
+	for _, id := range []string{"loom", "hiveci"} {
+		if err := engine.AttestAcknowledgment(t.Context(), id); err != nil {
+			t.Fatalf("%s operator attestation: %v", id, err)
+		}
+	}
 	missing, err := reader.Missing(t.Context(), 1, trustepoch.ConsumerIDs())
-	if err != nil || slices.Contains(missing, "web") {
+	if err != nil || slices.Contains(missing, "web") || slices.Contains(missing, "loom") || slices.Contains(missing, "hiveci") {
 		t.Fatalf("operator web attestation was not admitted: %v %v", missing, err)
 	}
 	if err := engine.AttestAcknowledgment(t.Context(), "sidecar"); err == nil {
