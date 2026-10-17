@@ -148,11 +148,12 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 	cfg.Nostr.ContextVMRelays = []string{controlled}
 	keys := map[string]nostr.Keyer{"operator": operator, "new": newKey, "old": old}
 	authorities := map[string]string{"daemon": newPub.Hex(), "cli": root.Hex(), "web": root.Hex(), "pinned-runtimes": root.Hex()}
-	for _, id := range []string{"sidecar", "dns", "loom", "soulfactory", "hiveci"} {
+	for _, id := range []string{"sidecar", "dns", "soulfactory"} {
 		key := signer(t)
 		keys[id] = key
 		authorities[id] = pub(t, key).Hex()
 	}
+	authorities["loom"], authorities["hiveci"] = root.Hex(), root.Hex()
 	signerConfig := func(key nostr.Keyer) config.ConfigFabricConfig {
 		return config.ConfigFabricConfig{PublicKey: pub(t, key).Hex(), Signer: config.NostrSignerConfig{Method: config.NostrSignerNIP55L}}
 	}
@@ -222,9 +223,36 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 				t.Fatalf("cut activated without readiness: %v", err)
 			}
 			for _, id := range trustepoch.ConsumerIDs() {
-				if err := engine.AttestReadiness(ctx, id, nil, "rehearsal_waiver"); err != nil {
+				if id == "dns" {
+					continue
+				}
+				proof := nostr.Event{Kind: 1, CreatedAt: nostr.Now(), Content: "rehearsal-enforcement-state:" + id}
+				if err := operator.SignEvent(ctx, &proof); err != nil {
+					t.Fatal(err)
+				}
+				if err := engine.Source.Publish(ctx, proof); err != nil {
+					t.Fatal(err)
+				}
+				reason := ""
+				if id == "soulfactory" || id == "pinned-runtimes" {
+					reason = trustepoch.WaiverConsumerIsolated
+				}
+				if err := engine.AttestReadiness(ctx, id, []string{proof.ID.Hex()}, reason); err != nil {
 					t.Fatalf("readiness %s: %v", id, err)
 				}
+			}
+			if err := engine.Apply(ctx, phase); !errors.Is(err, ErrIncomplete) {
+				t.Fatalf("cut activated without DNS readiness: %v", err)
+			}
+			dnsProof := nostr.Event{Kind: 1, CreatedAt: nostr.Now(), Content: "rehearsal-enforcement-state:dns"}
+			if err := operator.SignEvent(ctx, &dnsProof); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Source.Publish(ctx, dnsProof); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.AttestReadiness(ctx, "dns", []string{dnsProof.ID.Hex()}, ""); err != nil {
+				t.Fatal(err)
 			}
 		case RotateExternalSecrets:
 			refs, err := engine.Rotation.Inventory(ctx)
@@ -240,31 +268,34 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 			if err := engine.Apply(ctx, phase); !errors.Is(err, ErrIncomplete) {
 				t.Fatalf("verification accepted missing consumer acks: %v", err)
 			}
+			for _, id := range []string{"cli", "web", "pinned-runtimes", "loom", "hiveci"} {
+				if err := engine.AttestAcknowledgment(ctx, id); err != nil {
+					t.Fatalf("operator ack %s: %v", id, err)
+				}
+			}
+			publishComponent := func(id string, key nostr.Keyer) {
+				t.Helper()
+				publisher := trustepoch.AckPublisher{ConsumerID: id, Authority: pub(t, key).Hex(),
+					OperatorRoot: root.Hex(), Existing: engine.Source.Read,
+					Sign: key.SignEvent, Publish: engine.Source.Publish}
+				if err := publisher.Acknowledge(ctx, resolved); err != nil {
+					t.Fatalf("production ack publisher %s: %v", id, err)
+				}
+			}
+			publishComponent("daemon", newKey)
+			publishComponent("sidecar", keys["sidecar"])
 			state, err := engine.Status()
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, id := range trustepoch.ConsumerIDs() {
-				if slices.Contains([]string{"cli", "web", "pinned-runtimes"}, id) {
-					if err := engine.AttestAcknowledgment(ctx, id); err != nil {
-						t.Fatalf("operator ack %s: %v", id, err)
-					}
-					continue
-				}
-				key := keys[id]
-				if id == "daemon" {
-					key = newKey
-				}
-				ack, err := trustepoch.NewAcknowledgmentForAuthority(resolved, id, nostr.Timestamp(state.ActivationBarrier+1), "")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := key.SignEvent(ctx, &ack); err != nil {
-					t.Fatal(err)
-				}
-				if err := engine.Source.Publish(ctx, ack); err != nil {
-					t.Fatalf("component ack %s: %v", id, err)
-				}
+			missingBeforeDNS, err := engine.Acks.Missing(ctx, state.Epoch, engine.Config.ConsumerRoster)
+			if err != nil || !slices.Contains(missingBeforeDNS, "dns") {
+				t.Fatalf("missing production DNS ack did not block verification: %v %v", missingBeforeDNS, err)
+			}
+			publishComponent("dns", keys["dns"])
+			missingAfterDNS, err := engine.Acks.Missing(ctx, state.Epoch, engine.Config.ConsumerRoster)
+			if err != nil || slices.Contains(missingAfterDNS, "dns") || slices.Contains(missingAfterDNS, "daemon") || slices.Contains(missingAfterDNS, "sidecar") {
+				t.Fatalf("production publisher acks not admitted: %v %v", missingAfterDNS, err)
 			}
 		}
 		if phase == Verify {

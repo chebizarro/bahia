@@ -25,6 +25,7 @@ type dnsTrustEpoch struct {
 	done       chan struct{}
 	started    bool
 	ackSigner  nostr.SecretKey
+	store      *localstore.Store
 	ackOutput  interface {
 		Publish(context.Context, nostr.Event) (int, error)
 	}
@@ -65,7 +66,7 @@ func startDNSTrustEpoch(ctx context.Context, cfg config, pool *nostradapter.Rela
 		return nil, err
 	}
 	guard := &dnsTrustEpoch{verifier: v, state: state, sub: sub, cancel: cancel,
-		ackSigner: ackSigner, ackOutput: pool,
+		ackSigner: ackSigner, ackOutput: pool, store: store,
 		updates: make(chan struct{}, 1), done: make(chan struct{})}
 	for {
 		select {
@@ -144,28 +145,31 @@ func (g *dnsTrustEpoch) publishAck(ctx context.Context, resolved trustepoch.Reso
 	if resolved.Record == nil || !resolved.Record.Activated {
 		return nil
 	}
-	if g.ackSigner.Public().Hex() == resolved.Pubkey || g.ackSigner.Public().Hex() == resolved.Record.OldPubkey ||
-		g.ackSigner.Public().Hex() == g.verifier.OperatorRoot {
-		return fmt.Errorf("DNS acknowledgment identity is not independent")
-	}
-	if g.ackOutput == nil {
+	if g.ackOutput == nil || g.store == nil {
 		return fmt.Errorf("DNS acknowledgment publisher unavailable")
 	}
-	ack, err := trustepoch.NewAcknowledgment(resolved, "dns", nostr.Now())
-	if err != nil {
-		return err
-	}
-	if err := ack.Sign(g.ackSigner); err != nil {
-		return fmt.Errorf("sign DNS trust acknowledgment")
-	}
-	if err := trustepoch.VerifyAcknowledgmentAuthority(ack, resolved, "dns", g.ackSigner.Public().Hex(), false); err != nil {
-		return err
-	}
-	accepted, err := g.ackOutput.Publish(ctx, ack)
-	if err != nil || accepted == 0 {
-		return fmt.Errorf("publish DNS trust acknowledgment")
-	}
-	return nil
+	return (trustepoch.AckPublisher{ConsumerID: "dns", Authority: g.ackSigner.Public().Hex(),
+		OperatorRoot: g.verifier.OperatorRoot,
+		Existing: func(_ context.Context, filter nostr.Filter) ([]nostr.Event, error) {
+			var events []nostr.Event
+			for ev := range g.store.QueryEvents(filter) {
+				events = append(events, ev)
+			}
+			return events, nil
+		}, Sign: func(_ context.Context, ev *nostr.Event) error { return ev.Sign(g.ackSigner) },
+		Publish: func(ctx context.Context, ev nostr.Event) error {
+			accepted, err := g.ackOutput.Publish(ctx, ev)
+			if err != nil {
+				return fmt.Errorf("publish DNS trust acknowledgment: %w", err)
+			}
+			if accepted == 0 {
+				return fmt.Errorf("publish DNS trust acknowledgment: no relay accepted")
+			}
+			if _, err := g.store.SaveEvent(ev); err != nil {
+				return fmt.Errorf("persist DNS trust acknowledgment: %w", err)
+			}
+			return nil
+		}}).Acknowledge(ctx, resolved)
 }
 
 func (g *dnsTrustEpoch) poison() {

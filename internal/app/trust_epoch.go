@@ -183,7 +183,7 @@ func (a *trustEpochAdmission) allowsHistoricalReplay(ev nostr.Event) bool {
 		a.resolution.JudgeEvent(ev) == trustepoch.PreEpochAccepted
 }
 
-func enqueueDaemonEpochAck(ctx context.Context, resolved trustepoch.Resolution, signer nostr.Keyer,
+func enqueueDaemonEpochAck(ctx context.Context, resolved trustepoch.Resolution, operatorRoot string, signer nostr.Keyer,
 	store *localstore.Store, publisher *nostrAdapter.Publisher) error {
 	if resolved.Record == nil || !resolved.Record.Activated {
 		return nil
@@ -191,27 +191,15 @@ func enqueueDaemonEpochAck(ctx context.Context, resolved trustepoch.Resolution, 
 	if signer == nil || publisher == nil {
 		return fmt.Errorf("activated trust epoch requires daemon signer and publisher")
 	}
-	pubkey, err := nostr.PubKeyFromHex(resolved.Pubkey)
-	if err != nil {
-		return err
-	}
-	filter := nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)},
-		Authors: []nostr.PubKey{pubkey},
-		Tags:    nostr.TagMap{"d": []string{"trust-epoch-ack:" + resolved.ServiceID + ":daemon"}}}
-	for ev := range store.QueryEvents(filter) {
-		if trustepoch.VerifyAcknowledgment(ev, resolved, "daemon") == nil {
-			return nil
-		}
-	}
-	ack, err := trustepoch.NewAcknowledgment(resolved, "daemon", nostr.Now())
-	if err != nil {
-		return err
-	}
-	if err := signer.SignEvent(ctx, &ack); err != nil {
-		return fmt.Errorf("sign daemon trust epoch ack: %w", err)
-	}
-	if err := trustepoch.VerifyAcknowledgment(ack, resolved, "daemon"); err != nil {
-		return err
-	}
-	return publisher.Enqueue(ctx, ack, "trust-epoch-ack", nil)
+	return (trustepoch.AckPublisher{ConsumerID: "daemon", Authority: resolved.Pubkey,
+		OperatorRoot: operatorRoot, Sign: signer.SignEvent,
+		Existing: func(_ context.Context, filter nostr.Filter) ([]nostr.Event, error) {
+			var events []nostr.Event
+			for ev := range store.QueryEvents(filter) {
+				events = append(events, ev)
+			}
+			return events, nil
+		}, Publish: func(ctx context.Context, ev nostr.Event) error {
+			return publisher.Enqueue(ctx, ev, "trust-epoch-ack", nil)
+		}}).Acknowledge(ctx, resolved)
 }
