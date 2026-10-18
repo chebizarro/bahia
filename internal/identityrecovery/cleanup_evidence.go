@@ -14,7 +14,7 @@ func completeCleanup(outcomes map[string]RelayEvidence, relays []string, want st
 	}
 	for _, relay := range relays {
 		got, ok := outcomes[relayguard.Normalize(relay)]
-		if !ok || got.Status != want {
+		if !ok || got.Status != want || want == "complete" && (got.PageProof == nil || !got.PageProof.Complete()) {
 			return false
 		}
 	}

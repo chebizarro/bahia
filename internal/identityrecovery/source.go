@@ -20,48 +20,25 @@ type RelaySource struct {
 
 func (s RelaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
 	seen := map[nostr.ID]nostr.Event{}
-	for _, url := range s.Relays {
-		sub, err := s.Pool.SubscribeWithOptions(ctx, []nostr.Filter{filter}, adapter.SubscribeOptions{Relays: []string{url}, AwaitUnavailableRelays: true, ValidateEvent: func(ev *nostr.Event) bool { return ev.CheckID() && ev.VerifySignature() }})
-		if err != nil {
-			return nil, errors.New("audited relay subscription failed")
+	filters := []nostr.Filter{filter}
+	if len(filter.IDs) > 64 {
+		filters = nil
+		for start := 0; start < len(filter.IDs); start += 64 {
+			batch := filter
+			batch.IDs = filter.IDs[start:min(start+64, len(filter.IDs))]
+			filters = append(filters, batch)
 		}
-		complete := false
-		for !complete {
-			select {
-			case ev, ok := <-sub.Events:
-				if !ok {
-					sub.Close()
-					return nil, errors.New("relay stream closed before EOSE")
-				}
-				seen[ev.ID] = *ev
-			case <-sub.EndOfStoredEvents:
-				if err := sub.StoredEventsIncomplete(nil); err != nil {
-					sub.Close()
-					return nil, errors.New("audited relay history incomplete")
-				}
-				for draining := true; draining; {
-					select {
-					case ev, ok := <-sub.Events:
-						if !ok {
-							draining = false
-						} else {
-							seen[ev.ID] = *ev
-						}
-					default:
-						draining = false
-					}
-				}
-				complete = true
-			case <-ctx.Done():
-				sub.Close()
-				return nil, ctx.Err()
+	}
+	for _, url := range s.Relays {
+		for _, batch := range filters {
+			events, err := scanRecoveryRelay(ctx, s.Pool, url, batch)
+			if err != nil {
+				return nil, fmt.Errorf("audited relay history incomplete: %w", err)
+			}
+			for _, ev := range events {
+				seen[ev.ID] = ev
 			}
 		}
-		if !sub.AllRelaysReachedEOSE() {
-			sub.Close()
-			return nil, errors.New("audited relay did not reach EOSE")
-		}
-		sub.Close()
 	}
 	out := make([]nostr.Event, 0, len(seen))
 	for _, ev := range seen {
@@ -69,6 +46,21 @@ func (s RelaySource) Read(ctx context.Context, filter nostr.Filter) ([]nostr.Eve
 	}
 	slices.SortFunc(out, func(a, b nostr.Event) int { return slices.Compare(a.ID[:], b.ID[:]) })
 	return out, nil
+}
+
+// An IDs filter can be subdivided when a relay cannot page within one
+// created_at second; every requested ID remains directly addressable.
+func scanRecoveryRelay(ctx context.Context, pool *adapter.RelayPool, relay string, filter nostr.Filter) ([]nostr.Event, error) {
+	events, _, err := pool.ScanStoredPages(ctx, relay, filter)
+	if !errors.Is(err, adapter.ErrStoredHistoryBoundary) || len(filter.IDs) < 2 {
+		return events, err
+	}
+	left, right := filter, filter
+	left.IDs = filter.IDs[:len(filter.IDs)/2]
+	right.IDs = filter.IDs[len(filter.IDs)/2:]
+	leftEvents, leftErr := scanRecoveryRelay(ctx, pool, relay, left)
+	rightEvents, rightErr := scanRecoveryRelay(ctx, pool, relay, right)
+	return append(leftEvents, rightEvents...), errors.Join(leftErr, rightErr)
 }
 func (s RelaySource) Publish(ctx context.Context, ev nostr.Event) error {
 	results, err := s.Pool.PublishToRelaysWithResults(ctx, ev, s.Relays)

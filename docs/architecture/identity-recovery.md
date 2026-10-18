@@ -46,7 +46,10 @@ authorizes any part of recovery.
   `incident=<incident-id>`, `deleted=false`.
 - content: `incident_id`, `phase`, `status` (`started|completed|failed`),
   `input_digest`, `evidence_ids[]` (event ids / commit SHAs / artifact digests),
-  `completed_at`. A completed cut receipt also carries `waiver_event_ids`, a
+  `completed_at`. A completed inventory receipt also carries `inventory_relays`,
+  keyed by relay-URL digest with each relay's page limit, NIP-11 limit, page
+  windows, unique ID count, timestamp coverage, and empty final verification
+  page. A completed cut receipt also carries `waiver_event_ids`, a
   consumer-id to operator-signed waiver-event-id map, and `waiver_details`,
   binding each waived consumer to its reason code and evidence event IDs.
   Latest-wins; a resumed
@@ -290,9 +293,13 @@ acknowledgment publications use controlled relays only. The dedicated cleanup
 pool rejects every other kind and signer, even on a cleanup relay that is also
 controlled. The normal public-relay control-plane denylist is unchanged.
 
-The ledger records EOSE or an incomplete outcome for every cleanup relay's
-inventory scan, and OK, OK-false, or incomplete outcome for every cleanup
-relay and signed deletion batch. Signed phase receipts carry relay-URL digests
-and outcome classes, not relay-provided text or secrets. An incomplete relay
-blocks inventory/deletion phase completion; EOSE is a catch-up boundary, not
-proof of absence.
+The ledger records a bounded `until` pagination chain or an incomplete outcome
+for every cleanup relay's inventory scan, and OK, OK-false, or incomplete
+outcome for every cleanup relay and signed deletion batch. Each page requires
+EOSE, but only an empty final verification page completes the scan. Inclusive
+timestamp boundaries deduplicate event IDs; an unpageable saturated second
+fails closed. Signed phase receipts carry relay-URL digests and the page proof,
+not relay-provided text or secrets. Approved IDs absent from the scan and local
+store receive batched direct by-ID REQs before a missing-ID failure. An
+incomplete relay blocks inventory/deletion phase completion; EOSE alone is
+not proof of absence.
