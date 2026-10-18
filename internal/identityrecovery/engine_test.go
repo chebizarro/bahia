@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"fiatjaf.com/nostr"
+	adapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
 
 type testSource struct {
 	events         []nostr.Event
+	scanEvents     []nostr.Event
 	failPhase      Phase
 	failed         bool
 	reads          int
@@ -33,6 +35,9 @@ func (s *testSource) Read(_ context.Context, f nostr.Filter) ([]nostr.Event, err
 	}
 	var out []nostr.Event
 	for _, ev := range s.events {
+		if len(f.IDs) > 0 && !slices.Contains(f.IDs, ev.ID) {
+			continue
+		}
 		if len(f.Authors) > 0 && !slices.Contains(f.Authors, ev.PubKey) {
 			continue
 		}
@@ -431,10 +436,46 @@ func TestResumeRejectsOutOfScopePendingEvent(t *testing.T) {
 
 func (s *testSource) Scan(ctx context.Context, f nostr.Filter) ([]nostr.Event, map[string]RelayEvidence) {
 	events, _ := s.Read(ctx, f)
+	if s.scanEvents != nil {
+		events = s.scanEvents
+	}
+	proof := adapter.StoredPageEvidence{PageLimit: 500, FinalEmptyPage: true}
+	if len(events) > 0 {
+		oldest := events[0].CreatedAt
+		newest := oldest
+		seen := map[nostr.ID]struct{}{}
+		for _, ev := range events {
+			seen[ev.ID] = struct{}{}
+			oldest = min(oldest, ev.CreatedAt)
+			newest = max(newest, ev.CreatedAt)
+		}
+		proof.UniqueIDs = len(seen)
+		proof.MinCreatedAt, proof.MaxCreatedAt = int64(oldest), int64(newest)
+		proof.Windows = append(proof.Windows, adapter.StoredPageWindow{Events: len(events), NewIDs: len(seen), OldestCreatedAt: int64(oldest), EOSE: true})
+		proof.Windows = append(proof.Windows, adapter.StoredPageWindow{Until: int64(oldest) - 1, EOSE: true})
+	} else {
+		proof.Windows = []adapter.StoredPageWindow{{EOSE: true}}
+	}
+	proof.Pages = len(proof.Windows)
 	if s.scanOutcomes != nil {
+		for relay, outcome := range s.scanOutcomes {
+			if outcome.Status == "complete" && outcome.PageProof == nil {
+				outcome.PageProof = &proof
+				s.scanOutcomes[relay] = outcome
+			}
+		}
 		return events, s.scanOutcomes
 	}
-	return events, map[string]RelayEvidence{"wss://relay.example": {Status: "eose"}}
+	return events, map[string]RelayEvidence{"wss://relay.example": {Status: "complete", PageProof: &proof}}
+}
+func (s *testSource) FetchCandidates(ctx context.Context, pub nostr.PubKey, ids []string) ([]nostr.Event, error) {
+	var out []nostr.Event
+	for _, ev := range s.events {
+		if ev.PubKey == pub && slices.Contains(ids, ev.ID.Hex()) {
+			out = append(out, ev)
+		}
+	}
+	return out, ctx.Err()
 }
 func (s *testSource) PublishDeletion(ctx context.Context, ev nostr.Event) map[string]RelayEvidence {
 	_ = s.Publish(ctx, ev)
@@ -450,7 +491,7 @@ func TestCleanupInventoryAndDeletionFailClosedPerRelay(t *testing.T) {
 	public := "wss://relay.damus.io"
 	engine.Config.CleanupRelays = append(engine.Config.CleanupRelays, public)
 	source.scanOutcomes = map[string]RelayEvidence{
-		"wss://relay.example": {Status: "eose"}, public: {Status: "incomplete", Reason: "auth-required"},
+		"wss://relay.example": {Status: "complete"}, public: {Status: "incomplete", Reason: "auth-required"},
 	}
 	for _, phase := range []Phase{Declare, Contain} {
 		if err := engine.Apply(ctx, phase); err != nil {
@@ -470,7 +511,7 @@ func TestCleanupInventoryAndDeletionFailClosedPerRelay(t *testing.T) {
 	if slices.Contains(cleanupEvidence(state, Inventory), "eose") {
 		t.Fatal("EOSE misrepresented as absence proof")
 	}
-	source.scanOutcomes[public] = RelayEvidence{Status: "eose"}
+	source.scanOutcomes[public] = RelayEvidence{Status: "complete"}
 	if err := engine.Resume(ctx, Inventory); err != nil {
 		t.Fatal(err)
 	}
@@ -506,5 +547,55 @@ func TestCleanupInventoryAndDeletionFailClosedPerRelay(t *testing.T) {
 	receipt, ok := state.Receipt(DeleteAndPurge)
 	if !ok || !hasPurgeEvidence(receipt, state.DeletionIDs, engine.Config.CleanupRelays) {
 		t.Fatal("per-relay cleanup proof absent")
+	}
+}
+
+func TestInventoryDirectFetchRecoversApprovedGap(t *testing.T) {
+	ctx := context.Background()
+	engine, source, _ := fixture(t)
+	engine.Local = testLocal{}
+	source.scanEvents = []nostr.Event{}
+	for _, phase := range []Phase{Declare, Contain, Inventory} {
+		if err := engine.Apply(ctx, phase); err != nil {
+			t.Fatalf("%s: %v", phase, err)
+		}
+	}
+	state, err := engine.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 1 || state.Inventory[0].ID != engine.Config.AcceptedEventIDs[0] {
+		t.Fatalf("directly fetched candidate absent: %v", state.Inventory)
+	}
+	if _, ok := state.Receipt(Inventory); !ok {
+		t.Fatal("completed inventory receipt absent")
+	}
+}
+
+func TestInventoryMissingCandidatesRemainFailClosed(t *testing.T) {
+	ctx := context.Background()
+	engine, source, _ := fixture(t)
+	engine.Local = testLocal{}
+	source.scanEvents = []nostr.Event{}
+	missing := engine.Config.AcceptedEventIDs[0]
+	source.events = nil
+	for _, phase := range []Phase{Declare, Contain} {
+		if err := engine.Apply(ctx, phase); err != nil {
+			t.Fatal(err)
+		}
+	}
+	err := engine.Apply(ctx, Inventory)
+	if !errors.Is(err, ErrIncomplete) || !strings.Contains(err.Error(), "1 reviewed event IDs") || !strings.Contains(err.Error(), missing) {
+		t.Fatalf("missing candidate not enumerated: %v", err)
+	}
+	state, err := engine.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Inventory) != 0 || state.InventoryDigest != "" || state.Epoch != 0 || state.ActivationBarrier != 0 {
+		t.Fatal("incomplete candidate inventory advanced trust state")
+	}
+	if _, ok := state.Receipt(Inventory); ok {
+		t.Fatal("missing candidate got completed receipt")
 	}
 }

@@ -4,9 +4,11 @@ package identityrecovery
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/eventstore/slicestore"
 	"fiatjaf.com/nostr/khatru"
+	"fiatjaf.com/nostr/nip11"
 	"github.com/google/uuid"
 	adapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
@@ -27,6 +30,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrout"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
 )
 
@@ -42,7 +46,9 @@ func rehearsalServer(t *testing.T) (string, *slicestore.SliceStore) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
-	relay.UseEventstore(store, 500)
+	const perREQ = 7
+	relay.UseEventstore(store, perREQ)
+	relay.Info.Limitation = &nip11.RelayLimitationDocument{MaxLimit: perREQ}
 	server := httptest.NewServer(relay)
 	t.Cleanup(server.Close)
 	return "ws" + strings.TrimPrefix(server.URL, "http"), store
@@ -124,6 +130,18 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 		dTag := "org-key:" + key.OrgID + ":v1:" + oldPub.Hex()
 		kind, tags := adapter.ControlStateEnvelope(adapter.KindOrgKeyEnvelope, dTag, false)
 		seed(signedRegistryHead(t, old, kind, tags, cipher, int64(105+i)))
+	}
+	// These reviewed events exist only on relays, beyond a single REQ's
+	// advertised cap. Pairs share a created_at across page boundaries.
+	for i := range 12 {
+		ev := signedRegistryHead(t, old, 1, nostr.Tags{{"t", "historical"}}, fmt.Sprintf("approved historical %d", i), int64(200+i/2))
+		if err := controlledStore.SaveEvent(ev); err != nil {
+			t.Fatal(err)
+		}
+		if err := cleanupStore.SaveEvent(ev); err != nil {
+			t.Fatal(err)
+		}
+		accepted = append(accepted, ev.ID.Hex())
 	}
 	// A historical old-key event visible only on the external cleanup relay is
 	// deliberately not accepted as canonical, but must still receive deletion.
@@ -338,8 +356,21 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 				t.Fatal("seeded containment marker not verified")
 			}
 		case Inventory:
-			if len(state.Observed) != len(accepted)+1 || state.CleanupInventory[cleanup].Status != "eose" {
-				t.Fatal("historical external inventory or EOSE absent")
+			if len(state.Observed) != len(accepted)+1 || len(receipt.InventoryRelays) != 2 {
+				t.Fatal("historical external inventory or signed relay proof absent")
+			}
+			for _, relay := range []string{controlled, cleanup} {
+				proof := state.CleanupInventory[relay]
+				if proof.Status != "complete" || proof.PageProof == nil || !proof.PageProof.FinalEmptyPage || proof.PageProof.Pages < 3 || proof.PageProof.PageLimit != 7 || proof.PageProof.NIP11MaxLimit != 7 {
+					t.Fatalf("relay %s pagination proof incomplete: %+v", relay, proof)
+				}
+				if proof.PageProof.UniqueIDs < len(accepted) || len(proof.PageProof.Windows) != proof.PageProof.Pages || proof.PageProof.Windows[proof.PageProof.Pages-1].Events != 0 {
+					t.Fatalf("relay %s pagination chain incomplete: %+v", relay, proof.PageProof)
+				}
+				sum := sha256.Sum256([]byte(relayguard.Normalize(relay)))
+				if signed := receipt.InventoryRelays[hex.EncodeToString(sum[:])]; !reflect.DeepEqual(signed, proof) {
+					t.Fatal("signed pagination proof differs from ledger")
+				}
 			}
 		case CutActivateTrust:
 			heads, err := engine.Source.Read(ctx, nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kinds.CASControlState)}, Authors: []nostr.PubKey{root}, Tags: nostr.TagMap{"d": {"trust-epoch:" + cfg.Nostr.ServiceID}}})

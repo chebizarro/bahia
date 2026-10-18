@@ -39,7 +39,7 @@ identity_recovery:
       method: nip55l
 ```
 
-`accepted_event_ids` is an operator-reviewed allowlist from pre-compromise evidence, not an automatic trust decision based on old-key signatures or timestamps. The inventory scans old-key events on every cleanup relay to per-relay EOSE plus the local store, records each relay as EOSE-complete or incomplete with a reason, deduplicates by event ID, and refuses an approved ID absent from those sources. Its digest is SHA-256 of the newline-joined, lexicographically sorted approved IDs. An empty reviewed list is represented by `accepted_event_ids: []`.
+`accepted_event_ids` is an operator-reviewed allowlist from pre-compromise evidence, not an automatic trust decision based on old-key signatures or timestamps. The inventory scans old-key events on every cleanup relay through bounded, overlapping `until` pages and a final empty verification page, then merges the local store. EOSE closes one page, not the full audit. The ledger and signed receipt record each relay's page count, unique ID count, covered timestamp range, page limit, advertised NIP-11 limit, and final-empty termination proof. The signed receipt identifies relays by URL digest, not URL. Event IDs are deduplicated; a reviewed ID absent from the scan and local store gets a direct by-ID relay fetch before the engine reports a count and sample of missing IDs and refuses completion. A timestamp boundary that cannot be paged without a possible gap remains incomplete. The approved inventory digest is SHA-256 of the newline-joined, lexicographically sorted approved IDs. An empty reviewed list is represented by `accepted_event_ids: []`.
 
 ```bash
 bahia-recover plan --config /etc/bahia/config.yaml

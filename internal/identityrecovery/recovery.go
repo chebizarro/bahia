@@ -144,14 +144,15 @@ type TrustEpoch struct {
 	Activated         bool     `json:"activated"`
 }
 type Receipt struct {
-	IncidentID     string                    `json:"incident_id"`
-	Phase          Phase                     `json:"phase"`
-	Status         string                    `json:"status"`
-	InputDigest    string                    `json:"input_digest"`
-	EvidenceIDs    []string                  `json:"evidence_ids"`
-	WaiverEventIDs map[string]string         `json:"waiver_event_ids,omitempty"`
-	WaiverDetails  map[string]WaiverEvidence `json:"waiver_details,omitempty"`
-	CompletedAt    string                    `json:"completed_at"`
+	IncidentID      string                    `json:"incident_id"`
+	Phase           Phase                     `json:"phase"`
+	Status          string                    `json:"status"`
+	InputDigest     string                    `json:"input_digest"`
+	EvidenceIDs     []string                  `json:"evidence_ids"`
+	InventoryRelays map[string]RelayEvidence  `json:"inventory_relays,omitempty"`
+	WaiverEventIDs  map[string]string         `json:"waiver_event_ids,omitempty"`
+	WaiverDetails   map[string]WaiverEvidence `json:"waiver_details,omitempty"`
+	CompletedAt     string                    `json:"completed_at"`
 }
 type InventoryEvent struct {
 	ID        string `json:"id"`

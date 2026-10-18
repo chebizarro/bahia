@@ -2,6 +2,7 @@ package identityrecovery
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -15,12 +16,14 @@ import (
 // text (which may contain credentials). The URL is local-ledger evidence;
 // signed receipts use its digest instead.
 type RelayEvidence struct {
-	Status string `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Status    string                      `json:"status"`
+	Reason    string                      `json:"reason,omitempty"`
+	PageProof *adapter.StoredPageEvidence `json:"page_proof,omitempty"`
 }
 
 type CleanupTransport interface {
 	Scan(context.Context, nostr.Filter) ([]nostr.Event, map[string]RelayEvidence)
+	FetchCandidates(context.Context, nostr.PubKey, []string) ([]nostr.Event, error)
 	PublishDeletion(context.Context, nostr.Event) map[string]RelayEvidence
 }
 
@@ -34,56 +37,19 @@ func (s CleanupRelaySource) Scan(ctx context.Context, filter nostr.Filter) ([]no
 	seen := map[nostr.ID]nostr.Event{}
 	for _, raw := range s.Relays {
 		url := relayguard.Normalize(raw)
-		readCtx, cancel := adapter.BoundStoredEventsWait(ctx, adapter.DefaultStoredEventsTimeout)
-		sub, err := s.Pool.SubscribeWithOptions(readCtx, []nostr.Filter{filter}, adapter.SubscribeOptions{Relays: []string{url}, AwaitUnavailableRelays: true, ValidateEvent: func(ev *nostr.Event) bool { return ev.CheckID() && ev.VerifySignature() }})
+		events, proof, err := s.Pool.ScanStoredPages(ctx, url, filter)
+		evidence := RelayEvidence{Status: "complete", PageProof: &proof}
 		if err != nil {
-			outcomes[url] = RelayEvidence{Status: "incomplete", Reason: "unreachable"}
-			cancel()
-			continue
-		}
-		complete := false
-		for !complete {
-			select {
-			case ev, ok := <-sub.Events:
-				if !ok {
-					complete = true
-					break
-				}
-				seen[ev.ID] = *ev
-			case <-sub.EndOfStoredEvents:
-				for draining := true; draining; {
-					select {
-					case ev, ok := <-sub.Events:
-						if !ok {
-							draining = false
-						} else {
-							seen[ev.ID] = *ev
-						}
-					default:
-						draining = false
-					}
-				}
-				complete = true
-			case <-readCtx.Done():
-				complete = true
-			}
-		}
-		evidence := RelayEvidence{Status: "eose"}
-		if !sub.AllRelaysReachedEOSE() || sub.StoredEventsIncomplete(readCtx.Err()) != nil {
-			evidence = RelayEvidence{Status: "incomplete", Reason: "unreachable"}
-			for _, result := range sub.StoredOutcomes() {
-				if result.Truncated {
-					evidence.Reason = "truncated"
-				} else if result.Status == adapter.RelayStoredClosed {
-					evidence.Reason = classifyRelayReason(result.Reason, "closed")
-				} else if readCtx.Err() != nil {
-					evidence.Reason = "unreachable"
-				}
+			evidence.Status = "incomplete"
+			evidence.Reason = "unreachable"
+			if errors.Is(err, adapter.ErrStoredHistoryBoundary) {
+				evidence.Reason = "timestamp-boundary"
 			}
 		}
 		outcomes[url] = evidence
-		sub.Close()
-		cancel()
+		for _, ev := range events {
+			seen[ev.ID] = ev
+		}
 	}
 	out := make([]nostr.Event, 0, len(seen))
 	for _, ev := range seen {
@@ -91,6 +57,42 @@ func (s CleanupRelaySource) Scan(ctx context.Context, filter nostr.Filter) ([]no
 	}
 	slices.SortFunc(out, func(a, b nostr.Event) int { return slices.Compare(a.ID[:], b.ID[:]) })
 	return out, outcomes
+}
+
+// FetchCandidates asks each audited relay directly for reviewed IDs that the
+// history scan and local store did not expose. A failed relay cannot make a
+// missing ID pass the engine's cross-check.
+func (s CleanupRelaySource) FetchCandidates(ctx context.Context, pub nostr.PubKey, ids []string) ([]nostr.Event, error) {
+	const batchSize = 64
+	seen := make(map[nostr.ID]nostr.Event)
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		batch := make([]nostr.ID, 0, end-start)
+		for _, raw := range ids[start:end] {
+			id, err := nostr.IDFromHex(raw)
+			if err != nil {
+				return nil, errors.New("invalid reviewed event ID")
+			}
+			batch = append(batch, id)
+		}
+		for _, relay := range s.Relays {
+			events, err := scanRecoveryRelay(ctx, s.Pool, relay, nostr.Filter{IDs: batch, Authors: []nostr.PubKey{pub}})
+			for _, ev := range events {
+				seen[ev.ID] = ev
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
+			}
+		}
+	}
+	out := make([]nostr.Event, 0, len(seen))
+	for _, ev := range seen {
+		out = append(out, ev)
+	}
+	return out, nil
 }
 
 func (s CleanupRelaySource) PublishDeletion(ctx context.Context, ev nostr.Event) map[string]RelayEvidence {

@@ -2,6 +2,8 @@ package identityrecovery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/relayguard"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
 )
 
@@ -243,6 +246,13 @@ func (e *Engine) receipt(ctx context.Context, s *State, p Phase, status string, 
 		return err
 	}
 	r := Receipt{IncidentID: s.IncidentID, Phase: p, Status: status, InputDigest: digestInput(*s, p), EvidenceIDs: evidence, CompletedAt: e.clock().Format(time.RFC3339)}
+	if p == Inventory && status == "completed" {
+		r.InventoryRelays = make(map[string]RelayEvidence, len(s.CleanupInventory))
+		for relay, proof := range s.CleanupInventory {
+			sum := sha256.Sum256([]byte(relayguard.Normalize(relay)))
+			r.InventoryRelays[hex.EncodeToString(sum[:])] = proof
+		}
+	}
 	if p == CutActivateTrust && status == "completed" {
 		r.WaiverEventIDs = s.CutoverWaiverEventIDs
 		r.WaiverDetails = s.CutoverWaiverDetails
@@ -317,6 +327,9 @@ func (e *Engine) requireNotificationReencryption(ctx context.Context, s State, d
 	return nil
 }
 func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
+	s.Inventory = nil
+	s.Observed = nil
+	s.InventoryDigest = ""
 	if e.Local == nil {
 		return nil, errors.New("local event store required")
 	}
@@ -329,7 +342,7 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 	if err := e.Ledger.Save(*s); err != nil {
 		return nil, err
 	}
-	if !completeCleanup(outcomes, e.Config.CleanupRelays, "eose") {
+	if !completeCleanup(outcomes, e.Config.CleanupRelays, "complete") {
 		return nil, fmt.Errorf("cleanup relay inventory incomplete: %w", ErrIncomplete)
 	}
 	localEvents, err := e.Local.Events(ctx, e.Config.OldPubkey)
@@ -343,17 +356,41 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 		}
 		scanned[ev.ID.Hex()] = InventoryEvent{ID: ev.ID.Hex(), Kind: int(ev.Kind), CreatedAt: int64(ev.CreatedAt)}
 	}
+	var missing []string
+	for _, id := range e.Config.AcceptedEventIDs {
+		if _, ok := scanned[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		fetched, err := e.Cleanup.FetchCandidates(ctx, e.Config.OldPubkey, missing)
+		if err != nil {
+			return nil, err
+		}
+		for _, ev := range fetched {
+			if ev.PubKey != e.Config.OldPubkey || !ev.CheckID() || !ev.VerifySignature() {
+				return nil, errors.New("invalid old-key candidate event")
+			}
+			scanned[ev.ID.Hex()] = InventoryEvent{ID: ev.ID.Hex(), Kind: int(ev.Kind), CreatedAt: int64(ev.CreatedAt)}
+		}
+	}
 	s.Observed = make([]InventoryEvent, 0, len(scanned))
 	for _, item := range scanned {
 		s.Observed = append(s.Observed, item)
 	}
 	slices.SortFunc(s.Observed, func(a, b InventoryEvent) int { return slices.Compare([]byte(a.ID), []byte(b.ID)) })
 	approved := map[string]struct{}{}
+	missing = missing[:0]
 	for _, id := range e.Config.AcceptedEventIDs {
 		if _, ok := scanned[id]; !ok {
-			return nil, fmt.Errorf("reviewed event %s absent from audited sources", id)
+			missing = append(missing, id)
+			continue
 		}
 		approved[id] = struct{}{}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return nil, fmt.Errorf("%w: %d reviewed event IDs absent from audited sources after by-ID fetch (sample: %v)", ErrIncomplete, len(missing), missing[:min(len(missing), 5)])
 	}
 	s.Inventory = make([]InventoryEvent, 0, len(approved))
 	for id := range approved {
