@@ -248,6 +248,14 @@ func (e *Engine) receipt(ctx context.Context, s *State, p Phase, status string, 
 	r := Receipt{IncidentID: s.IncidentID, Phase: p, Status: status, InputDigest: digestInput(*s, p), EvidenceIDs: evidence, CompletedAt: e.clock().Format(time.RFC3339)}
 	if p == Inventory && status == "completed" {
 		r.InventoryRelays = make(map[string]RelayEvidence, len(s.CleanupInventory))
+		r.InventorySnapshots = s.InventorySnapshots
+		r.InventorySourceDefault = "relay"
+		r.InventorySources = map[string]string{}
+		for id, source := range s.InventorySources {
+			if source != "relay" {
+				r.InventorySources[id] = source
+			}
+		}
 		for relay, proof := range s.CleanupInventory {
 			sum := sha256.Sum256([]byte(relayguard.Normalize(relay)))
 			r.InventoryRelays[hex.EncodeToString(sum[:])] = proof
@@ -330,6 +338,9 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 	s.Inventory = nil
 	s.Observed = nil
 	s.InventoryDigest = ""
+	s.InventorySnapshots = nil
+	s.InventorySources = map[string]string{}
+	s.VerifiedSnapshots = nil
 	if e.Local == nil {
 		return nil, errors.New("local event store required")
 	}
@@ -350,11 +361,20 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 		return nil, err
 	}
 	scanned := map[string]InventoryEvent{}
-	for _, ev := range append(relayEvents, localEvents...) {
-		if ev.PubKey != e.Config.OldPubkey || !ev.CheckID() || !ev.VerifySignature() {
-			return nil, errors.New("invalid old-key inventory event")
+	for _, group := range []struct {
+		events []nostr.Event
+		source string
+	}{{relayEvents, "relay"}, {localEvents, "local"}} {
+		for _, ev := range group.events {
+			if ev.PubKey != e.Config.OldPubkey || !ev.CheckID() || !ev.VerifySignature() {
+				return nil, errors.New("invalid old-key inventory event")
+			}
+			id := ev.ID.Hex()
+			if _, exists := scanned[id]; !exists {
+				s.InventorySources[id] = group.source
+			}
+			scanned[id] = InventoryEvent{ID: id, Kind: int(ev.Kind), CreatedAt: int64(ev.CreatedAt)}
 		}
-		scanned[ev.ID.Hex()] = InventoryEvent{ID: ev.ID.Hex(), Kind: int(ev.Kind), CreatedAt: int64(ev.CreatedAt)}
 	}
 	var missing []string
 	for _, id := range e.Config.AcceptedEventIDs {
@@ -372,6 +392,31 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 				return nil, errors.New("invalid old-key candidate event")
 			}
 			scanned[ev.ID.Hex()] = InventoryEvent{ID: ev.ID.Hex(), Kind: int(ev.Kind), CreatedAt: int64(ev.CreatedAt)}
+			s.InventorySources[ev.ID.Hex()] = "relay"
+		}
+	}
+	if len(e.Config.VerifiedSnapshots) > 0 {
+		missing = missing[:0]
+		for _, id := range e.Config.AcceptedEventIDs {
+			if _, ok := scanned[id]; !ok {
+				missing = append(missing, id)
+			}
+		}
+		if len(missing) > 0 {
+			source := VerifiedSnapshotSource{Artifacts: e.Config.VerifiedSnapshots}
+			recovered, receipts, err := source.ReadMissing(ctx, e.Config.OldPubkey, s.DeclaredAt, missing)
+			if err != nil {
+				return nil, err
+			}
+			s.VerifiedSnapshots = append([]SnapshotArtifact(nil), e.Config.VerifiedSnapshots...)
+			s.InventorySnapshots = receipts
+			for _, receipt := range receipts {
+				for _, id := range receipt.AdmittedIDs {
+					ev := recovered[id]
+					scanned[id] = InventoryEvent{ID: id, Kind: int(ev.Kind), CreatedAt: int64(ev.CreatedAt)}
+					s.InventorySources[id] = "snapshot:" + receipt.ComputedSHA256[:12]
+				}
+			}
 		}
 	}
 	s.Observed = make([]InventoryEvent, 0, len(scanned))
@@ -390,7 +435,12 @@ func (e *Engine) inventory(ctx context.Context, s *State) ([]string, error) {
 	}
 	if len(missing) > 0 {
 		slices.Sort(missing)
-		return nil, fmt.Errorf("%w: %d reviewed event IDs absent from audited sources after by-ID fetch (sample: %v)", ErrIncomplete, len(missing), missing[:min(len(missing), 5)])
+		return nil, fmt.Errorf("%w: %d reviewed event IDs absent after relay, local, by-ID and verified snapshot reads: %v", ErrIncomplete, len(missing), missing)
+	}
+	for id := range s.InventorySources {
+		if _, ok := approved[id]; !ok {
+			delete(s.InventorySources, id)
+		}
 	}
 	s.Inventory = make([]InventoryEvent, 0, len(approved))
 	for id := range approved {

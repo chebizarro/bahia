@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -284,5 +285,79 @@ func TestRegistryRecoveryRejectsAcceptedOldEventAfterBarrier(t *testing.T) {
 	a, relay, _, newKey := registryFixture(t, adapter.KindServiceRegistry, []nostr.Event{old})
 	if _, err := a.Reassert(context.Background(), newKey); err == nil || relay.publishes != 0 {
 		t.Fatalf("post-barrier accepted event error=%v publishes=%d", err, relay.publishes)
+	}
+}
+
+func TestRegistrySnapshotSupersededRevisionDoesNotReassertOldHead(t *testing.T) {
+	ctx := context.Background()
+	oldKey := signer(t)
+	svc := &domain.Service{ID: uuid.New(), OrgID: uuid.New(), Name: "old", RuntimeType: domain.RuntimeTypeDocker, ArtifactRepo: "registry.example/app"}
+	kind, tags, content := adapter.ServiceRegistryRecoveryRecord(svc, false)
+	old := signedRegistryHead(t, oldKey, kind, tags, content, 100)
+	svc.Name = "current"
+	_, currentTags, currentContent := adapter.ServiceRegistryRecoveryRecord(svc, false)
+	current := signedRegistryHead(t, oldKey, kind, currentTags, currentContent, 110)
+	recovery, relay, local, newKey := registryFixture(t, adapter.KindServiceRegistry, []nostr.Event{old, current})
+	relay.events = []nostr.Event{current}
+	local.events = []nostr.Event{current}
+	artifact, _ := writeSnapshot(t, snapshotLine(t, old))
+	state, err := recovery.Ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DeclaredAt = time.Unix(1000, 0).UTC().Format(time.RFC3339)
+	state.VerifiedSnapshots = []SnapshotArtifact{artifact}
+	if err := recovery.Ledger.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	heads, err := recovery.inventoryHeads(ctx)
+	if err != nil || len(heads) != 1 || heads[tag(current, "d")].ID != current.ID {
+		t.Fatalf("accepted head: %v %v", heads, err)
+	}
+	if _, err := recovery.Reassert(ctx, newKey); err != nil {
+		t.Fatal(err)
+	}
+	var published *nostr.Event
+	for i := range relay.events {
+		if relay.events[i].PubKey == pub(t, newKey) {
+			published = &relay.events[i]
+		}
+	}
+	if relay.publishes != 1 || published == nil || published.Content != current.Content || published.Content == old.Content {
+		t.Fatalf("superseded old revision reasserted: %+v", published)
+	}
+	if _, err := recovery.Verify(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistryRejectsSnapshotRevisionSupersededByUnapprovedHead(t *testing.T) {
+	ctx := context.Background()
+	oldKey := signer(t)
+	svc := &domain.Service{ID: uuid.New(), OrgID: uuid.New(), Name: "old", RuntimeType: domain.RuntimeTypeDocker, ArtifactRepo: "registry.example/app"}
+	kind, tags, content := adapter.ServiceRegistryRecoveryRecord(svc, false)
+	old := signedRegistryHead(t, oldKey, kind, tags, content, 100)
+	svc.Name = "unapproved-current"
+	_, newerTags, newerContent := adapter.ServiceRegistryRecoveryRecord(svc, false)
+	current := signedRegistryHead(t, oldKey, kind, newerTags, newerContent, 110)
+	recovery, relay, local, newKey := registryFixture(t, adapter.KindServiceRegistry, []nostr.Event{old})
+	relay.events = []nostr.Event{current}
+	local.events = []nostr.Event{current}
+	artifact, _ := writeSnapshot(t, snapshotLine(t, old))
+	state, err := recovery.Ledger.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DeclaredAt = time.Unix(1000, 0).UTC().Format(time.RFC3339)
+	state.VerifiedSnapshots = []SnapshotArtifact{artifact}
+	state.InventorySources = map[string]string{old.ID.Hex(): "snapshot:" + artifact.SHA256[:12]}
+	if err := recovery.Ledger.Save(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recovery.Reassert(ctx, newKey); err == nil || !strings.Contains(err.Error(), "superseded") {
+		t.Fatalf("superseded snapshot head accepted: %v", err)
+	}
+	if relay.publishes != 0 || local.writes != 0 {
+		t.Fatal("unapproved superseding revision caused publication")
 	}
 }

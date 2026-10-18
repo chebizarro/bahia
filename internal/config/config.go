@@ -799,20 +799,26 @@ type NostrConfig struct {
 	Outbound NostrOutboundConfig `koanf:"outbound" yaml:"outbound"`
 }
 
+type VerifiedSnapshotConfig struct {
+	Path   string `koanf:"path" yaml:"path" secret:"false"`
+	SHA256 string `koanf:"sha256" yaml:"sha256" secret:"false"`
+}
+
 // IdentityRecoveryConfig is operator-only; the daemon never opens its ledger or signers.
 type IdentityRecoveryConfig struct {
-	LedgerPath                string             `koanf:"ledger_path" yaml:"ledger_path" secret:"false"`
-	OldPubkey                 string             `koanf:"old_pubkey" yaml:"old_pubkey" secret:"false"`
-	ReasonCode                string             `koanf:"reason_code" yaml:"reason_code" secret:"false"`
-	ControlledRelays          []string           `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
-	CleanupRelays             []string           `koanf:"cleanup_relays" yaml:"cleanup_relays" secret:"false"`
-	ConsumerRoster            []string           `koanf:"consumer_roster" yaml:"consumer_roster" secret:"false"`
-	AcknowledgmentAuthorities map[string]string  `koanf:"acknowledgment_authorities" yaml:"acknowledgment_authorities" secret:"false"`
-	AcceptedEventIDs          []string           `koanf:"accepted_event_ids" yaml:"accepted_event_ids" secret:"false"`
-	PurgeEvidencePath         string             `koanf:"purge_evidence_path" yaml:"purge_evidence_path" secret:"false"`
-	Operator                  ConfigFabricConfig `koanf:"operator" yaml:"operator"`
-	NewIdentity               ConfigFabricConfig `koanf:"new_identity" yaml:"new_identity"`
-	OldSigner                 ConfigFabricConfig `koanf:"old_signer" yaml:"old_signer"`
+	LedgerPath                string                   `koanf:"ledger_path" yaml:"ledger_path" secret:"false"`
+	OldPubkey                 string                   `koanf:"old_pubkey" yaml:"old_pubkey" secret:"false"`
+	ReasonCode                string                   `koanf:"reason_code" yaml:"reason_code" secret:"false"`
+	ControlledRelays          []string                 `koanf:"controlled_relays" yaml:"controlled_relays" secret:"false"`
+	CleanupRelays             []string                 `koanf:"cleanup_relays" yaml:"cleanup_relays" secret:"false"`
+	ConsumerRoster            []string                 `koanf:"consumer_roster" yaml:"consumer_roster" secret:"false"`
+	AcknowledgmentAuthorities map[string]string        `koanf:"acknowledgment_authorities" yaml:"acknowledgment_authorities" secret:"false"`
+	AcceptedEventIDs          []string                 `koanf:"accepted_event_ids" yaml:"accepted_event_ids" secret:"false"`
+	VerifiedSnapshots         []VerifiedSnapshotConfig `koanf:"verified_snapshots" yaml:"verified_snapshots"`
+	PurgeEvidencePath         string                   `koanf:"purge_evidence_path" yaml:"purge_evidence_path" secret:"false"`
+	Operator                  ConfigFabricConfig       `koanf:"operator" yaml:"operator"`
+	NewIdentity               ConfigFabricConfig       `koanf:"new_identity" yaml:"new_identity"`
+	OldSigner                 ConfigFabricConfig       `koanf:"old_signer" yaml:"old_signer"`
 }
 
 // ConfigFabricConfig pins the independent operator identity used by daemon

@@ -88,11 +88,10 @@ func (a canonicalHeadAdapter) heads(ctx context.Context) (map[string]nostr.Event
 		}
 		seen[ev.ID] = ev
 	}
-	for id := range accepted {
-		if _, ok := seen[id]; !ok {
-			return nil, errors.New("accepted canonical inventory event no longer present in audited sources")
-		}
+	if err := completeAcceptedHistory(ctx, s, a.old, accepted, seen); err != nil {
+		return nil, err
 	}
+
 	heads := map[string]nostr.Event{}
 	for _, ev := range seen {
 		if !a.belongs(ev) {
@@ -108,6 +107,9 @@ func (a canonicalHeadAdapter) heads(ctx context.Context) (map[string]nostr.Event
 		}
 	}
 	for key, ev := range heads {
+		if err := rejectSupersededSnapshotHead(ctx, s, a.source, local, a.old, ev); err != nil {
+			return nil, fmt.Errorf("%s coordinate %s: %w", a.name, key, err)
+		}
 		if err := a.preflight(ev); err != nil {
 			return nil, fmt.Errorf("%s coordinate %s: %w", a.name, key, err)
 		}

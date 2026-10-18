@@ -41,20 +41,24 @@ var ErrForwardOnly = errors.New("trust cutover is activated; recovery is forward
 var ErrIncomplete = errors.New("recovery evidence incomplete")
 
 type Config struct {
-	ServiceID        string
-	OldPubkey        nostr.PubKey
-	ReasonCode       string
-	ControlledRelays []string
-	CleanupRelays    []string
-	ConsumerRoster   []string
-	OperatorPubkey   nostr.PubKey
-	LocalStorePath   string
-	AcceptedEventIDs []string
+	ServiceID         string
+	OldPubkey         nostr.PubKey
+	ReasonCode        string
+	ControlledRelays  []string
+	CleanupRelays     []string
+	ConsumerRoster    []string
+	OperatorPubkey    nostr.PubKey
+	LocalStorePath    string
+	AcceptedEventIDs  []string
+	VerifiedSnapshots []SnapshotArtifact
 }
 
 func (c Config) Validate() error {
 	if c.ServiceID == "" || c.OldPubkey == nostr.ZeroPK || c.OperatorPubkey == nostr.ZeroPK || c.OldPubkey == c.OperatorPubkey || c.ReasonCode == "" || !codePattern.MatchString(c.ReasonCode) || !codePattern.MatchString(c.ServiceID) || len(c.ControlledRelays) == 0 || len(c.CleanupRelays) == 0 || len(c.ConsumerRoster) == 0 || c.LocalStorePath == "" {
 		return errors.New("incomplete recovery configuration")
+	}
+	if err := validateSnapshotArtifacts(c.VerifiedSnapshots); err != nil {
+		return err
 	}
 	if slices.Contains(c.ControlledRelays, "") || slices.Contains(c.CleanupRelays, "") || slices.Contains(c.ConsumerRoster, "") {
 		return errors.New("empty relay or consumer")
@@ -144,15 +148,18 @@ type TrustEpoch struct {
 	Activated         bool     `json:"activated"`
 }
 type Receipt struct {
-	IncidentID      string                    `json:"incident_id"`
-	Phase           Phase                     `json:"phase"`
-	Status          string                    `json:"status"`
-	InputDigest     string                    `json:"input_digest"`
-	EvidenceIDs     []string                  `json:"evidence_ids"`
-	InventoryRelays map[string]RelayEvidence  `json:"inventory_relays,omitempty"`
-	WaiverEventIDs  map[string]string         `json:"waiver_event_ids,omitempty"`
-	WaiverDetails   map[string]WaiverEvidence `json:"waiver_details,omitempty"`
-	CompletedAt     string                    `json:"completed_at"`
+	IncidentID             string                    `json:"incident_id"`
+	Phase                  Phase                     `json:"phase"`
+	Status                 string                    `json:"status"`
+	InputDigest            string                    `json:"input_digest"`
+	EvidenceIDs            []string                  `json:"evidence_ids"`
+	InventoryRelays        map[string]RelayEvidence  `json:"inventory_relays,omitempty"`
+	InventorySnapshots     []SnapshotReceipt         `json:"inventory_snapshots,omitempty"`
+	InventorySources       map[string]string         `json:"inventory_sources,omitempty"`
+	InventorySourceDefault string                    `json:"inventory_source_default,omitempty"`
+	WaiverEventIDs         map[string]string         `json:"waiver_event_ids,omitempty"`
+	WaiverDetails          map[string]WaiverEvidence `json:"waiver_details,omitempty"`
+	CompletedAt            string                    `json:"completed_at"`
 }
 type InventoryEvent struct {
 	ID        string `json:"id"`
@@ -171,6 +178,9 @@ type State struct {
 	CleanupInventory      map[string]RelayEvidence            `json:"cleanup_inventory,omitempty"`
 	CleanupDeletions      map[string]map[string]RelayEvidence `json:"cleanup_deletions,omitempty"`
 	InventoryDigest       string                              `json:"inventory_digest"`
+	InventorySnapshots    []SnapshotReceipt                   `json:"inventory_snapshots,omitempty"`
+	InventorySources      map[string]string                   `json:"inventory_sources,omitempty"`
+	VerifiedSnapshots     []SnapshotArtifact                  `json:"verified_snapshots,omitempty"`
 	Epoch                 int64                               `json:"epoch"`
 	ActivationBarrier     int64                               `json:"activation_barrier"`
 	CutoverWaiverEventIDs map[string]string                   `json:"cutover_waiver_event_ids,omitempty"`

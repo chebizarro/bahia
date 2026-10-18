@@ -113,8 +113,7 @@ func (a *SQLReviewDraftAdapter) canonicalHeads(ctx context.Context, s State) (ma
 		}
 		accepted[id] = struct{}{}
 	}
-	seen := map[nostr.ID]struct{}{}
-	heads := map[string]nostr.Event{}
+	seen := map[nostr.ID]nostr.Event{}
 	for _, ev := range append(oldRelay, oldLocal...) {
 		if _, ok := accepted[ev.ID]; !ok {
 			continue
@@ -122,17 +121,18 @@ func (a *SQLReviewDraftAdapter) canonicalHeads(ctx context.Context, s State) (ma
 		if ev.PubKey != a.OldPubkey || !ev.CheckID() || !ev.VerifySignature() || int64(ev.CreatedAt) > s.ActivationBarrier {
 			return nil, errors.New("invalid accepted old-key SQL comparison event")
 		}
-		seen[ev.ID] = struct{}{}
+		seen[ev.ID] = ev
+	}
+	if err := completeAcceptedHistory(ctx, s, a.OldPubkey, accepted, seen); err != nil {
+		return nil, err
+	}
+	heads := map[string]nostr.Event{}
+	for _, ev := range seen {
 		key := sqlHeadKey(int(ev.Kind), tag(ev, "d"), tag(ev, "legacy_kind"))
 		if ev.Kind == nostr.Kind(kinds.CASControlState) || tag(ev, "d") != "" {
 			if prior, ok := heads[key]; !ok || newer(ev, prior) {
 				heads[key] = ev
 			}
-		}
-	}
-	for id := range accepted {
-		if _, ok := seen[id]; !ok {
-			return nil, errors.New("accepted SQL comparison event no longer present in audited sources")
 		}
 	}
 	for _, ev := range append(newRelay, newLocal...) {

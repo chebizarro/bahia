@@ -88,7 +88,14 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0).UTC()
 	svc := &domain.Service{ID: uuid.New(), OrgID: uuid.New(), Name: "api", ArtifactRepo: "registry.example/api", RuntimeType: domain.RuntimeTypeDocker, CreatedAt: now, UpdatedAt: now}
 	kind, tags, content := adapter.ServiceRegistryRecoveryRecord(svc, false)
-	seed(signedRegistryHead(t, old, kind, tags, content, 100))
+	snapshotOld := signedRegistryHead(t, old, kind, tags, content, 100)
+	accepted = append(accepted, snapshotOld.ID.Hex())
+	svc.Name = "api-current"
+	_, currentTags, currentContent := adapter.ServiceRegistryRecoveryRecord(svc, false)
+	currentService := signedRegistryHead(t, old, kind, currentTags, currentContent, 110)
+	seed(currentService)
+	snapshotUnapproved := signedRegistryHead(t, old, 1, nostr.Tags{{"t", "historical"}}, "not operator approved", 99)
+	snapshot, snapshotRaw := writeSnapshot(t, snapshotLine(t, snapshotOld), snapshotLine(t, snapshotUnapproved))
 	recipe := &domain.BackupRecipe{ID: uuid.New(), OrgID: svc.OrgID, Name: "daily", Version: "v1", Backend: domain.BackupBackendKopia, RepositoryID: uuid.New(), TargetRef: "service:api", CreatedAt: now, UpdatedAt: now}
 	backupTags, backupContent := adapter.BackupRecipeRegistryRecord(recipe, false)
 	backupKind, backupEnvelope := adapter.ControlStateEnvelope(adapter.KindBackupRecipeRegistry, adapter.BackupRecipeDTag(recipe.ID), false)
@@ -181,7 +188,7 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 	if err := os.WriteFile(purgePath, purgeRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg.IdentityRecovery = config.IdentityRecoveryConfig{LedgerPath: ledgerPath, OldPubkey: oldPub.Hex(), ReasonCode: "compromised", ControlledRelays: []string{controlled}, CleanupRelays: []string{controlled, cleanup}, ConsumerRoster: trustepoch.ConsumerIDs(), AcknowledgmentAuthorities: authorities, AcceptedEventIDs: accepted, PurgeEvidencePath: purgePath, Operator: signerConfig(operator), NewIdentity: signerConfig(newKey), OldSigner: signerConfig(old)}
+	cfg.IdentityRecovery = config.IdentityRecoveryConfig{LedgerPath: ledgerPath, OldPubkey: oldPub.Hex(), ReasonCode: "compromised", ControlledRelays: []string{controlled}, CleanupRelays: []string{controlled, cleanup}, ConsumerRoster: trustepoch.ConsumerIDs(), AcknowledgmentAuthorities: authorities, AcceptedEventIDs: accepted, VerifiedSnapshots: []config.VerifiedSnapshotConfig{{Path: snapshot.Path, SHA256: snapshot.SHA256}}, PurgeEvidencePath: purgePath, Operator: signerConfig(operator), NewIdentity: signerConfig(newKey), OldSigner: signerConfig(old)}
 	cfg.SecretStore.SystemKeys.AssistantTranscript = []config.SystemKeyConfig{{KeyID: "k1", CredentialID: "cred_" + strings.Repeat("a", 64), Version: 1}}
 	budget := nostrout.PurposeBudget{RatePerMinute: 100000, Burst: 100000}
 	admission := nostrout.New(nostrout.Config{Aggregate: budget, PurposeBudgets: map[nostrout.Purpose]nostrout.PurposeBudget{nostrout.PurposePriority: budget, nostrout.PurposeState: budget, nostrout.PurposeGeneral: budget, nostrout.PurposeBulk: budget, nostrout.PurposeSigner: budget}, RelayWire: budget, RelayWirePriority: budget})
@@ -234,6 +241,28 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 			}
 			marker := []byte(`{"incident_id":"` + state.IncidentID + `"}`)
 			if err := os.WriteFile(cfg.Nostr.LocalStore.ResolvedOutboxPath()+".identity-containment", marker, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		case Inventory:
+			tampered := append([]byte(nil), snapshotRaw...)
+			tampered[len(tampered)/2] ^= 1
+			if err := os.WriteFile(snapshot.Path, tampered, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := engine.Apply(ctx, Inventory); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+				t.Fatalf("tampered snapshot accepted: %v", err)
+			}
+			failed, err := engine.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if failed.InventoryDigest != "" {
+				t.Fatal("tampered snapshot advanced inventory")
+			}
+			if _, ok := failed.Receipt(Inventory); ok {
+				t.Fatal("tampered snapshot got completion receipt")
+			}
+			if err := os.WriteFile(snapshot.Path, snapshotRaw, 0o600); err != nil {
 				t.Fatal(err)
 			}
 		case CutActivateTrust:
@@ -356,6 +385,9 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 				t.Fatal("seeded containment marker not verified")
 			}
 		case Inventory:
+			if state.InventorySources[snapshotOld.ID.Hex()] != "snapshot:"+snapshot.SHA256[:12] || receipt.InventorySources[snapshotOld.ID.Hex()] != state.InventorySources[snapshotOld.ID.Hex()] || state.InventorySources[currentService.ID.Hex()] != "relay" || receipt.InventorySourceDefault != "relay" || receipt.InventorySources[currentService.ID.Hex()] != "" || len(receipt.InventorySnapshots) != 1 || receipt.InventorySnapshots[0].EventCount != 2 || !slices.Equal(receipt.InventorySnapshots[0].AdmittedIDs, []string{snapshotOld.ID.Hex()}) || slices.Contains(receipt.InventorySnapshots[0].AdmittedIDs, snapshotUnapproved.ID.Hex()) {
+				t.Fatalf("snapshot provenance/admission: state=%v receipt=%+v", state.InventorySources, receipt.InventorySnapshots)
+			}
 			if len(state.Observed) != len(accepted)+1 || len(receipt.InventoryRelays) != 2 {
 				t.Fatal("historical external inventory or signed relay proof absent")
 			}
@@ -364,7 +396,7 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 				if proof.Status != "complete" || proof.PageProof == nil || !proof.PageProof.FinalEmptyPage || proof.PageProof.Pages < 3 || proof.PageProof.PageLimit != 7 || proof.PageProof.NIP11MaxLimit != 7 {
 					t.Fatalf("relay %s pagination proof incomplete: %+v", relay, proof)
 				}
-				if proof.PageProof.UniqueIDs < len(accepted) || len(proof.PageProof.Windows) != proof.PageProof.Pages || proof.PageProof.Windows[proof.PageProof.Pages-1].Events != 0 {
+				if proof.PageProof.UniqueIDs < len(accepted)-1 || len(proof.PageProof.Windows) != proof.PageProof.Pages || proof.PageProof.Windows[proof.PageProof.Pages-1].Events != 0 {
 					t.Fatalf("relay %s pagination chain incomplete: %+v", relay, proof.PageProof)
 				}
 				sum := sha256.Sum256([]byte(relayguard.Normalize(relay)))
@@ -398,6 +430,10 @@ func TestStagingIdentityRecoveryRehearsal(t *testing.T) {
 				t.Fatalf("post-cut abort: %v", err)
 			}
 		case ReassertCanonicalState:
+			serviceHeads, err := engine.Source.Read(ctx, nostr.Filter{Kinds: []nostr.Kind{nostr.Kind(kind)}, Authors: []nostr.PubKey{newPub}, Tags: nostr.TagMap{"d": {tag(currentService, "d")}}})
+			if err != nil || len(serviceHeads) != 1 || serviceHeads[0].Content != currentService.Content || serviceHeads[0].Content == snapshotOld.Content {
+				t.Fatalf("superseded revision reasserted: heads=%v err=%v", serviceHeads, err)
+			}
 			raw, readErr := os.ReadFile(runtime.SQLDrafts.ArtifactPath)
 			if readErr != nil {
 				t.Fatal(readErr)
