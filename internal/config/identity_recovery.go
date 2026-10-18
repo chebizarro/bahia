@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -33,6 +34,17 @@ func (c *Config) ValidateIdentityRecovery() error {
 			return errors.New("duplicate accepted event ID")
 		}
 		seenIDs[id] = struct{}{}
+	}
+	seenSnapshots := map[string]bool{}
+	for _, artifact := range r.VerifiedSnapshots {
+		if !filepath.IsAbs(artifact.Path) || filepath.Ext(artifact.Path) != ".gz" || !strings.HasSuffix(artifact.Path, ".jsonl.gz") || strings.ContainsAny(artifact.Path, "\r\n") || strings.Contains(strings.ToLower(artifact.Path), "nsec1") || seenSnapshots[filepath.Clean(artifact.Path)] {
+			return errors.New("verified_snapshots require unique absolute .jsonl.gz paths")
+		}
+		digest, err := hex.DecodeString(artifact.SHA256)
+		if err != nil || len(digest) != 32 || strings.ToLower(artifact.SHA256) != artifact.SHA256 {
+			return errors.New("verified_snapshots require lowercase sha256 digests")
+		}
+		seenSnapshots[filepath.Clean(artifact.Path)] = true
 	}
 	if c.Nostr.LocalStore.Path == "" {
 		return errors.New("nostr.local_store.path required")

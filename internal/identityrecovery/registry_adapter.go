@@ -136,11 +136,10 @@ func (a *RegistryRecoveryAdapter) inventoryHeads(ctx context.Context) (map[strin
 		}
 		seen[ev.ID] = ev
 	}
-	for id := range accepted {
-		if _, ok := seen[id]; !ok {
-			return nil, errors.New("accepted registry inventory event no longer present in audited sources")
-		}
+	if err := completeAcceptedHistory(ctx, s, a.OldPubkey, accepted, seen); err != nil {
+		return nil, err
 	}
+
 	heads := map[string]nostr.Event{}
 	for _, ev := range seen {
 		if tag(ev, "legacy_kind") != strconv.Itoa(a.Family) && tag(ev, "t") != topic {
@@ -155,6 +154,9 @@ func (a *RegistryRecoveryAdapter) inventoryHeads(ctx context.Context) (map[strin
 		}
 	}
 	for d, ev := range heads {
+		if err := rejectSupersededSnapshotHead(ctx, s, a.Source, local, a.OldPubkey, ev); err != nil {
+			return nil, fmt.Errorf("registry coordinate %s: %w", d, err)
+		}
 		if err := a.preflight(ev); err != nil {
 			return nil, fmt.Errorf("registry coordinate %s: %w", d, err)
 		}

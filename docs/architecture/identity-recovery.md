@@ -49,7 +49,13 @@ authorizes any part of recovery.
   `completed_at`. A completed inventory receipt also carries `inventory_relays`,
   keyed by relay-URL digest with each relay's page limit, NIP-11 limit, page
   windows, unique ID count, timestamp coverage, and empty final verification
-  page. A completed cut receipt also carries `waiver_event_ids`, a
+  page. It also carries `inventory_snapshots` (artifact basename, pinned and
+  computed SHA-256, JSONL event count, admitted IDs) and `inventory_sources`
+  (`inventory_source_default=relay`, with per-ID `local` or
+  `snapshot:<sha256-prefix>` overrides). The ledger retains explicit attribution for every accepted ID;
+  the signed receipt avoids repeating thousands of default-relay entries. Raw
+  snapshot events and full artifact paths are not signed into receipts. A
+  completed cut receipt also carries `waiver_event_ids`, a
   consumer-id to operator-signed waiver-event-id map, and `waiver_details`,
   binding each waived consumer to its reason code and evidence event IDs.
   Latest-wins; a resumed
@@ -163,7 +169,21 @@ web, Loom, HiveCI, SoulFactory and pinned-runtime readiness is operator-attested
 Audited relay events, the durable local Nostr store, and verified pre-compromise
 snapshots only. PostgreSQL and its outbox are never canonical; SQL-only
 candidates surface as unsigned review drafts that require operator-signed
-intents to re-enter canonical state.
+intents to re-enter canonical state. The recovery-only
+`identity_recovery.verified_snapshots` list pins absolute `.jsonl.gz` paths and
+out-of-band lowercase SHA-256 digests (`{path, sha256}`). Artifacts use the
+`nostrarchive` gzip JSONL and compressed-file digest convention, with one raw
+NIP-01 event per line. They are consulted only for accepted IDs still missing
+after paginated relay/local inventory and the by-ID relay fallback. Each
+artifact must match its pinned digest before parsing; every line must be a
+complete signed old-key event at or before the incident declaration, and only
+operator-approved IDs are admitted. A malformed or tampered artifact fails the
+inventory without partial admission. Plan/status report each configured
+artifact's basename and digest-match state; full signature and candidate
+admission occur during inventory. Reassertion resolves the newest accepted
+coordinate head, not an older snapshot-sourced revision. If that older
+snapshot revision is the only approved head but a newer old-key head is
+observable at its coordinate, reassertion refuses rather than resurrecting it.
 
 ## Domain reassertion safety
 

@@ -79,11 +79,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		next, has := state.Next()
 		view := struct {
-			State   identityrecovery.State   `json:"state"`
-			Next    identityrecovery.Phase   `json:"next_phase,omitempty"`
-			HasNext bool                     `json:"has_next"`
-			Phases  []identityrecovery.Phase `json:"phases,omitempty"`
-		}{State: state, Next: next, HasNext: has}
+			State     identityrecovery.State                  `json:"state"`
+			Next      identityrecovery.Phase                  `json:"next_phase,omitempty"`
+			HasNext   bool                                    `json:"has_next"`
+			Phases    []identityrecovery.Phase                `json:"phases,omitempty"`
+			Snapshots []identityrecovery.SnapshotVerification `json:"verified_snapshots"`
+		}{State: state, Next: next, HasNext: has, Snapshots: snapshotView(r.VerifiedSnapshots)}
 		if op == "plan" {
 			view.Phases = identityrecovery.Phases
 		}
@@ -164,4 +165,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stdout, "recovery phase recorded")
 	}
 	return 0
+}
+
+func snapshotView(entries []config.VerifiedSnapshotConfig) []identityrecovery.SnapshotVerification {
+	artifacts := make([]identityrecovery.SnapshotArtifact, 0, len(entries))
+	for _, entry := range entries {
+		artifacts = append(artifacts, identityrecovery.SnapshotArtifact{Path: entry.Path, SHA256: entry.SHA256})
+	}
+	return (identityrecovery.VerifiedSnapshotSource{Artifacts: artifacts}).Verification()
 }

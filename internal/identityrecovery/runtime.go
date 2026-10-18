@@ -136,7 +136,11 @@ func NewProductionRuntime(ctx context.Context, cfg *config.Config, opts RuntimeO
 		return open(ctx, r.OldSigner)
 	}
 	engine := runtime.Engine
-	engine.Config = Config{ServiceID: cfg.Nostr.ServiceID, OldPubkey: old, ReasonCode: r.ReasonCode, ControlledRelays: r.ControlledRelays, CleanupRelays: r.CleanupRelays, ConsumerRoster: r.ConsumerRoster, OperatorPubkey: root, LocalStorePath: cfg.Nostr.LocalStore.Path, AcceptedEventIDs: r.AcceptedEventIDs}
+	snapshots := make([]SnapshotArtifact, 0, len(r.VerifiedSnapshots))
+	for _, a := range r.VerifiedSnapshots {
+		snapshots = append(snapshots, SnapshotArtifact{Path: a.Path, SHA256: a.SHA256})
+	}
+	engine.Config = Config{ServiceID: cfg.Nostr.ServiceID, OldPubkey: old, ReasonCode: r.ReasonCode, ControlledRelays: r.ControlledRelays, CleanupRelays: r.CleanupRelays, ConsumerRoster: r.ConsumerRoster, OperatorPubkey: root, LocalStorePath: cfg.Nostr.LocalStore.Path, AcceptedEventIDs: r.AcceptedEventIDs, VerifiedSnapshots: snapshots}
 	engine.Source = source
 	engine.Cleanup = CleanupRelaySource{Pool: runtime.cleanupPool, Relays: r.CleanupRelays}
 	engine.Local = local
