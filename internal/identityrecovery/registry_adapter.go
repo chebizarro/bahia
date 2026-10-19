@@ -170,12 +170,37 @@ func newer(a, b nostr.Event) bool {
 
 func (a *RegistryRecoveryAdapter) preflight(ev nostr.Event) error {
 	topic, _ := a.familyTopic()
-	if ev.Kind != nostr.Kind(kinds.CASControlState) || tag(ev, "t") != topic || tag(ev, "legacy_kind") != strconv.Itoa(a.Family) {
+	if ev.Kind != nostr.Kind(kinds.CASControlState) || tag(ev, "legacy_kind") != strconv.Itoa(a.Family) {
 		return errors.New("registry family envelope mismatch")
 	}
+	eventTopic := tag(ev, "t")
+	if eventTopic != "" && eventTopic != topic {
+		return errors.New("registry family envelope mismatch")
+	}
+	kind, tags, content, err := a.canonicalEnvelope(ev)
+	if err != nil {
+		return err
+	}
+	if kind == int(ev.Kind) && reflect.DeepEqual(tags, ev.Tags) && content == ev.Content {
+		return nil
+	}
+	// The earliest cp-state registry records predate the mandatory topic tag.
+	// Accept only that single historical omission: the typed production builder
+	// must reproduce every other byte, and reassertion always publishes the
+	// current typed envelope with the topic restored.
+	if eventTopic == "" && kind == int(ev.Kind) && content == ev.Content {
+		withoutTopic, removed := registryTagsWithoutTopic(tags, topic)
+		if removed && reflect.DeepEqual(withoutTopic, ev.Tags) {
+			return nil
+		}
+	}
+	return errors.New("typed registry builder cannot reproduce accepted head")
+}
+
+func (a *RegistryRecoveryAdapter) canonicalEnvelope(ev nostr.Event) (int, nostr.Tags, string, error) {
 	deletedTag := tag(ev, "deleted")
 	if deletedTag != "true" && deletedTag != "false" {
-		return errors.New("registry deletion marker invalid")
+		return 0, nil, "", errors.New("registry deletion marker invalid")
 	}
 	deleted := deletedTag == "true"
 	var kind int
@@ -185,7 +210,7 @@ func (a *RegistryRecoveryAdapter) preflight(ev nostr.Event) error {
 	case adapter.KindServiceRegistry:
 		var service domain.Service
 		if err := json.Unmarshal([]byte(ev.Content), &service); err != nil || service.ID == uuid.Nil {
-			return errors.New("service registry content cannot be decoded")
+			return 0, nil, "", errors.New("service registry content cannot be decoded")
 		}
 		kind, tags, content = adapter.ServiceRegistryRecoveryRecord(&service, deleted)
 	case adapter.KindEnvironmentRegistry:
@@ -194,7 +219,7 @@ func (a *RegistryRecoveryAdapter) preflight(ev nostr.Event) error {
 			DeploymentUnits []domain.DeploymentUnit `json:"deployment_units"`
 		}
 		if err := json.Unmarshal([]byte(ev.Content), &payload); err != nil || payload.ID == uuid.Nil {
-			return errors.New("environment registry content cannot be decoded")
+			return 0, nil, "", errors.New("environment registry content cannot be decoded")
 		}
 		units := payload.DeploymentUnits
 		if len(units) == 1 && units[0].Implicit {
@@ -203,22 +228,38 @@ func (a *RegistryRecoveryAdapter) preflight(ev nostr.Event) error {
 		kind, tags, content = adapter.EnvironmentRegistryRecoveryRecord(&payload.Environment, units, deleted)
 	case adapter.KindAdoptionBindingRecord:
 		if deleted {
-			return errors.New("adoption binding tombstone has no production publisher")
+			return 0, nil, "", errors.New("adoption binding tombstone has no production publisher")
 		}
 		var binding domain.AdoptionBinding
 		if err := json.Unmarshal([]byte(ev.Content), &binding); err != nil || binding.ServiceID == uuid.Nil || binding.EnvironmentID == uuid.Nil {
-			return errors.New("adoption binding content cannot be decoded")
+			return 0, nil, "", errors.New("adoption binding content cannot be decoded")
 		}
 		var err error
 		kind, tags, content, err = adapter.AdoptionBindingRecoveryRecord(&binding)
 		if err != nil {
-			return err
+			return 0, nil, "", err
 		}
 	}
-	if kind != int(ev.Kind) || !reflect.DeepEqual(tags, ev.Tags) || content != ev.Content {
-		return errors.New("typed registry builder cannot reproduce accepted head")
+	return kind, tags, content, nil
+}
+
+func registryTagsWithoutTopic(tags nostr.Tags, topic string) (nostr.Tags, bool) {
+	result := make(nostr.Tags, 0, len(tags)-1)
+	removed := false
+	for _, candidate := range tags {
+		if len(candidate) == 2 && candidate[0] == "t" && candidate[1] == topic && !removed {
+			removed = true
+			continue
+		}
+		result = append(result, candidate)
 	}
-	return nil
+	return result, removed
+}
+
+func (a *RegistryRecoveryAdapter) equivalent(current, accepted nostr.Event) bool {
+	kind, tags, content, err := a.canonicalEnvelope(accepted)
+	return err == nil && current.Kind == nostr.Kind(kind) && reflect.DeepEqual(current.Tags, tags) &&
+		current.Content == content && current.CheckID() && current.VerifySignature()
 }
 
 type registryRecoverySink struct {
@@ -269,7 +310,7 @@ func (a *RegistryRecoveryAdapter) Reassert(ctx context.Context, signer nostr.Key
 		if err != nil {
 			return nil, err
 		}
-		if relay != nil && !equivalent(*relay, old) || local != nil && !equivalent(*local, old) {
+		if relay != nil && !a.equivalent(*relay, old) || local != nil && !a.equivalent(*local, old) {
 			return nil, fmt.Errorf("registry coordinate %s: new-key head differs from accepted state", d)
 		}
 		switch {
@@ -317,7 +358,7 @@ func (a *RegistryRecoveryAdapter) Reassert(ctx context.Context, signer nostr.Key
 			}
 		}
 		relay, local, err = a.readNewHeads(ctx, pub, d)
-		if err != nil || relay == nil || local == nil || !equivalent(*relay, old) || !equivalent(*local, old) {
+		if err != nil || relay == nil || local == nil || !a.equivalent(*relay, old) || !a.equivalent(*local, old) {
 			return nil, fmt.Errorf("registry coordinate %s: %w", d, ErrIncomplete)
 		}
 		evidence = append(evidence, relay.ID.Hex())
@@ -341,7 +382,7 @@ func (a *RegistryRecoveryAdapter) Verify(ctx context.Context) ([]string, error) 
 	hash := sha256.New()
 	for _, d := range sortedCoordinates(heads) {
 		relay, local, err := a.readNewHeads(ctx, pub, d)
-		if err != nil || relay == nil || local == nil || !equivalent(*relay, heads[d]) || !equivalent(*local, heads[d]) {
+		if err != nil || relay == nil || local == nil || !a.equivalent(*relay, heads[d]) || !a.equivalent(*local, heads[d]) {
 			return nil, fmt.Errorf("registry coordinate %s: equivalence verification failed: %w", d, ErrIncomplete)
 		}
 		_, _ = hash.Write([]byte(d + "\x00" + heads[d].Content + "\x00"))

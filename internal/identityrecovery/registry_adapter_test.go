@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -161,6 +162,38 @@ func TestRegistryRecoveryRoundTripAndIdempotence(t *testing.T) {
 				t.Fatalf("second run changed canonical state: publishes=%d writes=%d", relay.publishes, local.writes)
 			}
 		})
+	}
+}
+
+func TestRegistryRecoveryCanonicalizesPreTopicServiceEnvelope(t *testing.T) {
+	oldKey := signer(t)
+	service := &domain.Service{ID: uuid.New(), OrgID: uuid.New(), Name: "legacy-api", RuntimeType: domain.RuntimeTypeDocker}
+	kind, canonicalTags, content := adapter.ServiceRegistryRecoveryRecord(service, false)
+	legacyTags, removed := registryTagsWithoutTopic(canonicalTags, kinds.CPStateTopicServiceRegistry)
+	if !removed {
+		t.Fatal("typed service envelope did not contain its topic")
+	}
+	old := signedRegistryHead(t, oldKey, kind, legacyTags, content, 100)
+	recovery, relay, local, newKey := registryFixture(t, adapter.KindServiceRegistry, []nostr.Event{old})
+
+	if _, err := recovery.Reassert(context.Background(), newKey); err != nil {
+		t.Fatal(err)
+	}
+	if relay.publishes != 1 || local.writes != 1 {
+		t.Fatalf("legacy envelope publishes=%d local writes=%d", relay.publishes, local.writes)
+	}
+	published := relay.events[len(relay.events)-1]
+	if tag(published, "t") != kinds.CPStateTopicServiceRegistry || !reflect.DeepEqual(published.Tags, canonicalTags) || published.Content != content {
+		t.Fatalf("legacy envelope was not canonicalized: %v", published.Tags)
+	}
+	if _, err := recovery.Verify(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recovery.Reassert(context.Background(), newKey); err != nil {
+		t.Fatal(err)
+	}
+	if relay.publishes != 1 || local.writes != 1 {
+		t.Fatal("canonicalized legacy envelope was not idempotent")
 	}
 }
 
