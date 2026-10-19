@@ -10,8 +10,10 @@ import (
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/adapters/nostr/localstore"
+	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/nostrout"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/servicesigner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,5 +83,39 @@ func TestAppRestartWithContainmentMarkerStartsQuarantined(t *testing.T) {
 	check := identityContainmentHealth(newIdentityContainment(nostrout.Default(), a.localEventStore, a.localOutbox), a.IdentityIncidents)
 	require.Equal(t, HealthStatusFail, check.Status)
 	require.Equal(t, id, check.Details["incident_id"])
+	require.ErrorIs(t, a.serviceSigner.Keyer().SignEvent(t.Context(), &nostr.Event{Kind: 1, CreatedAt: nostr.Now()}), ErrServiceSignerQuarantined)
+}
+
+func TestAppRestartOpensRemoteSignerBeforePersistedContainmentFence(t *testing.T) {
+	restoreDB := stubDBHooks(t, errors.New("database unavailable"), nil)
+	defer restoreDB()
+	service := nostr.Generate()
+	cfg := startupTestConfig("emergency")
+	cfg.Nostr = remoteTestConfig(service.Public(), nostr.Generate())
+	cfg.Nostr.LocalStore.Path = filepath.Join(t.TempDir(), "daemon.bolt")
+	cfg.Nostr.AuthorizedPubkeys = []string{nostr.Generate().Public().Hex()}
+	marker := cfg.Nostr.LocalStore.ResolvedOutboxPath() + ".identity-containment"
+	staging := nostrout.New(nostrout.Config{})
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0700))
+	require.NoError(t, staging.ConfigureRuntimeKillSwitch(marker))
+	id := "019a0000-0000-7000-8000-000000000002"
+	require.NoError(t, staging.ActivateRuntimeKillSwitch(id))
+
+	previous := openServiceSigner
+	t.Cleanup(func() { openServiceSigner = previous })
+	var activeDuringOpen bool
+	openServiceSigner = func(_ context.Context, _ config.NostrConfig, opts servicesigner.Options) (nostr.Keyer, error) {
+		activeDuringOpen, _ = opts.Admission.RuntimeKillSwitch()
+		return nostrutil.NewLocalKeyer(service.Hex())
+	}
+	t.Cleanup(func() { _ = nostrout.Default().ReleaseRuntimeKillSwitch() })
+
+	a, err := New(cfg)
+	require.NoError(t, err)
+	defer shutdown(t, a)
+	require.False(t, activeDuringOpen, "persisted containment must not block the remote signer bootstrap handshake")
+	activeAfterOpen, incidentID := nostrout.Default().RuntimeKillSwitch()
+	require.True(t, activeAfterOpen)
+	require.Equal(t, id, incidentID)
 	require.ErrorIs(t, a.serviceSigner.Keyer().SignEvent(t.Context(), &nostr.Event{Kind: 1, CreatedAt: nostr.Now()}), ErrServiceSignerQuarantined)
 }

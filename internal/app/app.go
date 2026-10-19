@@ -186,10 +186,8 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 
 	// One process-wide controller gates every outbound EVENT: the relay
 	// pools, the Signet clients, the SoulFactory relay clients, and the NIP-46
-	// service signer RPCs all resolve to the same instance. It is initialized
-	// before the service signer, whose NIP-46 requests it admits (see
-	// docs/runbooks/nostr-outbound-admission.md). Its settings are fixed for
-	// the life of the process, so a reload candidate that changes
+	// service signer RPCs all resolve to the same instance. Its settings are
+	// fixed for the life of the process, so a reload candidate that changes
 	// nostr.outbound is rejected here rather than run with the old settings.
 	outboundAdmission, err := nostrout.InitDefault(cfg.Nostr.Outbound.Admission())
 	if err != nil {
@@ -208,10 +206,6 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	if trustVerifier != nil && trustResolution.Record != nil && trustResolution.Record.Activated {
 		cfg.Nostr.PublicKey = trustResolution.Pubkey
 	}
-	if err := outboundAdmission.ConfigureRuntimeKillSwitch(cfg.Nostr.LocalStore.ResolvedOutboxPath() + ".identity-containment"); err != nil {
-		logger.Error("incident containment marker could not be read; outbound remains fenced", zap.Error(err))
-	}
-
 	signerSession, closeServiceKeyer, err := newServiceKeyer(cfg, outboundAdmission, logger, runningSigner)
 	if err != nil {
 		return nil, fmt.Errorf("configuring service signer: %w", err)
@@ -238,6 +232,16 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 		if err != nil {
 			return nil, fmt.Errorf("configuring control-plane relay guard: %w", err)
 		}
+	}
+
+	// A persisted containment marker fences service publications, including
+	// NIP-46 requests. Open and pin the remote signer session first, then arm
+	// containment before constructing any relay pool, background publisher, or
+	// service consumer. This permits only the signer-control handshake needed
+	// to restart an already-contained daemon; the guarded keyer and every later
+	// outbound path observe the active fence.
+	if err := outboundAdmission.ConfigureRuntimeKillSwitch(cfg.Nostr.LocalStore.ResolvedOutboxPath() + ".identity-containment"); err != nil {
+		logger.Error("incident containment marker could not be read; outbound remains fenced", zap.Error(err))
 	}
 
 	// Relay pools are initialized before the optional database cache. Every
