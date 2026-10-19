@@ -18,6 +18,7 @@ import (
 	"fiatjaf.com/nostr/khatru"
 	"fiatjaf.com/nostr/nip11"
 	"github.com/openagentsinc/bahia/internal/config"
+	"github.com/openagentsinc/bahia/internal/kinds"
 	"go.uber.org/zap"
 )
 
@@ -49,6 +50,7 @@ type Server struct {
 	policy      *adminPolicy
 	admission   *policy // event admission policy (wraps adminPolicy + intent authors)
 	trustEpoch  *sidecarTrustEpoch
+	ack         *sidecarAcknowledgment
 	readAuth    *readAuthPolicy
 	httpServer  *http.Server
 	logger      *zap.Logger
@@ -72,6 +74,7 @@ type ServerOption func(*serverOptions)
 
 type serverOptions struct {
 	mirrorTransport MirrorTransport
+	ackSignerOpener ackSignerOpener
 }
 
 // WithMirrorTransport supplies the NIP-aware external relay pool when
@@ -93,6 +96,9 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	}
 	if signer == nil {
 		return nil, errors.New("relay sidecar requires the service signer (nostr.signer or nostr.private_key)")
+	}
+	if nostrCfg.Sidecar.AckPrivateKeyFile != "" && nostrCfg.Sidecar.AckSigner.Method != "" {
+		return nil, errors.New("relay sidecar acknowledgment signer and legacy key file are mutually exclusive")
 	}
 	servicePubkey, err := signer.GetPublicKey(ctx)
 	if err != nil {
@@ -127,8 +133,12 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		return nil, fmt.Errorf("resolve sidecar trust epoch: %w", err)
 	}
 	owned := false
+	var ack *sidecarAcknowledgment
 	defer func() {
 		if !owned {
+			if ack != nil {
+				ack.Close()
+			}
 			if trust != nil {
 				_ = trust.state.Close()
 			}
@@ -157,6 +167,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		}
 	}
 	relay := khatru.NewRelay()
+	ack = newSidecarAcknowledgment(nostrCfg.Sidecar, trust, store, relay, logger, options.ackSignerOpener)
 	// Khatru requires *log.Logger; route its diagnostics through the existing zap sink.
 	relay.Log = zap.NewStdLog(logger.Named("bahia-relay-sidecar"))
 	relay.ServiceURL = nostrCfg.Sidecar.PublicURL
@@ -279,6 +290,10 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		if mirror != nil {
 			mirror.Notify()
 		}
+		if trust != nil && event.Kind == nostr.Kind(kinds.CASControlState) && event.PubKey.Hex() == trust.verifier.OperatorRoot &&
+			event.Tags.GetD() == "trust-epoch:"+trust.serviceID() {
+			ack.notify()
+		}
 		if configDirty != nil && (event.Kind == configListKind || event.Kind == configPolicyKind) {
 			configDirty.mark(replaceableKey(event))
 		}
@@ -294,9 +309,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 	relay.OnEphemeralEvent = func(_ context.Context, event nostr.Event) {
 		fanout.dispatch(event)
 	}
-	if err := acknowledgeSidecarEpoch(ctx, trust, nostrCfg.Sidecar.AckPrivateKeyFile, store, relay); err != nil {
-		return nil, err
-	}
+	_ = ack.acknowledge(ctx)
 
 	owned = true
 	return &Server{
@@ -307,6 +320,7 @@ func New(ctx context.Context, nostrCfg config.NostrConfig, signer nostr.Signer, 
 		policy:      admin,
 		admission:   pol,
 		trustEpoch:  trust,
+		ack:         ack,
 		readAuth:    readAuth,
 		logger:      logger,
 		consumer:    consumer,
@@ -354,8 +368,10 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) serveReady(w http.ResponseWriter, _ *http.Request) {
 	response := struct {
-		Status string              `json:"status"`
-		Mirror []MirrorRelayStatus `json:"mirror,omitempty"`
+		Status     string              `json:"status"`
+		Mirror     []MirrorRelayStatus `json:"mirror,omitempty"`
+		TrustEpoch string              `json:"trust_epoch,omitempty"`
+		AckSigner  string              `json:"ack_signer,omitempty"`
 	}{Status: "pass"}
 	if err := s.store.ping(); err != nil {
 		http.Error(w, "sidecar event store unavailable", http.StatusServiceUnavailable)
@@ -373,6 +389,21 @@ func (s *Server) serveReady(w http.ResponseWriter, _ *http.Request) {
 				response.Status = "warn"
 				break
 			}
+		}
+	}
+	if s.trustEpoch != nil {
+		resolved := s.trustEpoch.snapshot()
+		response.TrustEpoch = "verified"
+		if resolved.Record != nil && resolved.Record.Activated {
+			response.TrustEpoch = "activated"
+		}
+		if s.trustEpoch.isPoisoned() {
+			response.TrustEpoch = "unverifiable"
+			response.Status = "warn"
+		}
+		response.AckSigner = s.ack.health()
+		if response.AckSigner == "unavailable" || (resolved.Record != nil && resolved.Record.Activated && response.AckSigner != "ok") {
+			response.Status = "warn"
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -418,6 +449,9 @@ func (s *Server) Close() error {
 	if s.mirror != nil {
 		s.mirror.transport.Close()
 	}
+	if s.ack != nil {
+		s.ack.Close()
+	}
 	if s.trustEpoch != nil {
 		_ = s.trustEpoch.state.Close()
 	}
@@ -450,6 +484,10 @@ func (s *Server) Run(ctx context.Context) (runErr error) {
 			defer s.wg.Done()
 			s.mirror.Run(workerCtx)
 		}()
+	}
+	if s.ack != nil {
+		s.wg.Add(1)
+		go func() { defer s.wg.Done(); s.ack.run(workerCtx) }()
 	}
 	s.startConfigWorker(workerCtx)
 	if s.consumer != nil {

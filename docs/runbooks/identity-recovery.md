@@ -7,6 +7,12 @@ Configure `nostr.service_id` as a stable deployment identifier (default `bahia-s
 ```yaml
 nostr:
   service_id: bahia-service-v1
+  sidecar:
+    ack_signer:
+      public_key: <dedicated-relay-ack-pubkey-hex>
+      method: nip46
+      bunker_uri: <sidecar-ack-bunker-uri-in-protected-config>
+      client_secret_key_file: /run/secrets/sidecar-ack-client
   local_store:
     path: /var/lib/bahia/daemon.bolt
 identity_recovery:
@@ -38,6 +44,17 @@ identity_recovery:
     signer:
       method: nip55l
 ```
+
+The sidecar acknowledgment identity is remote-signer-held in staging and
+production; never export its private key. Pin the same public key in
+`nostr.sidecar.ack_signer.public_key` and
+`identity_recovery.acknowledgment_authorities.sidecar`. A NIP-55L deployment
+may use `method: nip55l` (and its `nip55l` settings) instead. Do not combine
+`ack_signer` with the legacy `ack_private_key_file`, which is retained only
+for local development. The sidecar readiness output reports `ack_signer` as
+`configured`, `unavailable`, or `ok`; an unavailable signer keeps the
+acknowledgment absent and degrades readiness until an epoch observation wakes
+another attempt. Do not put bunker URLs or client secrets in argv or logs.
 
 `accepted_event_ids` is an operator-reviewed allowlist from pre-compromise evidence, not an automatic trust decision based on old-key signatures or timestamps. The inventory scans old-key events on every cleanup relay through bounded, overlapping `until` pages and a final empty verification page, then merges the local store. EOSE closes one page, not the full audit. The ledger and signed receipt record each relay's page count, unique ID count, covered timestamp range, page limit, advertised NIP-11 limit, and final-empty termination proof. The signed receipt identifies relays by URL digest, not URL. Event IDs are deduplicated; a reviewed ID absent from the scan and local store gets a direct by-ID relay fetch before the engine reports a count and sample of missing IDs and refuses completion. A timestamp boundary that cannot be paged without a possible gap remains incomplete. The approved inventory digest is SHA-256 of the newline-joined, lexicographically sorted approved IDs. An empty reviewed list is represented by `accepted_event_ids: []`.
 

@@ -141,7 +141,7 @@ when a waiver authorized activation.
 | Consumer | Acknowledgment authority |
 |---|---|
 | daemon | Activated **new** service key, after its trust guard starts |
-| sidecar | Dedicated relay acknowledgment key from `nostr.sidecar.ack_private_key_file`, distinct from the service and operator keys |
+| sidecar | Dedicated, pinned relay acknowledgment identity from `nostr.sidecar.ack_signer`, distinct from the service and operator keys; production custody is NIP-46 or NIP-55L and the private key is never exported |
 | CLI | Operator signer, after verifying CLI enforcement |
 | DNS | DNS agent's own configured signing identity |
 | Loom | Operator-signed verification attestation (`attested_by`); its guard is daemon-hosted and the optional projection signer is not its authority |
@@ -156,6 +156,16 @@ their enforcement. The command refuses a non-operator authority or a missing
 activated epoch. Sidecar and DNS publish their own receipts under their
 configured component signing keys; the recovery CLI cannot impersonate those
 identities. An operator receipt does not override a pending roster entry.
+
+The sidecar opens its remote acknowledgment signer session when an activated
+epoch is observed, signs the unchanged `bahia.trust-epoch-ack.v1` envelope,
+and checks the returned author against the pinned `ack_signer.public_key`
+before publishing to its controlled relay. A signer or publication failure
+leaves the acknowledgment absent, warns in sidecar readiness, and retries on
+the next trust-epoch event wake without polling. The legacy
+`nostr.sidecar.ack_private_key_file` is mutually exclusive and is for local
+development only; exporting the production acknowledgment key to a file
+violates custody policy.
 
 The recovery acknowledgment reader queries scoped subscriptions on **every**
 controlled relay and the durable local store, verifies the exact signed
