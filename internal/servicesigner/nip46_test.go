@@ -342,6 +342,18 @@ func TestConfigFabricPublishRollbackViaGenericNIP46Bunker(t *testing.T) {
 	require.Equal(t, []string{"get_public_key", "sign_event", "sign_event"}, []string{fake.requests[0].method, fake.requests[1].method, fake.requests[2].method})
 }
 
+func TestCheckHealthSendsEmptyParamsArray(t *testing.T) {
+	fake, keyer, _ := newFakeBunker(t)
+	fake.respond = func(method string, params []string) (string, error) {
+		require.Equal(t, "get_public_key", method)
+		require.NotNil(t, params, "strict NIP-46 bunkers reject params:null")
+		require.Empty(t, params)
+		return testService.Public().Hex(), nil
+	}
+
+	require.NoError(t, CheckHealth(t.Context(), keyer))
+}
+
 type configFabricNIP46Signer struct{ nostr.Keyer }
 
 func (s configFabricNIP46Signer) GetPublicKey(ctx context.Context) (string, error) {

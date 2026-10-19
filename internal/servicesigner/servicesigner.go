@@ -175,7 +175,11 @@ func CheckHealth(ctx context.Context, signer nostr.Keyer) error {
 		return ErrNotConfigured
 	}
 	if bunker, ok := signer.(*nip46Keyer); ok {
-		result, err := bunker.call(ctx, "get_public_key", nil)
+		// NIP-46 requests encode params on the wire. An empty method argument
+		// list must be [] rather than null: strict bunkers (including Signet)
+		// reject null as an invalid request even though permissive test bunkers
+		// may treat both representations as empty.
+		result, err := bunker.call(ctx, "get_public_key", []string{})
 		if err != nil {
 			return err
 		}
