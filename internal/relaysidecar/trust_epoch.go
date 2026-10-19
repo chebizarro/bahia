@@ -3,16 +3,20 @@ package relaysidecar
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"fiatjaf.com/nostr"
 	"fiatjaf.com/nostr/khatru"
 	"github.com/openagentsinc/bahia/internal/config"
 	"github.com/openagentsinc/bahia/internal/kinds"
+	"github.com/openagentsinc/bahia/internal/nostrutil"
+	"github.com/openagentsinc/bahia/internal/servicesigner"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"go.uber.org/zap"
 )
@@ -171,33 +175,174 @@ func (t *sidecarTrustEpoch) isVerifiedReplay(ev nostr.Event) bool {
 		t.resolution.JudgeEvent(ev) == trustepoch.PreEpochAccepted
 }
 
-func acknowledgeSidecarEpoch(ctx context.Context, trust *sidecarTrustEpoch, ackKeyFile string,
-	store *eventStore, relay *khatru.Relay) error {
-	if trust == nil || trust.resolution.Record == nil || !trust.resolution.Record.Activated {
+func (t *sidecarTrustEpoch) snapshot() trustepoch.Resolution {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.resolution
+}
+
+type ackSignerOpener func(context.Context, config.NostrConfig) (nostr.Keyer, error)
+
+type sidecarAcknowledgment struct {
+	mu     sync.Mutex
+	cfg    config.SidecarAckSignerConfig
+	file   string
+	open   ackSignerOpener
+	keyer  nostr.Keyer
+	cancel context.CancelFunc
+	status string
+	wake   chan struct{}
+	trust  *sidecarTrustEpoch
+	store  *eventStore
+	relay  *khatru.Relay
+	logger *zap.Logger
+}
+
+func newSidecarAcknowledgment(cfg config.RelaySidecarConfig, trust *sidecarTrustEpoch, store *eventStore,
+	relay *khatru.Relay, logger *zap.Logger, opener ackSignerOpener) *sidecarAcknowledgment {
+	if opener == nil {
+		opener = func(ctx context.Context, signerCfg config.NostrConfig) (nostr.Keyer, error) {
+			return servicesigner.Open(ctx, signerCfg, servicesigner.Options{
+				OnAuthURL: func(string) { logger.Warn(servicesigner.AuthURLMessage) },
+			})
+		}
+	}
+	status := "configured"
+	if cfg.AckSigner.Method == "" && cfg.AckPrivateKeyFile == "" {
+		status = "unavailable"
+	}
+	return &sidecarAcknowledgment{cfg: cfg.AckSigner, file: cfg.AckPrivateKeyFile, open: opener,
+		status: status, wake: make(chan struct{}, 1), trust: trust, store: store, relay: relay, logger: logger}
+}
+
+func (a *sidecarAcknowledgment) notify() {
+	select {
+	case a.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (a *sidecarAcknowledgment) run(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.wake:
+			_ = a.acknowledge(ctx)
+		}
+	}
+}
+
+func (a *sidecarAcknowledgment) closeSession() {
+	if a.cancel != nil {
+		a.cancel()
+		a.cancel = nil
+	}
+	if closer, ok := a.keyer.(io.Closer); ok {
+		_ = closer.Close()
+	}
+	a.keyer = nil
+}
+
+func (a *sidecarAcknowledgment) Close() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closeSession()
+}
+
+func (a *sidecarAcknowledgment) health() string {
+	if !a.mu.TryLock() {
+		return "configured"
+	}
+	status, signer := a.status, a.keyer
+	a.mu.Unlock()
+	if signer == nil && status == "ok" {
+		return "unavailable"
+	}
+	if status != "ok" {
+		return status
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := servicesigner.CheckHealth(ctx, signer); err != nil {
+		return "unavailable"
+	}
+	return "ok"
+}
+
+func (a *sidecarAcknowledgment) fail() error {
+	a.status = "unavailable"
+	a.closeSession()
+	a.logger.Error("sidecar trust epoch acknowledgment signer unavailable or publication failed")
+	return fmt.Errorf("sidecar trust epoch acknowledgment unavailable")
+}
+
+func (a *sidecarAcknowledgment) acknowledge(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.trust == nil {
 		return nil
 	}
-	if ackKeyFile == "" {
-		return fmt.Errorf("activated trust epoch requires a dedicated relay acknowledgment identity")
+	resolved := a.trust.snapshot()
+	if resolved.Record == nil || !resolved.Record.Activated {
+		return nil
 	}
-	raw, err := os.ReadFile(ackKeyFile)
-	if err != nil {
-		return fmt.Errorf("read relay acknowledgment identity: %w", err)
+	if a.keyer == nil {
+		if a.cfg.Method == "" && a.file == "" {
+			return a.fail()
+		}
+		if a.file != "" {
+			raw, err := os.ReadFile(a.file)
+			if err != nil {
+				return a.fail()
+			}
+			a.keyer, err = nostrutil.NewLocalKeyer(strings.TrimSpace(string(raw)))
+			if err != nil {
+				return a.fail()
+			}
+		} else {
+			openCtx, cancel := context.WithCancel(context.Background())
+			stop := context.AfterFunc(ctx, cancel)
+			keyer, err := a.open(openCtx, config.NostrConfig{PublicKey: a.cfg.PublicKey, Signer: a.cfg.NostrSignerConfig})
+			stop()
+			if err != nil || ctx.Err() != nil || keyer == nil {
+				cancel()
+				if closer, ok := keyer.(io.Closer); ok {
+					_ = closer.Close()
+				}
+				return a.fail()
+			}
+			a.keyer, a.cancel = keyer, cancel
+		}
 	}
-	key, err := nostr.SecretKeyFromHex(strings.TrimSpace(string(raw)))
-	if err != nil {
-		return fmt.Errorf("invalid relay acknowledgment identity")
+	pubkey, err := a.keyer.GetPublicKey(ctx)
+	if err != nil || pubkey == nostr.ZeroPK || (a.cfg.Method != "" && pubkey.Hex() != a.cfg.PublicKey) {
+		return a.fail()
 	}
-	return (trustepoch.AckPublisher{ConsumerID: "sidecar", Authority: key.Public().Hex(),
-		OperatorRoot: trust.verifier.OperatorRoot,
+	err = (trustepoch.AckPublisher{ConsumerID: "sidecar", Authority: pubkey.Hex(),
+		OperatorRoot: a.trust.verifier.OperatorRoot,
 		Existing: func(ctx context.Context, filter nostr.Filter) ([]nostr.Event, error) {
 			var events []nostr.Event
-			for ev := range store.Query(ctx, filter, 0) {
+			for ev := range a.store.Query(ctx, filter, 0) {
 				events = append(events, ev)
 			}
 			return events, ctx.Err()
-		}, Sign: func(_ context.Context, ev *nostr.Event) error { return ev.Sign(key) },
+		}, Sign: func(ctx context.Context, ev *nostr.Event) error {
+			if err := a.keyer.SignEvent(ctx, ev); err != nil {
+				return fmt.Errorf("ack signer refused event")
+			}
+			if ev.PubKey != pubkey {
+				return fmt.Errorf("ack signer returned a different public key")
+			}
+			return nil
+		},
 		Publish: func(ctx context.Context, ev nostr.Event) error {
-			_, err := relay.AddEvent(ctx, ev)
+			_, err := a.relay.AddEvent(ctx, ev)
 			return err
-		}}).Acknowledge(ctx, trust.resolution)
+		}}).Acknowledge(ctx, resolved)
+	if err != nil {
+		return a.fail()
+	}
+	a.status = "ok"
+	return nil
 }

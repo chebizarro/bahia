@@ -883,6 +883,29 @@ type NostrSignerConfig struct {
 	Timeout time.Duration `koanf:"timeout" yaml:"timeout" secret:"false"`
 }
 
+// SidecarAckSignerConfig pins the independent sidecar acknowledgment identity.
+// Only remote custody is accepted; its private key never belongs in Bahia.
+type SidecarAckSignerConfig struct {
+	PublicKey         string `koanf:"public_key" yaml:"public_key" secret:"false"`
+	NostrSignerConfig `koanf:",squash" yaml:",inline"`
+}
+
+func (c *SidecarAckSignerConfig) validate() error {
+	if c.PublicKey == "" && reflect.DeepEqual(c.NostrSignerConfig, NostrSignerConfig{}) {
+		return nil
+	}
+	method := strings.ToLower(strings.TrimSpace(c.Method))
+	if method != NostrSignerNIP46 && method != NostrSignerNIP55L {
+		return fmt.Errorf("config validation failed: nostr.sidecar.ack_signer.method must be nip46 or nip55l")
+	}
+	n := NostrConfig{PublicKey: c.PublicKey, Signer: c.NostrSignerConfig}
+	if err := n.validateServiceSigner(); err != nil {
+		return fmt.Errorf("nostr.sidecar.ack_signer: %w", err)
+	}
+	c.PublicKey, c.NostrSignerConfig = n.PublicKey, n.Signer
+	return nil
+}
+
 // NostrSignerFrostrConfig holds only public group metadata and paths to
 // mounted secrets. Neither a share nor a transport identity belongs in YAML.
 type NostrSignerFrostrConfig struct {
@@ -1153,23 +1176,24 @@ type RelayQuorumConfig struct {
 
 // RelaySidecarConfig holds the local Khatru relay sidecar settings.
 type RelaySidecarConfig struct {
-	Enabled              bool          `koanf:"enabled" secret:"false"`
-	ListenAddr           string        `koanf:"listen_addr" secret:"false"`
-	PublicURL            string        `koanf:"public_url" secret:"false"`
-	BackendURL           string        `koanf:"backend_url" secret:"false"`
-	DataDir              string        `koanf:"data_dir" secret:"false"`
-	MirrorExternal       bool          `koanf:"mirror_external" secret:"false"`
-	EventRetention       time.Duration `koanf:"event_retention" secret:"false"`
-	RequestRetention     time.Duration `koanf:"request_retention" secret:"false"`
-	AuthPrivateKey       string        `koanf:"auth_private_key" secret:"true"`
-	AckPrivateKeyFile    string        `koanf:"ack_private_key_file" yaml:"ack_private_key_file" secret:"false"`
-	AdministratorPubkeys []string      `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys" secret:"false"`
-	ConfigTrustedPubkeys []string      `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys" secret:"false"`
-	AdminPolicyPath      string        `koanf:"admin_policy_path" yaml:"admin_policy_path" secret:"false"`
-	ConfigProjectionPath string        `koanf:"config_projection_path" yaml:"config_projection_path" secret:"false"`
-	ServiceID            string        `koanf:"service_id" yaml:"service_id" secret:"false"`
-	Scope                string        `koanf:"scope" yaml:"scope" secret:"false"`
-	MaxQueryLimit        int           `koanf:"max_query_limit" secret:"false"`
+	Enabled              bool                   `koanf:"enabled" secret:"false"`
+	ListenAddr           string                 `koanf:"listen_addr" secret:"false"`
+	PublicURL            string                 `koanf:"public_url" secret:"false"`
+	BackendURL           string                 `koanf:"backend_url" secret:"false"`
+	DataDir              string                 `koanf:"data_dir" secret:"false"`
+	MirrorExternal       bool                   `koanf:"mirror_external" secret:"false"`
+	EventRetention       time.Duration          `koanf:"event_retention" secret:"false"`
+	RequestRetention     time.Duration          `koanf:"request_retention" secret:"false"`
+	AuthPrivateKey       string                 `koanf:"auth_private_key" secret:"true"`
+	AckPrivateKeyFile    string                 `koanf:"ack_private_key_file" yaml:"ack_private_key_file" secret:"false"`
+	AckSigner            SidecarAckSignerConfig `koanf:"ack_signer" yaml:"ack_signer"`
+	AdministratorPubkeys []string               `koanf:"administrator_pubkeys" yaml:"administrator_pubkeys" secret:"false"`
+	ConfigTrustedPubkeys []string               `koanf:"config_trusted_pubkeys" yaml:"config_trusted_pubkeys" secret:"false"`
+	AdminPolicyPath      string                 `koanf:"admin_policy_path" yaml:"admin_policy_path" secret:"false"`
+	ConfigProjectionPath string                 `koanf:"config_projection_path" yaml:"config_projection_path" secret:"false"`
+	ServiceID            string                 `koanf:"service_id" yaml:"service_id" secret:"false"`
+	Scope                string                 `koanf:"scope" yaml:"scope" secret:"false"`
+	MaxQueryLimit        int                    `koanf:"max_query_limit" secret:"false"`
 	// SubscriberQueueSize bounds the live events buffered per client
 	// connection. A subscription that would overflow it is CLOSED so the client
 	// re-subscribes from its cursor, instead of silently missing events.
@@ -4659,6 +4683,13 @@ func validateSidecarWebsocketURL(raw string, allowInsecureDev bool) error {
 
 func (c *Config) validateRelaySidecar() error {
 	sidecar := &c.Nostr.Sidecar
+	sidecar.AckPrivateKeyFile = strings.TrimSpace(sidecar.AckPrivateKeyFile)
+	if err := sidecar.AckSigner.validate(); err != nil {
+		return err
+	}
+	if sidecar.AckPrivateKeyFile != "" && sidecar.AckSigner.Method != "" {
+		return fmt.Errorf("config validation failed: nostr.sidecar.ack_signer and ack_private_key_file are mutually exclusive")
+	}
 	if !sidecar.Enabled {
 		return nil
 	}
