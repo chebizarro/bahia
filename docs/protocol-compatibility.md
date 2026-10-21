@@ -100,7 +100,7 @@ remains on stdout while progress uses stderr.
 
 ### MCP
 
-`POST /mcp` is JSON-RPC over HTTP and is dependency-gated by PostgreSQL.
+`POST /mcp` is JSON-RPC over HTTP. Its authenticated transport is independent of PostgreSQL; tools enforce their own dependencies.
 Mutation tools publish the same signed intent contract in process; state-read
 tools read the daemon's local signed-event store. Exact tools and arguments
 are in the [MCP reference](user-guide/mcp-tools.md).

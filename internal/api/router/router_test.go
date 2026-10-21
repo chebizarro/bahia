@@ -1102,3 +1102,47 @@ func TestDeprecatedServiceAndEnvironmentMutationRoutesAreRemoved(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterMCPDoesNotRequirePostgresRepository(t *testing.T) {
+	for _, authenticated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("auth=%t", authenticated), func(t *testing.T) {
+			cfg := config.Defaults()
+			cfg.Auth.Enabled = authenticated
+			secret, err := nostr.SecretKeyFromHex(routerNIP98Key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Auth.BootstrapOwnerPubkeys = []string{secret.Public().Hex()}
+			handler := router.NewWithDeps(nil, zap.NewNop(), config.CORSConfig{}, nil, router.RouterDeps{Config: cfg, MCP: handlers.NewMCPHandler(newRouterTestMCPServer(zap.NewNop()), zap.NewNop())})
+			for _, method := range []string{"initialize", "tools/list"} {
+				body := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":%q}`, method))
+				request := httptest.NewRequest(http.MethodPost, "http://bahia.test/mcp", bytes.NewReader(body))
+				request.Header.Set("Content-Type", "application/json")
+				if authenticated {
+					request.Header.Set("Authorization", makeRouterNIP98Header(t, http.MethodPost, request.URL.String(), body))
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != http.StatusOK {
+					t.Fatalf("DB-less %s: %d %s", method, response.Code, response.Body.String())
+				}
+				var envelope map[string]any
+				if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope["result"] == nil || envelope["error"] != nil {
+					t.Fatalf("%#v", envelope)
+				}
+			}
+			if authenticated {
+				request := httptest.NewRequest(http.MethodPost, "http://bahia.test/mcp", bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != http.StatusUnauthorized {
+					t.Fatalf("unauthenticated DB-less MCP status=%d", response.Code)
+				}
+			}
+		})
+	}
+}

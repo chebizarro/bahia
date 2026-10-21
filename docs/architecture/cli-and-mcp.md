@@ -78,7 +78,7 @@ new mutations are intents, never new ContextVM methods.
 ## MCP
 
 The MCP server runs **in the daemon** (`POST /mcp`, HTTP JSON-RPC, platform
-admin, behind the DB gate) and shares its local event store and `IntentProcessor`:
+admin, independent of the SQL repository gate) and shares its local event store and `IntentProcessor`:
 
 - Read tools query the local event store with the same `30900` decoders as
   the CLI.
@@ -113,6 +113,31 @@ everything else returns 404:
 | Virtualization routes (`RegisterVirtualizationRoutes`) | VM runtime reads |
 | `/v2/*` | OCI registry proxy (when configured) |
 
-`TestArchitectureDBLessDaemonBootGatesNilRepositoryRoutes` keeps every
-database-backed route behind the DB gate so a daemon without Postgres boots
-and serves relay-derived state.
+`TestArchitectureDBLessDaemonBootGatesNilRepositoryRoutes` keeps database-backed
+routes behind their dependency gate and requires DB-less MCP initialization.
+`TestDBLessDaemonMCPUsesRealOutboxWithAuthenticatedOperator` signs a real NIP-98
+HTTP request and checks the tool result against the daemon's bbolt outbox without
+PostgreSQL. The transport does not waive tool-specific dependencies or authority.
+
+## HTTP authentication replay durability
+
+NIP-98 event IDs are atomically claimed in the daemon's preserved bbolt outbox.
+Authentication works without PostgreSQL and duplicate claims stay refused after
+restart. Expired claims use an indexed, bounded cleanup on new requests. When
+PostgreSQL is connected, its shared replay check is also required; its failure
+never falls back to accepting an already consumed event.
+
+Local-only replay protection requires the existing **one active daemon per
+service identity and ledger** deployment contract. Independent writable ledgers
+are not cross-host replay coordination. Preserve the outbox on restart and
+restore; never delete replay state to recover availability. When transitioning
+from an older SQL-only replay deployment, retain the SQL claims through the
+valid authentication window or drain old requests before enabling local-only
+authentication. These local tests do not prove multi-host or live promotion
+acceptance.
+
+When HTTP authentication is enabled, a per-IP admission bucket (100 requests
+per minute) runs before signature verification and durable replay claims, also
+for callers later refused by platform authorization. Existing tool write and
+read limits apply separately; liveness/readiness probes are not subject to
+this authentication admission bucket.

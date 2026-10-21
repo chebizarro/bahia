@@ -98,6 +98,16 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 
 	// Auth middleware (applied to API routes, not health checks).
 	authMiddleware := routeAuthConfig(deps, authCfg...)
+	// Bound signature work and durable replay claims before authorization. A
+	// caller denied by RBAC must not bypass ingress limits on the outbox ledger.
+	authenticate := auth.MiddlewareFromConfig(authMiddleware)
+	if authMiddleware.Enabled {
+		admissionLimiter := middleware.NewIPRateLimiter(middleware.RateLimiterConfig{Rate: 100, Interval: time.Minute})
+		validate := authenticate
+		authenticate = func(next http.Handler) http.Handler {
+			return middleware.RateLimit(admissionLimiter)(validate(next))
+		}
+	}
 	// Dependency gates replace the old tier model. Routes whose
 	// backing repository is nil (e.g. no Postgres) return 503.
 	dbGate := middleware.RequireRepo(deps.Services)
@@ -134,7 +144,7 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	if telemetryProvider != nil {
 		metricsHandler := telemetryProvider.MetricsHandler()
 		if authMiddleware.Enabled {
-			r.With(auth.MiddlewareFromConfig(authMiddleware)).Get("/metrics", metricsHandler)
+			r.With(authenticate).Get("/metrics", metricsHandler)
 		} else {
 			r.Get("/metrics", metricsHandler)
 		}
@@ -163,13 +173,15 @@ func NewWithDeps(registry *service.RegistryService, logger *zap.Logger, corsCfg 
 	}
 
 	if deps.MCP != nil {
-		r.With(dbGate, middleware.ContentType, auth.MiddlewareFromConfig(authMiddleware), platformAdminGate, middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
+		// Canonical reads and intents use local state. SQL dependencies belong
+		// to individual tools, not the authenticated MCP transport.
+		r.With(middleware.ContentType, authenticate, platformAdminGate, middleware.RateLimit(writeLimiter)).Post("/mcp", deps.MCP.HandleJSONRPC)
 	}
 
 	// API v1 routes (authenticated when auth is enabled).
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.ContentType)
-		r.Use(auth.MiddlewareFromConfig(authMiddleware))
+		r.Use(authenticate)
 		r.Use(platformRBAC(deps, authMiddleware))
 		// Removed REST methods return 404 even where a surviving read owns the path.
 		r.MethodNotAllowed(http.NotFound)

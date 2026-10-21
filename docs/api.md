@@ -50,7 +50,7 @@ health should probe `/health`; traffic gates should probe `/ready`.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/mcp` | NIP-98 when enabled, *admin*, *db* | MCP JSON-RPC (`tools/list`, `tools/call`, `resources/*`, `prompts/*`). Intent tools sign a `30900` intent with the caller's identity and return `{"status","intent_id","event_id","status_kind","status_coordinate",…}`; store-read tools answer from the local event store |
+| POST | `/mcp` | NIP-98 when enabled, *admin* | MCP JSON-RPC (`tools/list`, `tools/call`, `resources/*`, `prompts/*`). Intent tools sign a `30900` intent with the caller's identity and return `{"status","intent_id","event_id","status_kind","status_coordinate",…}`; store-read tools answer from the local event store |
 
 Tool names and arguments: [MCP tools reference](user-guide/mcp-tools.md).
 
@@ -95,3 +95,9 @@ and the managed-instance records (`runtime-instance-health`); the SBOM
 route exists for CI uploads that already have the document in hand — the
 same result is reachable with the `sbom/import` intent and a Blossom
 `location`.
+
+When HTTP authentication is enabled, a per-IP admission bucket (100 requests
+per minute) runs before signature verification and durable replay claims, also
+for callers later refused by platform authorization. Existing tool write and
+read limits apply separately; liveness/readiness probes are not subject to
+this authentication admission bucket.

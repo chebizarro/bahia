@@ -3334,11 +3334,11 @@ func New(cfg *config.Config, opts ...Option) (*App, error) {
 	var nip98Validator *auth.NIP98Validator
 	var nip05Resolver *auth.NIP05Resolver
 	if cfg.Auth.Enabled {
+		var sharedReplays auth.NIP98ReplayStore
 		if dbAvailable {
-			nip98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config(), auth.NewPGNIP98ReplayStore(pool))
-		} else {
-			logger.Error("NIP-98 authentication unavailable without durable replay storage")
+			sharedReplays = auth.NewPGNIP98ReplayStore(pool)
 		}
+		nip98Validator = auth.NewNIP98Validator(auth.DefaultNIP98Config(), auth.NewDurableNIP98ReplayStore(localOutbox, sharedReplays))
 		if len(cfg.Adoption.AllowedEmails) > 0 || len(cfg.DirectRuntime.AllowedEmails) > 0 || len(cfg.LLM.AllowedEmails) > 0 {
 			nip05Resolver = auth.NewNIP05Resolver()
 		}
@@ -5070,25 +5070,6 @@ func compactBootstrapAuthors(groups ...[]string) []string {
 		return nil
 	}
 	return authors
-}
-
-func llmGatewayHTTPConfig(cfg config.LLMControlplaneConfig) (llmadapter.GatewayHTTPConfig, error) {
-	endpoints := make(map[string]llmadapter.GatewayHTTPEndpointConfig, len(cfg.Gateways))
-	for ref, ep := range cfg.Gateways {
-		authToken := strings.TrimSpace(ep.AuthToken)
-		if file := strings.TrimSpace(ep.AuthTokenFile); file != "" {
-			raw, err := os.ReadFile(file)
-			if err != nil {
-				return llmadapter.GatewayHTTPConfig{}, fmt.Errorf("read llm.gateways.%s.auth_token_file %q: %w", ref, file, err)
-			}
-			authToken = strings.TrimSpace(string(raw))
-			if authToken == "" {
-				return llmadapter.GatewayHTTPConfig{}, fmt.Errorf("llm.gateways.%s.auth_token_file %q is empty", ref, file)
-			}
-		}
-		endpoints[ref] = llmadapter.GatewayHTTPEndpointConfig{Type: ep.Type, BaseURL: ep.BaseURL, AuthToken: authToken, Timeout: ep.Timeout}
-	}
-	return llmadapter.GatewayHTTPConfig{Endpoints: endpoints}, nil
 }
 
 type fipsSubscriberLifecycle interface {

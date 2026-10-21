@@ -73,6 +73,8 @@ func TestArchitectureDBLessDaemonBootGatesNilRepositoryRoutes(t *testing.T) {
 			failures = append(failures, fmt.Sprintf("%s %s did not answer within 2s", p.method, p.route))
 		case code == http.StatusInternalServerError:
 			failures = append(failures, fmt.Sprintf("%s %s returned 500 (nil repository or panic) without a database", p.method, p.route))
+		case p.route == "/mcp" && code != http.StatusOK:
+			failures = append(failures, fmt.Sprintf("DB-less MCP initialize returned %d, want 200", code))
 		case code != http.StatusServiceUnavailable && !dbLessServedRoutes[p.route]:
 			failures = append(failures, fmt.Sprintf("%s %s returned %d; without a database only %v may serve, everything else must return 503", p.method, p.route, code, sortedKeys(dbLessServedRoutes)))
 		}
@@ -87,6 +89,8 @@ var dbLessServedRoutes = map[string]bool{
 	"/health":  true,
 	"/ready":   true,
 	"/metrics": true,
+	// MCP dependencies are tool-specific, not a transport-wide SQL gate.
+	"/mcp": true,
 	// Payment records are canonical cp-state in the local event store.
 	"/api/v1/payments/history":           true,
 	"/api/v1/deployments/runs/{id}/cost": true,
@@ -115,7 +119,11 @@ func concreteRoutePath(route string) string {
 func serveProbe(handler http.Handler, method, path string, n int) (int, bool) {
 	var body *strings.Reader
 	if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch {
-		body = strings.NewReader("{}")
+		if path == "/mcp" {
+			body = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`)
+		} else {
+			body = strings.NewReader("{}")
+		}
 	} else {
 		body = strings.NewReader("")
 	}
