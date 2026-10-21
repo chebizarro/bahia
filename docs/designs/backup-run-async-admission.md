@@ -1,54 +1,76 @@
 # Backup-run asynchronous admission
 
-**Scope:** admission of an operator-signed `backup/run` intent to a service-signed, relay-ACKed `30900` run state. This does **not** authorize backup execution, restore, retention, or credential use. The backup executor remains disabled until a separate recoverable effect/credential checkpoint protocol is proved.
+This document describes the current bounded implementation, not an unmerged
+candidate or permission to restore a SQL coordinator. The operator contract is
+[PostgreSQL loss and recovery](../runbooks/postgres-loss-and-recovery.md#workflow-authority-and-supported-slices)
+and the remaining scope is tracked in `bahia-cd0wr`.
 
-## Current boundary and candidates
+## Enabled subset and startup gate
 
-At `ff148312`, `BackupIntentHandler.handleRun` in `internal/controlplane/backup_intent_handler.go` checks exact signed run/config receipts but refuses fresh runs; `IntentProcessor.process` treats a successful handler return as processed/accepted and a non-nil error as rejected. `ProcessSync.Apply` runs on its sync goroutine. `mcp.callSignedBackupRun` also assumes a processed marker means success. Consequently, relay history cannot be queried inside `handleRun` without stalling unrelated inbound events.
+`backup_run.async_intake_enabled` is **default off**. When explicitly enabled,
+startup checks signer/Signet, writable original ledger, relay configuration,
+Kopia and the effect fence. `internal/app/app.go` constructs
+`NewBackupRunExecutor`, wires both publishers' delivery notifications to it,
+and registers it with the background manager. The single unfiltered Kopia
+snapshot path executes through that runner; it is not a disabled placeholder.
+Multi-step, filtered, non-Kopia, policy/verification, restore and retention
+execution remain fail closed. Deterministic tests do not enable live intake or
+satisfy signer/relay/Kopia production acceptance.
 
-The isolated `3d5ad4ed` candidate contributes the useful same-bbolt-transaction run-coordinate/admission/outbox indexes in `internal/adapters/nostr/localstore/backup_run_admission.go`, but its `StageRunAdmission` may stage before a complete relay-history/fencing proof. The isolated `b0530dbb` candidate contributes exact service-author/`30900`/`#d` conflict checks and per-relay EOSE/topology checks, but performs network I/O synchronously in `handleRun` and does not use `StoredEventsIncomplete` to reject paged, timestamp-tie truncation. Neither candidate should be merged as-is.
+## Signed intake and durable admission
 
-## State machine and durable boundaries
+1. `BackupIntentHandler` validates the exact signed UUIDv7 request, actor,
+   coordinate, freshness/expiration and execution snapshot. It records the full
+   signed request in the outbox-side pending ledger, not SQL or a disposable
+   event cache. Matching replay returns durable state; changed ID/coordinate
+   bindings conflict. Generic processed-marker success is not acceptance.
+2. The history/admission runner operates outside the inbound sync callback.
+   It checks every configured canonical relay, exact service author/run
+   coordinate, NIP-11/paging completeness, per-relay EOSE, stable connection
+   and topology evidence, plus local history. Missing, limited, interrupted or
+   ambiguous history cannot establish a new run coordinate. EOSE alone is
+   not a reservation or global absence proof.
+3. The fenced stage transaction binds the request, full signed run-state
+   event, coordinate indexes and outbox entry. Admission retains exact event
+   bytes through delivery failures; replay does not sign another run state.
+4. Exact run-state quorum proof permits staging the request-correlated signed
+   accepted status. Execution requires both run-state and accepted-status
+   quorum proofs; outbox enqueue or a cached accepted event is insufficient.
 
-1. **Ingress (`ProcessRelayIntent` or MCP):** validate the NIP-01 signature/hash and exact content/coordinate/UUIDv7 binding, then preserve the existing fleet-operator authorization gate. After those identity/trust checks, look up the immutable ledger binding **before** applying the 15-minute freshness/NIP-40 window: an identical old replay returns its durable pending/staged/settled result, while a different signed request for that `intent_id` or coordinate conflicts. For a genuinely new request, run `ValidateSignedBackupRunRequest` freshness/NIP-40 and execution-snapshot validation. The request must have been observed by the relay subscriber; MCP's local-store check remains an observation, not an ACK. Atomically put the *full signed request* into a non-cache bbolt `backupRunPending` record keyed by `intent_id`, with unique indexes on `(service pubkey, run d-coordinate)` and request event ID. Record the actor, content hash, original receipt time, expiration, retry schedule, and state `pending`. No service-signed run state, SQL row, processed marker, or `accepted` status is created here. Ingress returns immediately after the local fsync; the control-plane sync callback never waits for relay reads, outbox delivery, or worker capacity. A special deferred outcome from `IntentProcessor` must bypass its generic rejection/mark-processed branches. MCP returns `pending` from the durable inbox rather than equating absence of a processed marker with rejection. Neither the replay shortcut nor a worker reload bypasses signature, identity, or authorization checks.
-2. **Admission worker:** a bounded `app.BackgroundManager` runner (`BackupRunAdmissionRunner`) drains the durable pending index once on startup and is thereafter woken by inbox commits, relay reconnect/topology-change notifications, and the earliest persisted `next_attempt_at`/`expires_at`. It uses a fixed concurrency/REQ budget, not a periodic ticker or a relay-as-queue abstraction. A per-attempt context deadline bounds resource use only: timeout closes the REQ, records `history_incomplete`, advances a bounded reconnect/backoff schedule in the same durable inbox record, and cannot mean history is complete. If a connected relay never sends EOSE, invalidate/reset that connection so pool reconnect can reissue a fresh REQ; do not wait indefinitely for an event that never arrives. `CLOSED`, unrecovered `AUTH`, disconnection, missing NIP-11, or missing EOSE similarly leave the record pending with bounded health diagnostics and a durable next-action time. A one-shot scheduler wakeup only starts the next bounded attempt or enforces signed expiration; it never declares relay completion or acceptance. On restart, reconstruct the earliest wakeup from bbolt. Backoff is bounded by `expires_at`; when expiry wins, transition to terminal refusal rather than leaving indefinite pending. **Inside the service-key fence, immediately before stage**, recheck wall-clock expiration as well as proof epochs; a request that expired between the worker's earlier check and stage is refused. A refusal is settled through a signed bounded `30315` rejection, with retryable status publication if that fails.
-3. **History proof:** freeze a normalized relay-topology revision and service-key writer epoch. The proof set must include every configured canonical read *and* write relay, not only the currently connected subset. Against each relay issue an exact `(kind=30900, author=service pubkey, #d=backup-run:<uuid>)` REQ, **without `#t`** (pre-ledger states may have old topic tags). Obtain NIP-11 information/capabilities for each connection. Set an explicit positive limit; since this is one addressable coordinate, any returned event immediately blocks fresh admission, including invalid envelopes or tombstones. For an empty answer, require actual per-relay EOSE and `MergedSubscription.StoredEventsIncomplete(nil)==nil`; `EndOfStoredEvents` alone is not proof because CLOSED can end it. The pool must expose `Truncated` from paging, including more same-second events than `max_limit`, and the worker must fail closed on it. A zero-event EOSE cannot be silently limited by a conforming relay; a relay lacking a trustworthy complete-history contract is not eligible for admission. Recheck the local cache (including any pre-ledger coordinate) and the exact configured relay set/connection epochs before commit. Keep the subscription open through stage; close it after commit/refusal. This is an EOSE-bounded history check, not a periodic peek used as the read model.
-4. **Fenced atomic stage:** the empty REQ is only an observation, never an exclusive reservation. The service key must have one enforced writer authority for this coordinate across processes and SIGHUP overlap; every `PublishRun`/outbox path using that key must share it. Require a durable, monotonic fencing token or an exclusive signer/key-custody service that rejects stale writers; an in-process mutex or local bbolt lock alone cannot fence two daemons with separate stores. While the fence is valid, recheck expiration, topology revision and inbox/coordinate indexes; sign the first queued `BackupRunStateRecord` with the frozen execution snapshot and request correlation. In a **single bbolt transaction**, compare-and-set `pending -> staged`, write the immutable request-to-state binding **and full signed event bytes**, and enqueue that exact event in the control-plane outbox. No network call, SQL write, processed marker, or side effect precedes that transaction. The stage API must reject duplicate coordinate ownership, old outbox rows without admission metadata, and any local/relay pre-ledger state. Persist the relay-set/policy revision and fencing epoch with the record so restart cannot infer them from today's config.
-5. **ACK settlement:** the outbox runner delivers the staged event and records verified `OK` flags/reasons and the frozen write-relay quorum policy atomically with a non-prunable exact-event delivery proof (not merely `Delivered=true`). Only after `DeliveryProof.ValidFor(exactEvent, control-plane target)` succeeds may the worker stage/publish `30315 accepted` for the same request; a queued outbox event is still `pending`. Use a durable `run_acked/status_pending/accepted` transition so crash or status publish failure replays the *same* outcome without re-signing the run. Prefer making `accepted` mean that the status event itself has an ACKed delivery proof; at minimum the status must be durably queued before marking the intent processed. Status is fixed-size and contains run ID, exact run-state event ID and `execution=paused`, never raw relay errors or credential material. On partial `OK`, failed delivery, or apparent abandonment, keep the **same signed event bytes** pinned in the admission ledger and retain its outbox row regardless of normal failed/published retention; `Outbox.Prune` must skip any row referenced by an unresolved admission. An operator retry republishes that exact ID, never signs a replacement. Do not publish `rejected` while any relay may hold the staged event. Release the pin only after an independently verifiable terminal delivery proof and durable outcome settlement (or explicit audited recovery policy); a retry-budget failure alone is not such proof.
+The production deployment requires one active daemon/service-key writer with
+its preserved receipt ledger. A local filesystem lock is not cross-host
+fencing. Do not activate another daemon with the same identity and a separate
+outbox, infer a pristine fleet from a replaced ledger, or replay SQL queues.
 
-The durable inbox and admission ledger must live with the outbox (not the rebuildable `localstore.Store`) and survive pruning of settled outbox rows and deletion of the inbound cache. Once a run coordinate is owned, its binding is never silently garbage-collected/reused. The inbound request may expire on relays after intake; the signed event bytes and original validation time remain durable for audit and deterministic restart behavior. **Outbox loss is not empty history.** `localstore.OpenOutbox` currently renames a corrupt file aside and auto-creates another; admission must reject `MovedAside()!= ""`, a missing ledger bucket/version, or a newly created empty outbox on an already-enrolled deployment. Once admission is enabled, open the durable store strictly or require a separately persisted deployment enrollment/generation marker plus an explicit signed zero-state bootstrap/cutover, so deletion of the entire file is detectable. Missing/corrupt outbox or ledger sets degraded health and blocks new admission, replay acceptance, and processing; do not reconstruct a staged event from a relay cache or sign another one. Recovery requires operator-controlled restoration/reconciliation of the old ledger and relay state.
+## Credential binding, external effect and restart
 
-## Code landing map
+The execution snapshot binds canonical configuration and Signet credential ID
+and version; it never carries secret values or legacy unversioned credential
+fields. `BackupRunExecutor` resolves the pinned version, writes private
+apply-scoped Kopia configuration, and persists a nonsecret pre-effect receipt.
+The snapshot is tagged with the bound run/step identity. Restart observes those
+exact Kopia tags before deciding whether a checkpoint can advance. A failed or
+ambiguous observation requires operator recovery, not another blind effect.
 
-| Component | Required change |
+Signed step checkpoints and terminal state/status use retained publisher-quorum
+proofs before completion/compaction. Crash between an effect and checkpoint,
+or checkpoint and publication, reuses the immutable receipt and signed event
+rather than reconstructing authority from SQL or re-signing a new outcome.
+Ephemeral credential files are removed; they are not durable effect inputs.
+
+## Source and verification map
+
+| Boundary | Implementation / proof |
 |---|---|
-| `internal/controlplane/intent_processor.go`, `backup_intent_handler.go`, `backup_signed_run_request.go` | Validate/authorize once; return a typed deferred outcome; keep generic processed/accepted/rejected paths from settling pending work. No relay I/O in `HandleIntent`. |
-| `internal/adapters/nostr/localstore/backup_run_admission.go` and `outbox.go` | Evolve candidate atomic indexes into signed pending inbox, persisted retry/expiry schedule, immutable full-event admission ledger, and exact-event ACK/status settlement. Version/migrate buckets fail-closed; pin unresolved rows against `Prune`; never treat absence of a new index as an empty historical fleet. |
-| `internal/adapters/nostr/backup_run_history.go`, `relay_pool.go` | Move candidate inspector to worker, require all configured relays, NIP-11, per-relay EOSE, `StoredEventsIncomplete`, no truncation/tie gap, stable topology; expose a proof/result object rather than a bare `nil` result. |
-| `internal/adapters/nostr/backup_run_admission.go`, `backup_canonical_publisher.go` | Gate **all** service-key run-coordinate publishers behind the same writer fence and atomic stage; preserve signed event and frozen publish policy. |
-| `internal/app/app.go` and background runner | Wire bounded durable work recovery/wakeup and health; refuse auto-recreated/missing outbox or ledger via `MovedAside`/strict open and deployment enrollment; leave `RunExecutor` unset. Handle SIGHUP overlap and shutdown without losing pending records. |
-| `internal/mcp/backup_signed_run.go`, status/outbox readers | Return durable pending/conflict/accepted state; settle `30315` only after exact run-state ACK proof. The sibling ACK-status work should own the detailed status publisher/outbox changes; integrate by interface, not overlapping edits. |
+| Signed input and deferred outcome | `internal/controlplane/backup_intent_handler.go`, `backup_signed_run_request.go` |
+| Pending/indexed atomic stage and durable request binding | `internal/adapters/nostr/localstore/backup_run_pending.go`, `backup_run_admission.go` |
+| Relay-history evidence and wake/retry behavior | `internal/adapters/nostr/backup_run_history.go`, `backup_run_history_runner.go` |
+| Delivery proof and retry retention | `internal/adapters/nostr/localstore/outbox.go`, publisher delivery tests |
+| Pinned credentials, tagged effect, step/terminal proof | `internal/controlplane/backup_run_executor.go`, `backup_run_receipts.go`, executor tests |
+| Real production construction | `internal/app/app.go`, backup startup/wiring tests |
 
-Suggested narrow interfaces: `PendingRunInbox.PutSigned(*nostr.Event, actor, receivedAt) (record, outcome, error)`, `PendingRunInbox.NextPending/Watch`, `RunHistoryInspector.Inspect(ctx, runID, topologyRevision) (HistoryProof, error)`, `ServiceKeyFence.WithToken(ctx, func(token) error)`, `RunAdmissionStage.Stage(proof, token, request, signedRun)`, `RunAdmissionSettlement.OnOutboxRound(eventID)` and `RunAdmissionStatus.Get(intentID)`. `HistoryProof` must bind service pubkey, coordinate, relay URL set, connection epochs, NIP-11/paging outcomes, EOSE flags and observed-at time; it is ephemeral evidence consumed under the writer fence, not durable authority on its own.
-
-## Deterministic acceptance tests
-
-- Ingress returns after durable inbox commit while a history relay withholds EOSE; another intent still flows through `ProcessSync.Apply`. Crash/restart redrives the same signed request without a second run state.
-- Withheld EOSE reaches the attempt deadline: no false completeness, the connection is recycled, `next_attempt_at` and expiration are durable, and a fresh REQ is attempted after backoff/restart. A permanently silent relay leads to terminal refusal at signed expiry, not an immortal pending record. A worker blocked at fence acquisition rechecks expiration inside the fence.
-- Exact-coordinate event on any configured relay or in local cache, including legacy/pre-ledger state, tombstone, invalid envelope, or same-second tie, blocks stage. Empty cache plus missing relay, missing NIP-11, AUTH/CLOSED, failed EOSE, truncated `max_limit` page, or changed relay epoch/topology never proves absence.
-- Two requests sharing ID or coordinate conflict; identical replay at pending, staged, run-ACKed, and accepted phases reuses event IDs. A second service-key writer/fence token cannot publish or stage; SIGHUP overlap cannot fork one coordinate.
-- Inject crash at each fsync boundary: pending write, stage transaction, relay OK before outbox round commit, run proof commit, status enqueue, and status ACK. No crash creates accepted without the exact run proof; no staged event loses its request binding.
-- Test `OK=false` categories, partial relay OK, outbox retry/abandonment, configured quorum/policy changes, and status publication failure. Accepted `30315` appears only after the frozen policy is satisfied and is not fabricated from an event cache or `Delivered` flag.
-- After partial or failed delivery, advancing retention/prune cannot remove the exact signed run event or ledger binding; retry publishes the same event ID. Delete or corrupt the outbox before restart, including `OpenOutbox` move-aside/auto-recreation, and verify admission refuses rather than treating it as pristine. A damaged/missing ledger bucket fails closed even when relay history appears empty.
-- Valid signed replay after 15 minutes succeeds only by matching the immutable ledger after signature and fleet authorization; a new expired request and a changed replay fail. An existing staged event can settle after request expiry without re-admission or re-signing; a still-pending request cannot stage after expiry.
-- Signed request expires while waiting for EOSE; a deterministic terminal refusal is durably reported, no run state exists. Tests explicitly distinguish intake-time freshness from later worker-time expiration.
-- Signed execution snapshot references exact recipe/repository/policy event IDs with durable delivery proofs; drift, missing proof, credential-version mismatch, or legacy unpinned config refuses. No backup executor call occurs in any admission test.
-
-## Deployment/policy decisions that block enabling admission
-
-1. **Service-key exclusivity:** which production mechanism fences *all* daemons and signing paths across hosts and SIGHUP? Without a single enforceable signer or linearizable fence recognized by every signer, the EOSE-to-stage race cannot be closed. Keep intake fail-closed until this is specified and tested.
-2. **Historical completeness:** NIP-11 `max_limit` plus EOSE addresses pagination, not relay retention/deletion or a formerly configured relay removed from topology. Specify an authoritative relay-history/retention contract and a signed pre-ledger cutover/census rule; otherwise an empty current relay answer cannot prove an old run ID was never used.
-3. **Expiration semantics:** decide whether a valid request durably received before its 15-minute expiration may be staged after expiration. The conservative design refuses; changing it needs an explicit signed-intent contract and tests.
-4. **Acceptance observable:** decide whether `accepted` is published on run-state quorum proof or only after `30315` itself reaches quorum. The latter provides an externally observed acceptance guarantee; either choice must be implemented consistently in MCP and restart settlement.
-
-Until these answers are embodied in code and deterministic tests, retain the existing paused intake and disabled executor rather than merging either isolated candidate into the integration branch.
+Preserve the outbox, local events, receipt journals, trust state and containment
+markers together. Missing/corrupt original ledgers are not empty history; use
+operator-controlled restoration/reconciliation. Operator enablement and
+exact-artifact staging remain acceptance gates in `bahia-cd0wr`; no old plan
+instruction to disable the wired executor overrides current code or those gates.

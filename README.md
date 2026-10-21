@@ -47,11 +47,18 @@ you push code → Hive-CI builds it → Bahia registers the build and artifact
 Every mutation is a client-signed Nostr intent; the daemon answers with a
 bounded status and publishes the canonical record; readers subscribe. HTTP
 exists for probes, metrics, the OCI distribution API, MCP and a handful of
-HTTP-native routes.
+HTTP-native routes. PostgreSQL support still exists for derived projections,
+OCI metadata and some repository-backed integrations; full dependency retirement
+is not complete. Do not restore REST CRUD or SQL-authorized effects to make a
+missing capability appear available. Signed intent and canonical-state contracts
+in [architecture](docs/architecture/README.md) govern changes; Beads records
+capabilities that remain fail closed.
 
 ## Quick start
 
 ```bash
+# Disposable local stack; production uses a remote signer and secured binds.
+export NOSTRC_DIR=<nostrc-checkout-with-Signet-0.7.0-or-newer>
 # A Nostr key for the daemon and the host docker socket group id
 export BAHIA_NOSTR_PRIVATE_KEY=<64-hex>
 export DOCKER_SOCKET_GID=$(stat -c %g /var/run/docker.sock)
@@ -65,14 +72,18 @@ curl http://localhost:8080/ready       # readiness with checks
 open http://localhost:3000             # web app (relay proxied at /relay)
 ```
 
-`docker-compose.yml` starts PostgreSQL, the relay sidecar (`:3334`), the
-daemon (`:8080`) and the web app (`:3000`); the Go services share
-`config.compose.yaml`. See the [deployment guide](docs/deployment.md).
+`docker-compose.yml` starts the disposable dev Signet, relay sidecar (`:3334`),
+daemon (`:8080`) and web app (`:3000`); the Go services share
+`config.compose.yaml`. PostgreSQL is an opt-in derived index (`derived-sql`
+profile), not a startup prerequisite. The daemon's local events, outbox,
+execution receipts and trust high-water state persist on the `daemonstate`
+volume, separately from relay storage. Never delete these volumes to resync.
+See the [deployment guide](docs/deployment.md).
 
 ## Development
 
 ```bash
-# Go 1.26, PostgreSQL 16, pnpm 10 / Node 22+ for the web
+# Go 1.26, pnpm 10 / Node 22+; PostgreSQL 16 only for optional SQL integrations
 make deps        # go mod download
 make run-dev     # daemon with dev-mode config
 make test        # go test ./... (includes the architecture ratchet)

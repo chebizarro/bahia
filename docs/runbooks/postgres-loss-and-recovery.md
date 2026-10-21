@@ -13,7 +13,10 @@ PostgreSQL is an optional derived index. The daemon's control-plane truth is the
 
 1. Restore or recreate PostgreSQL as a **derived** store. Keep the daemon's key, relays and bbolt files unchanged. Verify database identity and schema before enabling writers.
 2. Rebuild only from validated relay/local canonical events using the domain's supported projection or `RebuildIndex` path. Check latest `(kind, pubkey, d)` coordinates and tombstones against relays, then compare derived rows. A SQL row absent from canonical history is not automatically republished.
-3. Recheck `/ready` and `canonical_delivery`; SQL recovery alone is not proof of relay catch-up or outbox acceptance. Confirm no unexpected increase in canonical coordinates, service-key signatures or local outbox entries merely because the restored database contains extra rows.
+3. Restart the daemon after the index is healthy if SQL-dependent capabilities
+   are required. The background recovery probe migrates and closes its own pool;
+   it does not attach repositories or restart the application.
+4. Recheck `/ready` and `canonical_delivery`; SQL recovery alone is not proof of relay catch-up or outbox acceptance. Confirm no unexpected increase in canonical coordinates, service-key signatures or local outbox entries merely because the restored database contains extra rows.
 
 Legacy SQL-only state requires a separately governed migration with a dry-run census, stable semantic coordinates, admission limits, durable progress, crash/retry proof, and independent status. Do not trigger such a migration by restarting the daemon, reconnecting PostgreSQL, or manually changing SQL publish flags. The [startup source audit](../analysis/postgres-startup-source-audit.md) identifies the code paths that must be absent before this runbook is an acceptance proof.
 
@@ -50,27 +53,36 @@ per-case timings and both test exit statuses. Exact-image, exact-digest Docker
 and staging soak with real relay `EOSE`/`OK` outcomes, production-scale SQL
 cardinality, and process RSS remains a separate unverified acceptance gate.
 
-## Paused workflow recovery
+## Workflow authority and supported slices
 
-`/ready` reports `backup_recovery`, `backup_scheduler`,
-`llm_provisioning_recovery`, and `tool_provisioning_recovery` as warnings.
-Automatic recovery and scheduled dispatch for these families are disabled:
-their stored SQL queues and schedules are not signed-intent authority. LLM
-gateway route repair is also paused because its desired state is SQL-backed.
-Do not clear or manually advance the rows. Preserve PostgreSQL and the
-relay/local event store, inventory the affected run ids and source event ids,
-and compare each against retained validated signed intents and canonical
-outcomes. Backup run, restore, and retention request intake and restore
-approval are paused, including for valid signed requests; legacy Nostr
-requests receive a request-correlated paused rejection and kind-30900 intents
-receive a rejected status. Tool request handling remains available, but
-manual tool approval is paused. SQL-resolved execution inputs cannot yet be
-causally bound to the original signed request and atomically committed before
-publication. Treat the lost backup capability as a release blocker; do not
-edit SQL rows or manually invoke executors. A queued row without matching
-canonical provenance must not be replayed. The
-[paused recovery is a release blocker](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority),
-not a successful workflow recovery. The
-[workflow recovery design](../designs/relay-canonical-startup-and-recovery.md#workflow-recovery-authority)
-defines the durable replay and restart evidence required to enable these
-runners.
+SQL queues and schedules are not signed-intent authority. Do not clear or
+manually advance rows, restore old SQL coordinators, or infer execution consent
+from a queued row. Preserve the local receipt ledger and compare every effect
+with the exact retained signed request, canonical revisions and relay outcomes.
+
+The canonical implementations have bounded supported paths:
+
+- Backup async intake is **default off**. When explicitly enabled with its
+  startup prerequisites, a single unfiltered Kopia snapshot uses pinned Signet
+  credentials, durable receipts, relay acknowledgment and tag-based crash
+  observation. Multi-step, filtered, non-Kopia, policy/verification, restore and
+  retention execution remain fail closed (`bahia-cd0wr`).
+- Fleet-operator-signed tool requests and exact-event approvals support the
+  canonical build/Docker deploy executor. Unsigned MCP/assistant requests and
+  legacy ContextVM approvals cannot authorize those effects (`bahia-4f10q.2.1`).
+- Signed LLM lifecycle intents reach the external-API gateway route executor
+  with version-pinned Signet credentials and replay receipts. It is not accepted
+  for production multi-environment routing: physical route identity currently
+  omits the environment (`bahia-8ii1f`). Do not promote this path across
+  environments until resource ownership and shared fencing are resolved. Runtime-managed
+  model placement/provisioning and unsupported mixed backends remain fail
+  closed (`bahia-4f10q.2.2`).
+- Docker-only canonical auto-apply uses exact signed decisions and pinned input
+  revisions under the local effect fence. Compose, public-route, canary and
+  runtime-release auto-apply remain fail closed (`bahia-4f10q.2`).
+
+The runtime is the authority on supported inputs and refusals; historical plans
+are not permission to enable broader paths. A local filesystem fence requires
+one active daemon per service identity and ledger; it is not a cross-host
+lease. Live signer/relay/Kopia/runtime and exact-artifact recovery acceptance
+remain separate gates even when deterministic tests pass.

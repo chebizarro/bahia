@@ -13,13 +13,22 @@ This guide takes you from a fresh checkout to a first deployment.
 ```bash
 git clone https://github.com/openagentsinc/bahia.git
 cd bahia
+export NOSTRC_DIR=<nostrc-checkout-with-Signet-0.7.0-or-newer>
+export BAHIA_NOSTR_PRIVATE_KEY=<throwaway-64-hex-service-key>
+export BAHIA_NOSTR_AUTHORIZED_PUBKEYS=<comma-separated-operator-pubkeys>
+export PUBLIC_BAHIA_SERVICE_PUBKEYS=<matching-service-pubkey-hex>
+export DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
 docker compose up --build
 
 curl http://localhost:8080/health      # {"status":"ok", ...}
 open http://localhost:3000
 ```
 
-Compose starts the daemon (`:8080`), the relay sidecar (`:3334`), PostgreSQL (`:5432`), and the web app (`:3000`). The web container receives its bootstrap seed — the sidecar URL and the daemon's service pubkey — as `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` at container start.
+Compose starts the seeded dev Signet, daemon (`:8080`), relay sidecar (`:3334`)
+and web app (`:3000`). PostgreSQL is an opt-in `derived-sql` profile, not a
+startup prerequisite; see [Docker setup](../../DOCKER.md#optional-derived-sql-index).
+This development stack exposes local ports and the host Docker socket; it is
+not a production deployment recipe. The web container receives its bootstrap seed — the sidecar URL and the daemon's service pubkey — as `PUBLIC_BAHIA_BOOTSTRAP_RELAYS` and `PUBLIC_BAHIA_SERVICE_PUBKEYS` at container start.
 
 ## Local build
 
@@ -34,6 +43,11 @@ If you run with PostgreSQL, create the database and apply the schema before the 
 ## Configuration
 
 The daemon reads `-config <file>` (YAML) and then environment variables prefixed `BAHIA_`. `BAHIA_<SECTION>_<FIELD>` maps to `section.field` (`BAHIA_DB_HOST` → `db.host`); use `__` for deeper nesting (`BAHIA_NOSTR__SIDECAR__ENABLED`).
+
+HTTP NIP-98 replay claims persist in the daemon outbox even without PostgreSQL.
+Preserve that ledger across restart; the DB-less topology supports one active
+daemon per service identity, not independent multi-host replay ledgers. See
+[authentication durability](../deployment.md#http-authentication-replay-durability).
 
 Outbound relay traffic uses bounded `nostr.outbound` admission. Its priority
 share reserves capacity for assistant checkpoints, session projections and
@@ -90,7 +104,14 @@ nostr:
     data_dir: "/var/lib/bahia/relay-sidecar"
 ```
 
-Everything a client can read or change goes through the relays, so the two values that matter most are `nostr.private_key` (the service identity) and the relay list. `nostr.authorized_pubkeys` names the fleet operators who may act outside any organization (policies, DNS, workers, ML, tool decisions, fleet rekeys, MCP over HTTP). See [Nostr Integration](nostr-integration.md#relays) for the full relay and sidecar reference, and each feature page for its own section (`adoption`, `direct_runtime_actions`, `dns`, `hiveci`, `llm`, `soul_factory`, `assistant`, `supervision`, `route_canaries`, `virtualization`).
+The Compose configuration keeps `nostr.local_store.path` and `outbox_path`
+under the dedicated `/var/lib/bahia/daemon` persistent volume. Preserve both
+files and their adjacent receipt journals, fences, containment markers and
+trust high-water ledger. They are not disposable caches; never delete volumes
+to resync or start another daemon with a separate receipt ledger. Binary
+installs must provision their own durable, writable state paths.
+
+Ordinary canonical reads and writes go through the relays, so the two values that matter most are `nostr.private_key` (the service identity) and the relay list. `nostr.authorized_pubkeys` names the fleet operators who may act outside any organization (policies, DNS, workers, ML, tool decisions, fleet rekeys, MCP over HTTP). See [Nostr Integration](nostr-integration.md#relays) for the full relay and sidecar reference, and each feature page for its own section (`adoption`, `direct_runtime_actions`, `dns`, `hiveci`, `llm`, `soul_factory`, `assistant`, `supervision`, `route_canaries`, `virtualization`).
 
 `nostr.service_id` and `nostr.operator_root_pubkey` enable trust-epoch
 verification. Both must be configured together; the root must be independent

@@ -32,12 +32,19 @@ The stack exposes:
 | Web | `http://localhost:3000` | loads the runtime bootstrap seed |
 | Daemon | `http://localhost:8080` | `/health` liveness, `/ready` readiness |
 | Relay | `ws://localhost:3334/relay` | NIP-11 at the same HTTP URL |
-| PostgreSQL | `localhost:5432` | `pg_isready` |
+| PostgreSQL (opt-in `derived-sql` profile) | `localhost:5432` | `pg_isready` |
 | Signet (dev) | `ws://signet:7777` inside the stack | healthy once seeded |
 
 Both Go services mount `config.compose.yaml`. The daemon also mounts the host
 Docker socket and joins `DOCKER_SOCKET_GID`; using a group name would resolve
 against the image's group database instead of the host socket owner.
+
+The default stack has no PostgreSQL startup dependency. Opt into the derived
+index using the commands in [DOCKER.md](../DOCKER.md#optional-derived-sql-index).
+The daemon's `/var/lib/bahia/daemon` is a dedicated persistent volume, separate
+from relay storage; preserve local events, outbox and all adjacent journals,
+trust high-water state and containment markers. Do not delete volumes to resync.
+Existing container-layer state must be copied while stopped before recreation.
 
 Container health probes liveness only. Use `/ready` for traffic admission and
 operator gates so an unavailable signer or relay degrades readiness without
@@ -99,9 +106,13 @@ make build
 
 The server listens even when PostgreSQL is unavailable. Relay-backed
 services, ContextVM handling, discovery, health/readiness and DB-less payment
-reads can operate; `/mcp`, `/v2/*` and repository-backed HTTP routes are
-dependency-gated. The `database-recovery` runner reconnects and installs
-repository-backed services when PostgreSQL returns.
+reads and SQL-independent MCP tools can operate. `/v2/*` and repository-backed
+HTTP routes remain dependency-gated; MCP tools enforce their own dependencies.
+The `database-recovery` runner probes and migrates a recovered SQL index, closes
+its probe pool, and stops. It does not install repositories into the running
+daemon. Restart the daemon after PostgreSQL is healthy to enable those derived
+capabilities; never interpret SQL recovery as permission to execute SQL-only
+workflows. See [PostgreSQL loss and recovery](runbooks/postgres-loss-and-recovery.md).
 
 ## Relay topology
 
@@ -229,3 +240,20 @@ check. Validate one
 REQ/EOSE subscription, one signed intent and its relay `OK`, requester-scoped
 `30315` status, and canonical record before considering the deployment
 operational.
+
+## HTTP authentication replay durability
+
+NIP-98 event IDs are atomically claimed in the daemon's preserved bbolt outbox.
+Authentication works without PostgreSQL and duplicate claims stay refused after
+restart. Expired claims use an indexed, bounded cleanup on new requests. When
+PostgreSQL is connected, its shared replay check is also required; its failure
+never falls back to accepting an already consumed event.
+
+Local-only replay protection requires the existing **one active daemon per
+service identity and ledger** deployment contract. Independent writable ledgers
+are not cross-host replay coordination. Preserve the outbox on restart and
+restore; never delete replay state to recover availability. When transitioning
+from an older SQL-only replay deployment, retain the SQL claims through the
+valid authentication window or drain old requests before enabling local-only
+authentication. These local tests do not prove multi-host or live promotion
+acceptance.

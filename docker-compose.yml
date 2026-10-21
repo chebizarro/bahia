@@ -1,5 +1,7 @@
 services:
+  # Disposable derived index only; never a prerequisite for relay-first boot.
   postgres:
+    profiles: [derived-sql]
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: bahia
@@ -60,15 +62,17 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./config.compose.yaml:/etc/bahia/config.yaml:ro
       - nostrarchive:/var/lib/bahia/nostr-archive
+      - daemonstate:/var/lib/bahia/daemon
       - signetshared:/run/signet-dev:ro
       - ./deploy/signet-dev/with-signet-env.sh:/opt/bahia-dev/with-signet-env.sh:ro
     environment:
-      BAHIA_DB_HOST: postgres
-      BAHIA_DB_PORT: "5432"
-      BAHIA_DB_USER: bahia
-      BAHIA_DB_PASSWORD: bahia
-      BAHIA_DB_NAME: bahia
-      BAHIA_DB_SSLMODE: disable
+      # Set these explicitly when opting into the derived-sql profile.
+      BAHIA_DB_HOST: ${BAHIA_DB_HOST:-127.0.0.1}
+      BAHIA_DB_PORT: ${BAHIA_DB_PORT:-5432}
+      BAHIA_DB_USER: ${BAHIA_DB_USER:-bahia}
+      BAHIA_DB_PASSWORD: ${BAHIA_DB_PASSWORD:-}
+      BAHIA_DB_NAME: ${BAHIA_DB_NAME:-bahia}
+      BAHIA_DB_SSLMODE: ${BAHIA_DB_SSLMODE:-require}
       BAHIA_SERVER_HOST: "0.0.0.0"
       BAHIA_SERVER_PORT: "8080"
       BAHIA_LOG_LEVEL: info
@@ -76,8 +80,6 @@ services:
       BAHIA_NOSTR_PRIVATE_KEY: ${BAHIA_NOSTR_PRIVATE_KEY:?BAHIA_NOSTR_PRIVATE_KEY is required}
       BAHIA_NOSTR_AUTHORIZED_PUBKEYS: ${BAHIA_NOSTR_AUTHORIZED_PUBKEYS:-}
     depends_on:
-      postgres:
-        condition: service_healthy
       signet:
         condition: service_healthy
     restart: unless-stopped
@@ -154,6 +156,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  daemonstate:
   pgdata:
   relaydata:
   nostrarchive:

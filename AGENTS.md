@@ -18,7 +18,10 @@ Bahia"). The contracts agents need most are in `docs/architecture/`
 ([index](docs/architecture/README.md)); event kinds and shapes are in
 `docs/nostr-event-implementation-guide.md` (the Bahia authority before
 introducing or reusing any kind), `docs/event-spec.md`, `docs/control-planes.md`
-and `docs/nostr-commands.md`. Code wins over any document; if they disagree,
+and `docs/nostr-commands.md`. Designs, analysis and plans are not implementation authority: verify their
+claims against current production callers and Beads acceptance evidence before
+acting. A completed plan does not authorize restoring removed REST CRUD,
+SQL-derived signatures or suspended effects. Code wins over any document; if they disagree,
 fix the document (or report the code if it looks wrong — do not change
 behaviour to match prose).
 
@@ -26,7 +29,8 @@ behaviour to match prose).
   signed by the service key and held on relays and in the daemon's local
   bbolt event store. Postgres is optional and derived: it is written after
   the canonical event and no path may require it. The daemon boots and
-  serves relay state without a database.
+  serves relay state without a database. SQL integrations still exist; do not
+  claim complete PostgreSQL removal or reconnect SQL-authorized effects.
 - **Intents vs reads.** Mutations are operator-signed `30900` intents (NIP-59
   gift-wrapped for org, secret and notification domains) processed by
   `IntentProcessor`; outcomes are `30315` status events. Reads are REQ
@@ -51,7 +55,15 @@ behaviour to match prose).
   (`PUBLIC_BAHIA_*`).
 - **HTTP** on the daemon is limited to health/readiness/metrics, MCP, logs,
   DB-less payment reads, blob proxy and a few HTTP-native routes
-  (`docs/architecture/cli-and-mcp.md`). Do not add REST read or write routes.
+  (`docs/architecture/cli-and-mcp.md`). MCP has no transport-wide SQL gate;
+  tools validate their actual dependencies. Do not add REST read or write routes.
+- **Local durability.** Preserve the daemon event store, outbox, receipt journals,
+  adjacent trust-epoch high-water state and containment markers together. They
+  are not disposable caches; events/effects may not be present on any relay.
+  A container recreation must retain them on a writable persistent volume.
+  HTTP NIP-98 replay claims live in that outbox; keep the singleton daemon/ledger
+  contract and preserve shared replay checks when PostgreSQL is connected.
+  Never substitute the in-memory test replay store for production auth.
 
 If code is "waiting and checking" instead of "subscribing and reacting", it
 is wrong.

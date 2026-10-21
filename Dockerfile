@@ -107,7 +107,9 @@ LABEL org.opencontainers.image.source="https://github.com/openagentsinc/bahia" \
 
 RUN apk add --no-cache ca-certificates tzdata wget && \
     addgroup -S docker && \
-    adduser -S -G docker bahia
+    adduser -S -G docker bahia && \
+    mkdir -p /var/lib/bahia/daemon /var/lib/bahia/relay-sidecar /var/lib/bahia/nostr-archive && \
+    chown -R bahia:docker /var/lib/bahia
 
 USER bahia
 

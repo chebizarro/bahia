@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-// NostrLocalStoreConfig configures the daemon's local Nostr event store
-// a bbolt file caching the events its inbound
-// subscriptions received, with a resume cursor per (relay, filter). It is a
-// rebuildable cache: deleting the file is safe, and the daemon resyncs it from
-// its relays (replaceable/addressable state in full, regular kinds from
-// RegularLookback).
+// NostrLocalStoreConfig configures the daemon's durable local Nostr event
+// store and its per-(relay, filter) resume cursors. Relay-delivered projections
+// can be rebuilt, but locally staged canonical events and execution receipts
+// may not exist on any relay yet. Preserve this file together with the outbox,
+// adjacent trust-epoch state, containment markers and effect receipts; deleting
+// local state is not a safe resynchronization procedure.
 type NostrLocalStoreConfig struct {
 	// Path is the bbolt file. One process per file: bbolt holds an exclusive
 	// lock, so it must not be the relay sidecar's store or another daemon's.

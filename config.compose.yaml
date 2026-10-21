@@ -1,6 +1,11 @@
 dev_mode: true
 
 nostr:
+  # Durable daemon-only state: outbox, receipts, trust high-water and fences
+  # must survive container recreation. Never share with the relay's bbolt file.
+  local_store:
+    path: /var/lib/bahia/daemon/events.bolt
+    outbox_path: /var/lib/bahia/daemon/outbox.bolt
   # All registered intent domains are enabled unless explicitly listed here.
   intent_domains_disabled: []
   contextvm_relays:
