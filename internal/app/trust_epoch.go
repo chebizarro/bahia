@@ -158,12 +158,7 @@ func (a *trustEpochAdmission) admit(ev nostr.Event) error {
 			zap.String("event_id", ev.ID.Hex()), zap.Uint64("count", count))
 		return fmt.Errorf("event rejected after unverifiable trust epoch head")
 	}
-	old := a.verifier.LegacyPubkey
-	if a.resolution.Record != nil {
-		old = a.resolution.Record.OldPubkey
-	}
-	current := a.resolution.Pubkey
-	if ev.PubKey.Hex() != old && ev.PubKey.Hex() != current {
+	if !a.resolution.IsServiceAuthor(ev.PubKey.Hex()) && ev.PubKey.Hex() != a.verifier.LegacyPubkey {
 		return nil
 	}
 	if a.resolution.JudgeEvent(ev) == trustepoch.Hostile {

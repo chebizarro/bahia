@@ -83,3 +83,58 @@ describe('trust epoch envelopes and admission', () => {
       legacyPubkeys: [fixture.old_pubkey], storage: durable })).toThrow(/Corrupt persisted/);
   });
 });
+
+it('remembers every retired identity after three rotations and durable reload', () => {
+ const durable = storage();
+ const g = guard({storage: durable});
+ const secrets = [oldSecret, newSecret, ...['4','5'].map(c => Uint8Array.from(Buffer.from(c.repeat(64),'hex')))];
+ const pubkeys = secrets.map(key => note(key,200,'identity').pubkey);
+ let last;
+ for (let i=1; i<secrets.length; i++) {
+  const body = {...JSON.parse(fixture.epoch.content), epoch:i, old_pubkey:pubkeys[i-1], new_pubkey:pubkeys[i]};
+  last = finalizeEvent({...fixture.epoch, created_at:fixture.epoch.created_at+i, content:JSON.stringify(body), tags:fixture.epoch.tags.map(tag => tag[0]==='epoch' ? ['epoch',String(i)] : [...tag])},Uint8Array.from(Buffer.from('1'.repeat(64),'hex')));
+  g.observe(last);
+ }
+ const assertRetired = candidate => {
+  for (const key of secrets.slice(0,-1)) expect(candidate.judgeEvent(note(key,200,'retired'))).toBe('hostile');
+  expect(candidate.judgeEvent(note(secrets.at(-1),200,'current'))).toBe('accept');
+  expect(candidate.judgeEvent(note(Uint8Array.from(Buffer.from('6'.repeat(64),'hex')),200,'component'))).toBe('accept');
+ };
+ assertRetired(g);
+ const reloaded = guard({storage:durable});
+ reloaded.hydrate([last]);
+ assertRetired(reloaded);
+});
+
+it('refuses a compacted old ledger instead of inventing lost lineage', () => {
+ const durable = storage();
+ const g = guard({storage:durable});
+ g.observe(fixture.epoch);
+ const key='bahia:trust-epoch:deployment-a';
+ const prior=JSON.parse(durable.getItem(key));
+ delete prior.known_pubkeys;
+ prior.old_pubkey=fixture.new_pubkey;
+ prior.new_pubkey=note(Uint8Array.from(Buffer.from('4'.repeat(64),'hex')),200,'next').pubkey;
+ prior.epoch=2;
+ durable.setItem(key,JSON.stringify(prior));
+ expect(() => guard({storage:durable})).toThrow(/lineage is incomplete/);
+});
+
+it('retains a legacy unactivated candidate when a different candidate supersedes it', () => {
+ const durable=storage();
+ const root=Uint8Array.from(Buffer.from('1'.repeat(64),'hex'));
+ const original={...JSON.parse(fixture.epoch.content),activated:false};
+ const first=finalizeEvent({...fixture.epoch,content:JSON.stringify(original)},root);
+ guard({storage:durable}).observe(first);
+ const storageKey='bahia:trust-epoch:deployment-a';
+ const legacy=JSON.parse(durable.getItem(storageKey));delete legacy.known_pubkeys;
+ durable.setItem(storageKey,JSON.stringify(legacy));
+ const replacementKey=Uint8Array.from(Buffer.from('4'.repeat(64),'hex'));
+ const second=finalizeEvent({...fixture.epoch,created_at:first.created_at+1,
+  tags:fixture.epoch.tags.map(tag=>tag[0]==='epoch'?['epoch','2']:[...tag]),
+  content:JSON.stringify({...original,epoch:2,activated:true,new_pubkey:note(replacementKey,200,'candidate').pubkey})},root);
+ const migrated=guard({storage:durable});migrated.observe(second);
+ expect(migrated.judgeEvent(note(newSecret,200,'abandoned candidate'))).toBe('hostile');
+ const reloaded=guard({storage:durable});reloaded.hydrate([second]);
+ expect(reloaded.judgeEvent(note(newSecret,200,'abandoned candidate'))).toBe('hostile');
+});

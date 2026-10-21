@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -75,6 +77,11 @@ func TestSidecarTrustEpochReplacesReadWriteAdmissionAndRecordsAck(t *testing.T) 
 	require.True(t, reject)
 	require.Contains(t, reason, "unverifiable")
 	require.False(t, server.readAuth.isAllowedReader(fixture.NewPubkey), "malformed root head poisons service reads")
+	ready := httptest.NewRecorder()
+	server.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	require.Equal(t, http.StatusServiceUnavailable, ready.Code)
+	require.Contains(t, ready.Body.String(), `"trust_epoch":"unverifiable"`)
+	require.Contains(t, ready.Body.String(), `"status":"fail"`)
 }
 
 func TestSidecarRemoteAckSignerPinsIdentityAndPreservesEnvelope(t *testing.T) {
@@ -133,6 +140,7 @@ func TestSidecarAckSignerMismatchFailsClosed(t *testing.T) {
 	require.Empty(t, sidecarAcks(t, server, wrong.Public()))
 	ready := httptest.NewRecorder()
 	server.Handler().ServeHTTP(ready, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	require.Equal(t, http.StatusOK, ready.Code, "ack-only degradation is not poisoned trust")
 	require.Contains(t, ready.Body.String(), `"ack_signer":"unavailable"`)
 	require.Contains(t, ready.Body.String(), `"status":"warn"`)
 	require.NotContains(t, ready.Body.String(), "secret bunker URL")
@@ -256,4 +264,41 @@ func TestSidecarOnlyExemptsExactVerifiedInventoryReplay(t *testing.T) {
 	require.NoError(t, unlisted.Sign(oldKey))
 	reject, _ = p.acceptEvent(t.Context(), unlisted)
 	require.True(t, reject)
+}
+
+func TestSidecarRetiredAuthorsCannotReenterReadOrWriteAllowlists(t *testing.T) {
+	cfg, head, _ := activatedAckFixture(t)
+	root := nostr.MustSecretKeyFromHex(strings.Repeat("1", 64))
+	keys := []nostr.SecretKey{nostr.MustSecretKeyFromHex(strings.Repeat("2", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("3", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("4", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("5", 64))}
+	for _, key := range keys {
+		cfg.Sidecar.AdministratorPubkeys = append(cfg.Sidecar.AdministratorPubkeys, key.Public().Hex())
+	}
+	server, err := New(t.Context(), cfg, localSigner(t, keys[1]), zap.NewNop())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+	var body trustepoch.Epoch
+	require.NoError(t, json.Unmarshal([]byte(head.Content), &body))
+	for i := 2; i < len(keys); i++ {
+		body.Epoch, body.OldPubkey, body.NewPubkey = uint64(i), keys[i-1].Public().Hex(), keys[i].Public().Hex()
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		head.Content = string(raw)
+		head.CreatedAt++
+		for j, tag := range head.Tags {
+			if tag[0] == "epoch" {
+				head.Tags[j] = nostr.Tag{"epoch", strconv.Itoa(i)}
+			}
+		}
+		require.NoError(t, head.Sign(root))
+		reject, reason := server.admission.acceptEvent(t.Context(), head)
+		require.False(t, reject, reason)
+		require.NoError(t, server.store.Save(t.Context(), head))
+		for _, key := range keys[:i] {
+			require.False(t, server.readAuth.isAllowedReader(key.Public().Hex()), "static admin cannot restore any retired identity")
+			event := nostr.Event{Kind: 1, CreatedAt: nostr.Now()}
+			require.NoError(t, event.Sign(key))
+			reject, reason = server.admission.acceptEvent(t.Context(), event)
+			require.True(t, reject, reason)
+		}
+	}
 }

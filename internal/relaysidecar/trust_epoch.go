@@ -122,11 +122,7 @@ func (t *sidecarTrustEpoch) isPoisoned() bool {
 func (t *sidecarTrustEpoch) readDecision(pubkey string) (known, allowed bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	old := t.verifier.LegacyPubkey
-	if t.resolution.Record != nil {
-		old = t.resolution.Record.OldPubkey
-	}
-	if pubkey != old && pubkey != t.resolution.Pubkey {
+	if !t.resolution.IsServiceAuthor(pubkey) && pubkey != t.verifier.LegacyPubkey {
 		return false, false
 	}
 	return true, !t.poisoned && pubkey == t.resolution.Pubkey
@@ -152,11 +148,7 @@ func (t *sidecarTrustEpoch) judgeWrite(ev nostr.Event) (bool, error) {
 			zap.String("event_id", ev.ID.Hex()), zap.Uint64("count", count))
 		return true, fmt.Errorf("unverifiable trust epoch head")
 	}
-	old := t.verifier.LegacyPubkey
-	if t.resolution.Record != nil {
-		old = t.resolution.Record.OldPubkey
-	}
-	if ev.PubKey.Hex() != old && ev.PubKey.Hex() != t.resolution.Pubkey {
+	if !t.resolution.IsServiceAuthor(ev.PubKey.Hex()) && ev.PubKey.Hex() != t.verifier.LegacyPubkey {
 		return false, nil
 	}
 	if t.resolution.JudgeEvent(ev) == trustepoch.Hostile {

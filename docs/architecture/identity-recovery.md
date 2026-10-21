@@ -333,3 +333,27 @@ not relay-provided text or secrets. Approved IDs absent from the scan and local
 store receive batched direct by-ID REQs before a missing-ID failure. An
 incomplete relay blocks inventory/deletion phase completion; EOSE alone is
 not proof of absence.
+
+## Consumer identity lineage
+
+Consumers persist every identity generation from verified operator-root epoch
+heads alongside the monotonic high-water mark. Daemon, sidecar EVENT/NIP-42,
+shared consumer guards and the browser classify all those generations before
+unrelated-author policy. A retired key never becomes an unrelated component
+merely because another rotation replaces the addressable head. Only the
+immediately retired key can use the exact inventory-ID and barrier exception;
+older generations remain hostile. The signed epoch envelope is unchanged.
+
+Preserve the trust ledger with local state during upgrades. A ledger without
+retained lineage can be upgraded from a transition whose old key is the
+configured original identity. A compacted later transition without that
+lineage is unverifiable and fails closed; do not delete the ledger to bypass
+this refusal. Fresh-consumer epoch expectations and root-validated compacted
+history require the bootstrap contract tracked by `bahia-vy0iv`; EOSE alone
+cannot prove that no epoch or earlier identity exists.
+
+Sidecar `/ready` returns HTTP 503 and `trust_epoch: unverifiable` when epoch
+admission is poisoned. An unavailable acknowledgment signer remains a warning,
+not a successful recovery acknowledgment. An acknowledgment attempt that fails
+currently requires an epoch wake or sidecar restart to retry (`bahia-qc0ir`);
+signer recovery alone is not a wake signal.

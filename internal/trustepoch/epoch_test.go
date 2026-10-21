@@ -8,12 +8,14 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/stretchr/testify/require"
+	"go.etcd.io/bbolt"
 )
 
 type testSource struct {
@@ -267,4 +269,94 @@ func mustMarshal(t *testing.T, value any) []byte {
 	raw, err := json.Marshal(value)
 	require.NoError(t, err)
 	return raw
+}
+
+func TestRetiredIdentitiesRemainHostileAcrossRotationsAndRestart(t *testing.T) {
+	event, body, root, old, first := fixture(t)
+	path := filepath.Join(t.TempDir(), "epoch.db")
+	state, err := OpenBolt(path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	source := &testSource{event: &event, present: true}
+	verifier := &Verifier{OperatorRoot: root.Public().Hex(), LegacyPubkey: old.Public().Hex(), Source: source, Persistence: state}
+	keys := []nostr.SecretKey{old, first, nostr.MustSecretKeyFromHex(strings.Repeat("4", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("5", 64))}
+	for i := 1; i < len(keys); i++ {
+		body.Epoch, body.OldPubkey, body.NewPubkey = uint64(i), keys[i-1].Public().Hex(), keys[i].Public().Hex()
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		event.Content = string(raw)
+		for j, tag := range event.Tags {
+			if tag[0] == "epoch" {
+				event.Tags[j] = nostr.Tag{"epoch", strconv.Itoa(i)}
+			}
+		}
+		require.NoError(t, event.Sign(root))
+		source.event = &event
+		_, err = verifier.ServiceIdentity(t.Context(), "deployment-a")
+		require.NoError(t, err)
+	}
+	assertRetired := func() {
+		t.Helper()
+		for _, key := range keys[:len(keys)-1] {
+			event := nostr.Event{Kind: 1, CreatedAt: 200, Content: "retired"}
+			require.NoError(t, event.Sign(key))
+			decision, known, err := verifier.JudgeServiceEvent(t.Context(), "deployment-a", event)
+			require.NoError(t, err)
+			require.True(t, known, "retired service author must not become an unrelated component")
+			require.Equal(t, Hostile, decision)
+		}
+		current := nostr.Event{Kind: 1, CreatedAt: 200}
+		require.NoError(t, current.Sign(keys[len(keys)-1]))
+		decision, known, err := verifier.JudgeServiceEvent(t.Context(), "deployment-a", current)
+		require.NoError(t, err)
+		require.True(t, known)
+		require.Equal(t, Accept, decision)
+		require.NoError(t, current.Sign(nostr.Generate()))
+		decision, known, err = verifier.JudgeServiceEvent(t.Context(), "deployment-a", current)
+		require.NoError(t, err)
+		require.False(t, known)
+		require.Equal(t, Accept, decision)
+	}
+	assertRetired()
+	require.NoError(t, state.Close())
+	state, err = OpenBolt(path)
+	require.NoError(t, err)
+	verifier.Persistence = state
+	assertRetired()
+}
+
+func TestLegacyEpochLedgerDoesNotInventLostIdentityHistory(t *testing.T) {
+	for _, later := range []bool{false, true} {
+		t.Run(strconv.FormatBool(later), func(t *testing.T) {
+			event, body, root, old, first := fixture(t)
+			if later {
+				body.Epoch = 2
+				body.OldPubkey = first.Public().Hex()
+				body.NewPubkey = nostr.Generate().Public().Hex()
+				event.Tags[5] = nostr.Tag{"epoch", "2"}
+				raw, err := json.Marshal(body)
+				require.NoError(t, err)
+				event.Content = string(raw)
+				require.NoError(t, event.Sign(root))
+			}
+			state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, state.Close()) })
+			legacy := Accepted{Epoch: body.Epoch, EventID: event.ID.Hex(), OldPubkey: body.OldPubkey, NewPubkey: body.NewPubkey, Activated: true}
+			raw, err := json.Marshal(legacy)
+			require.NoError(t, err)
+			require.NoError(t, state.shared.db.Update(func(tx *bbolt.Tx) error { return tx.Bucket(acceptedBucket).Put([]byte("deployment-a"), raw) }))
+			v := &Verifier{OperatorRoot: root.Public().Hex(), LegacyPubkey: old.Public().Hex(), Source: &testSource{event: &event, present: true}, Persistence: state}
+			_, err = v.ServiceIdentity(t.Context(), "deployment-a")
+			if later {
+				require.ErrorIs(t, err, ErrUnverifiable)
+			} else {
+				require.NoError(t, err)
+				head, present, err := state.Last(t.Context(), "deployment-a")
+				require.NoError(t, err)
+				require.True(t, present)
+				require.ElementsMatch(t, []string{body.OldPubkey, body.NewPubkey}, head.KnownPubkeys)
+			}
+		})
+	}
 }

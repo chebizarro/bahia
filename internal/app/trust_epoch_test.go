@@ -2,10 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"fiatjaf.com/nostr"
@@ -13,6 +17,7 @@ import (
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/trustepoch"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestDaemonBootstrapAdoptsActivatedTrustEpochAndRejectsOldKey(t *testing.T) {
@@ -89,4 +94,27 @@ func TestDaemonHistoricalReplayRequiresExactInventoryAndBarrier(t *testing.T) {
 	require.False(t, admission.allowsHistoricalReplay(unlisted))
 	admission.resolution.Record.ActivationBarrier = 99
 	require.False(t, admission.allowsHistoricalReplay(old))
+}
+
+func TestDaemonRetainsRetiredAuthorsAcrossRotations(t *testing.T) {
+	root := nostr.MustSecretKeyFromHex(strings.Repeat("1", 64))
+	keys := []nostr.SecretKey{nostr.MustSecretKeyFromHex(strings.Repeat("2", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("3", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("4", 64)), nostr.MustSecretKeyFromHex(strings.Repeat("5", 64))}
+	state, err := trustepoch.OpenBolt(filepath.Join(t.TempDir(), "epochs.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	a := &trustEpochAdmission{verifier: &trustepoch.Verifier{OperatorRoot: root.Public().Hex(), LegacyPubkey: keys[0].Public().Hex(), Persistence: state}, resolution: trustepoch.Resolution{ServiceID: "deployment-a", Pubkey: keys[0].Public().Hex()}, logger: zap.NewNop()}
+	sum := sha256.Sum256(nil)
+	for i := 1; i < len(keys); i++ {
+		body := trustepoch.Epoch{IncidentID: "incident", Epoch: uint64(i), OldPubkey: keys[i-1].Public().Hex(), NewPubkey: keys[i].Public().Hex(), ControlledRelays: []string{}, ActivationBarrier: 100, InventoryDigest: hex.EncodeToString(sum[:]), ConsumerRoster: trustepoch.ConsumerIDs(), Activated: true}
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		ev := nostr.Event{Kind: nostr.Kind(kinds.CASControlState), CreatedAt: nostr.Timestamp(i), Content: string(raw), Tags: nostr.Tags{{"d", "trust-epoch:deployment-a"}, {"t", trustepoch.Topic}, {"domain", trustepoch.Domain}, {"schema", trustepoch.Schema}, {"legacy_kind", kinds.CPStateFamilyTrustEpoch.TagValue()}, {"epoch", strconv.Itoa(i)}, {"deleted", "false"}}}
+		require.NoError(t, ev.Sign(root))
+		require.NoError(t, a.admit(ev))
+		for _, old := range keys[:i] {
+			note := nostr.Event{Kind: 1, CreatedAt: 200}
+			require.NoError(t, note.Sign(old))
+			require.Error(t, a.admit(note))
+		}
+	}
 }

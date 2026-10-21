@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -98,6 +99,14 @@ func (b *BoltPersistence) Last(ctx context.Context, serviceID string) (Accepted,
 		if head.Epoch == 0 || !validHex64(head.EventID) || !validHex64(head.OldPubkey) || !validHex64(head.NewPubkey) {
 			return fmt.Errorf("corrupt accepted epoch for service %q", serviceID)
 		}
+		for i, key := range head.KnownPubkeys {
+			if !validHex64(key) || (i > 0 && head.KnownPubkeys[i-1] >= key) {
+				return fmt.Errorf("corrupt accepted identity lineage for service %q", serviceID)
+			}
+		}
+		if len(head.KnownPubkeys) > 0 && (!slices.Contains(head.KnownPubkeys, head.OldPubkey) || !slices.Contains(head.KnownPubkeys, head.NewPubkey)) {
+			return fmt.Errorf("incomplete accepted identity lineage for service %q", serviceID)
+		}
 		return nil
 	})
 	return head, found, err
@@ -124,12 +133,27 @@ func (b *BoltPersistence) Accept(ctx context.Context, serviceID string, head Acc
 				return ErrRegression
 			}
 			if head.Epoch == prior.Epoch {
-				if head != prior {
+				if head.OldPubkey != prior.OldPubkey || head.NewPubkey != prior.NewPubkey || head.Activated != prior.Activated {
 					return ErrUnverifiable
 				}
-				return nil
+			} else {
+				current := prior.OldPubkey
+				if prior.Activated {
+					current = prior.NewPubkey
+				}
+				if head.OldPubkey != current {
+					return fmt.Errorf("%w: broken persisted key chain", ErrUnverifiable)
+				}
 			}
+			// Only identities accepted in this transaction or a prior verified
+			// transition contribute; callers cannot inject unrelated known authors.
+			head.KnownPubkeys = append(slices.Clone(prior.KnownPubkeys), prior.OldPubkey, prior.NewPubkey)
+		} else {
+			head.KnownPubkeys = nil
 		}
+		head.KnownPubkeys = append(head.KnownPubkeys, head.OldPubkey, head.NewPubkey)
+		slices.Sort(head.KnownPubkeys)
+		head.KnownPubkeys = slices.Compact(head.KnownPubkeys)
 		raw, err := json.Marshal(head)
 		if err != nil {
 			return err

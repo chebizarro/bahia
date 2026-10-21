@@ -53,6 +53,9 @@ type Accepted struct {
 	OldPubkey string `json:"old_pubkey"`
 	NewPubkey string `json:"new_pubkey"`
 	Activated bool   `json:"activated"`
+	// KnownPubkeys retains generations from verified heads even when the
+	// addressable relay coordinate has replaced those heads.
+	KnownPubkeys []string `json:"known_pubkeys,omitempty"`
 }
 
 // Source returns the current head at the operator root's trust-epoch coordinate.
@@ -83,12 +86,13 @@ type Verifier struct {
 }
 
 type Resolution struct {
-	ServiceID string
-	Pubkey    string
-	Epoch     uint64
-	Record    *Epoch
-	EventID   string
-	Inventory map[string]struct{}
+	ServiceID    string
+	Pubkey       string
+	Epoch        uint64
+	Record       *Epoch
+	EventID      string
+	Inventory    map[string]struct{}
+	KnownPubkeys []string
 }
 
 type Decision string
@@ -209,7 +213,7 @@ func (v *Verifier) ServiceIdentity(ctx context.Context, serviceID string) (Resol
 		if hadLast {
 			return Resolution{}, fmt.Errorf("%w: accepted head disappeared", ErrRegression)
 		}
-		return Resolution{ServiceID: serviceID, Pubkey: v.LegacyPubkey}, nil
+		return Resolution{ServiceID: serviceID, Pubkey: v.LegacyPubkey, KnownPubkeys: []string{v.LegacyPubkey}}, nil
 	}
 	if ev == nil {
 		return Resolution{}, fmt.Errorf("%w: nil head", ErrUnverifiable)
@@ -233,6 +237,12 @@ func (v *Verifier) AcceptHead(ctx context.Context, serviceID string, ev nostr.Ev
 		return Resolution{}, err
 	}
 	if hadLast {
+		// Older ledgers retain only their last transition. Once the original
+		// identity is no longer its old key, missing lineage cannot be inferred.
+		if (len(last.KnownPubkeys) == 0 && last.OldPubkey != v.LegacyPubkey) ||
+			(len(last.KnownPubkeys) > 0 && !slices.Contains(last.KnownPubkeys, v.LegacyPubkey)) {
+			return Resolution{}, fmt.Errorf("%w: accepted identity lineage is incomplete", ErrUnverifiable)
+		}
 		if body.Epoch < last.Epoch {
 			return Resolution{}, ErrRegression
 		}
@@ -258,7 +268,17 @@ func (v *Verifier) AcceptHead(ctx context.Context, serviceID string, ev nostr.Ev
 	if err := v.Persistence.Accept(ctx, serviceID, accepted); err != nil {
 		return Resolution{}, err
 	}
-	resolved := Resolution{ServiceID: serviceID, Pubkey: body.OldPubkey, Epoch: body.Epoch, Record: &body, EventID: ev.ID.Hex()}
+	persisted, present, err := v.Persistence.Last(ctx, serviceID)
+	if err != nil {
+		return Resolution{}, fmt.Errorf("read persisted identity lineage: %w", err)
+	}
+	if !present || persisted.EventID != ev.ID.Hex() {
+		return Resolution{}, ErrRegression
+	}
+	if len(persisted.KnownPubkeys) == 0 {
+		return Resolution{}, fmt.Errorf("%w: identity lineage was not persisted", ErrUnverifiable)
+	}
+	resolved := Resolution{ServiceID: serviceID, Pubkey: body.OldPubkey, Epoch: body.Epoch, Record: &body, EventID: ev.ID.Hex(), KnownPubkeys: slices.Clone(persisted.KnownPubkeys)}
 	if body.Activated {
 		resolved.Pubkey = body.NewPubkey
 		if v.Inventory != nil {
@@ -309,13 +329,15 @@ func (v *Verifier) JudgeServiceEvent(ctx context.Context, serviceID string, ev n
 	if err != nil {
 		return Hostile, true, err
 	}
-	author := ev.PubKey.Hex()
-	old := v.LegacyPubkey
-	if r.Record != nil {
-		old = r.Record.OldPubkey
-	}
-	if author != old && author != v.LegacyPubkey && author != r.Pubkey {
+	if !r.IsServiceAuthor(ev.PubKey.Hex()) {
 		return Accept, false, nil
 	}
 	return r.JudgeEvent(ev), true, nil
+}
+
+// IsServiceAuthor identifies every observed generation before a caller applies
+// unrelated-component policy. It does not grant event or read authorization.
+func (r Resolution) IsServiceAuthor(pubkey string) bool {
+	return pubkey == r.Pubkey || slices.Contains(r.KnownPubkeys, pubkey) ||
+		(r.Record != nil && (pubkey == r.Record.OldPubkey || pubkey == r.Record.NewPubkey))
 }

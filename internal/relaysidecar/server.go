@@ -367,6 +367,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) serveReady(w http.ResponseWriter, _ *http.Request) {
+	statusCode := http.StatusOK
 	response := struct {
 		Status     string              `json:"status"`
 		Mirror     []MirrorRelayStatus `json:"mirror,omitempty"`
@@ -399,14 +400,16 @@ func (s *Server) serveReady(w http.ResponseWriter, _ *http.Request) {
 		}
 		if s.trustEpoch.isPoisoned() {
 			response.TrustEpoch = "unverifiable"
-			response.Status = "warn"
+			response.Status = "fail"
+			statusCode = http.StatusServiceUnavailable
 		}
 		response.AckSigner = s.ack.health()
-		if response.AckSigner == "unavailable" || (resolved.Record != nil && resolved.Record.Activated && response.AckSigner != "ok") {
+		if statusCode == http.StatusOK && (response.AckSigner == "unavailable" || (resolved.Record != nil && resolved.Record.Activated && response.AckSigner != "ok")) {
 			response.Status = "warn"
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(response)
 }
 

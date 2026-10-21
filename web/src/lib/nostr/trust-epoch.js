@@ -94,6 +94,15 @@ export function createTrustEpochGuard({ serviceID, operatorRoot, legacyPubkeys, 
       throw new Error('Corrupt persisted trust epoch');
     }
   }
+  if (prior && prior.known_pubkeys === undefined && !legacyPubkeys.includes(prior.old_pubkey)) {
+    throw new Error('Persisted identity lineage is incomplete');
+  }
+  if (prior?.known_pubkeys !== undefined && (!Array.isArray(prior.known_pubkeys) ||
+      !prior.known_pubkeys.length || prior.known_pubkeys.some(key => !HEX64.test(key)) ||
+      new Set(prior.known_pubkeys).size !== prior.known_pubkeys.length ||
+      ![prior.old_pubkey, prior.new_pubkey, ...legacyPubkeys].every(key => prior.known_pubkeys.includes(key)))) {
+    throw new Error('Corrupt persisted identity lineage');
+  }
   let record = null;
   let poisoned = false;
   let inventory = null;
@@ -113,7 +122,10 @@ export function createTrustEpochGuard({ serviceID, operatorRoot, legacyPubkeys, 
         throw new Error('Trust epoch regression or broken key chain');
       }
       const accepted = { epoch: body.epoch, event_id: event.id,
-        old_pubkey: body.old_pubkey, new_pubkey: body.new_pubkey, activated: body.activated };
+        old_pubkey: body.old_pubkey, new_pubkey: body.new_pubkey, activated: body.activated,
+        known_pubkeys: [...new Set([...(prior?.known_pubkeys || []),
+          ...(prior ? [prior.old_pubkey, prior.new_pubkey] : []), ...legacyPubkeys,
+          body.old_pubkey, body.new_pubkey])].sort() };
       storage.setItem(key, JSON.stringify(accepted));
       prior = accepted;
       record = body;
@@ -139,7 +151,7 @@ export function createTrustEpochGuard({ serviceID, operatorRoot, legacyPubkeys, 
   }
 
   function isServiceEvent(event) {
-    return legacyPubkeys.includes(event?.pubkey) || event?.pubkey === record?.old_pubkey ||
+    return legacyPubkeys.includes(event?.pubkey) || prior?.known_pubkeys?.includes(event?.pubkey) || event?.pubkey === record?.old_pubkey ||
       event?.pubkey === record?.new_pubkey;
   }
 
