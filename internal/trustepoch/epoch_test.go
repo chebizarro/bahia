@@ -360,3 +360,45 @@ func TestLegacyEpochLedgerDoesNotInventLostIdentityHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestConcurrentEpochPersistenceCannotDropIdentityLineage(t *testing.T) {
+	event, body, root, old, first := fixture(t)
+	third, fourth := nostr.Generate(), nostr.Generate()
+	makeHead := func(epoch uint64, from, to nostr.PubKey) Accepted {
+		t.Helper()
+		next := body
+		next.Epoch = epoch
+		next.OldPubkey = from.Hex()
+		next.NewPubkey = to.Hex()
+		raw, err := json.Marshal(next)
+		require.NoError(t, err)
+		signedEvent := event
+		signedEvent.Tags = append(nostr.Tags{}, event.Tags...)
+		signedEvent.Tags[5] = nostr.Tag{"epoch", strconv.FormatUint(epoch, 10)}
+		signedEvent.Content = string(raw)
+		require.NoError(t, signedEvent.Sign(root))
+		_, err = Parse(signedEvent, "deployment-a", root.Public().Hex())
+		require.NoError(t, err)
+		return Accepted{Epoch: epoch, EventID: signedEvent.ID.Hex(), OldPubkey: from.Hex(), NewPubkey: to.Hex(), Activated: true}
+	}
+	state, err := OpenBolt(filepath.Join(t.TempDir(), "epoch.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	require.NoError(t, state.Accept(t.Context(), "deployment-a", makeHead(1, old.Public(), first.Public())))
+	low, high := makeHead(2, first.Public(), third.Public()), makeHead(3, third.Public(), fourth.Public())
+	start := make(chan struct{})
+	lowResult, highResult := make(chan error, 1), make(chan error, 1)
+	go func() { <-start; lowResult <- state.Accept(t.Context(), "deployment-a", low) }()
+	go func() { <-start; highResult <- state.Accept(t.Context(), "deployment-a", high) }()
+	close(start)
+	require.NoError(t, <-lowResult)
+	if err := <-highResult; err != nil {
+		require.ErrorIs(t, err, ErrUnverifiable, "out-of-order key chains must refuse, not overwrite lineage")
+	}
+	require.NoError(t, state.Accept(t.Context(), "deployment-a", high))
+	final, present, err := state.Last(t.Context(), "deployment-a")
+	require.NoError(t, err)
+	require.True(t, present)
+	require.EqualValues(t, 3, final.Epoch)
+	require.ElementsMatch(t, []string{old.Public().Hex(), first.Public().Hex(), third.Public().Hex(), fourth.Public().Hex()}, final.KnownPubkeys)
+}
