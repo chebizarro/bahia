@@ -139,3 +139,15 @@ and canonical state.
 - [Web app setup](web-app-setup.md)
 - [Web components](web-components.md)
 - [Web store-first design](architecture/web-store-first.md)
+
+## Real-relay build and readiness
+
+Playwright global setup builds `cmd/bahia-test-relay` once into a temporary
+artifact and shares its path with workers as `BAHIA_TEST_RELAY_BIN`. Compilation
+has its own failure diagnostics and bounded build deadline, outside any test
+fixture's relay readiness window. The relay harness launches that binary and
+still requires the actual assigned address plus a successful health response
+under its unchanged readiness deadline. Suite teardown removes the artifact.
+This does not replace REQ/EVENT/EOSE assertions or turn skipped live gates into
+acceptance. On macOS, use the configured Xcode compiler/SDK for native Go builds;
+compiler failure is a suite prerequisite failure, not a relay timeout.

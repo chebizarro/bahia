@@ -14,11 +14,14 @@ function healthFixture() {
 describe('relay harness', () => {
   let child;
   let originalFetch;
+  let originalBinary;
 
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     originalFetch = globalThis.fetch;
+    originalBinary = process.env.BAHIA_TEST_RELAY_BIN;
+    delete process.env.BAHIA_TEST_RELAY_BIN;
     child = Object.assign(new EventEmitter(), {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),
@@ -30,6 +33,8 @@ describe('relay harness', () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    if (originalBinary === undefined) delete process.env.BAHIA_TEST_RELAY_BIN;
+    else process.env.BAHIA_TEST_RELAY_BIN = originalBinary;
     vi.useRealTimers();
   });
 
@@ -54,7 +59,8 @@ describe('relay harness', () => {
     await stopped;
   }
 
-  it('uses the relay address assigned for an ephemeral port', async () => {
+  it.each([undefined, '/fixture/bahia-test-relay'])('uses the assigned address with artifact %s', async (binary) => {
+    if (binary) process.env.BAHIA_TEST_RELAY_BIN = binary;
     const health = healthFixture();
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -76,8 +82,8 @@ describe('relay harness', () => {
       eventCount: 3
     });
     expect(spawnMock).toHaveBeenCalledWith(
-      'go',
-      ['run', './cmd/bahia-test-relay', '--addr', '127.0.0.1:0', '--read-auth', 'enforce'],
+      binary || 'go',
+      [...(binary ? [] : ['run', './cmd/bahia-test-relay']), '--addr', '127.0.0.1:0', '--read-auth', 'enforce'],
       expect.objectContaining({ detached: process.platform !== 'win32' })
     );
     expect(globalThis.fetch).toHaveBeenCalledOnce();

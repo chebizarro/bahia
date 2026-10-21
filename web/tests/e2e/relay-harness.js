@@ -31,7 +31,11 @@ export async function startBahiaTestRelay({
   spawnImpl = spawn,
   killImpl = process.kill.bind(process)
 } = {}) {
-  const child = spawnImpl('go', ['run', './cmd/bahia-test-relay', '--addr', addr, '--read-auth', readAuth, ...admit.flatMap((pubkey) => ['--admit', pubkey])], {
+  const binary = process.env.BAHIA_TEST_RELAY_BIN;
+  const command = binary || 'go';
+  const args = [...(binary ? [] : ['run', './cmd/bahia-test-relay']), '--addr', addr,
+    '--read-auth', readAuth, ...admit.flatMap((pubkey) => ['--admit', pubkey])];
+  const child = spawnImpl(command, args, {
     cwd: repoRoot,
     detached: process.platform !== 'win32',
     env: { ...process.env, BAHIA_TEST_RELAY_ADDR: addr },
