@@ -170,6 +170,10 @@ func TestDefaultInboundKindsContainsOnlyOperationalNonReactorStreams(t *testing.
 	}
 }
 
+func isCanonicalControlPlaneRequest(kind int) bool {
+	return kind == kinds.ContextVMMessage || kind == kinds.ContextVMGiftWrap || kind == kinds.ContextVMEphemeralGiftWrap
+}
+
 func isLegacyRuntimeKind(kind int) bool {
 	return (kind >= 5941 && kind <= 7999) ||
 		(kind >= 31100 && kind <= 31399) ||

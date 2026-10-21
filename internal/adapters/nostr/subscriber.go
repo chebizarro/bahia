@@ -528,10 +528,6 @@ func kindsToInts(kinds []nostr.Kind) []int {
 	return out
 }
 
-func isCanonicalControlPlaneRequest(kind int) bool {
-	return kind == kinds.ContextVMMessage || kind == kinds.ContextVMGiftWrap || kind == kinds.ContextVMEphemeralGiftWrap
-}
-
 func isDefaultAuthorScopedInboundKind(kind int) bool {
 	return kind == kinds.ConfigACLList || kind == kinds.ConfigPolicy
 }
