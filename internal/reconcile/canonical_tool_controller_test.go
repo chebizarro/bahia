@@ -350,3 +350,56 @@ func TestCanonicalToolAdmissionSurvivesRestartBeforeApprovalReceipt(t *testing.T
 	require.NoError(t, restarted.ReconcilePending(t.Context()))
 	require.Equal(t, 1, f.build.calls+0)
 }
+
+type recoveringToolDenylistDecryptor struct{ unavailable bool }
+
+func (d *recoveringToolDenylistDecryptor) DecryptConfidential(context.Context, string, int, string, string) ([]byte, error) {
+	if d.unavailable {
+		return nil, fmt.Errorf("denylist key temporarily unavailable")
+	}
+	return []byte(`{"package_name":"not-jq","manager":"apt"}`), nil
+}
+
+func TestCanonicalToolRefusalRemainsFinalAfterSourceRecoveryAndRestart(t *testing.T) {
+	f := newToolFixture(t, "approve")
+	decryptor := &recoveringToolDenylistDecryptor{}
+	f.controller.Decryptor = decryptor
+	saveCanonicalRuntimeEvent(t, f.store, f.serviceKey, kinds.ToolDenylistState, "tool-denylist:test", false, "encrypted-denylist", 100, nil)
+	require.NoError(t, f.controller.Decide(t.Context(), f.approval))
+	toolStatusProof(t, f.store, f.outbox, f.serviceKey, f.approval)
+	decryptor.unavailable = true
+	require.NoError(t, f.controller.ReconcilePending(t.Context()))
+	decision := f.controller.executor(nil, nil, toolDecisionFamily, "tool-decision")
+	refused, err := decision.readReceipt(f.controllerID())
+	require.NoError(t, err)
+	require.NotNil(t, refused)
+	require.Equal(t, "refused", refused.Phase)
+	require.Zero(t, f.build.calls+f.deploy.calls)
+	decryptor.unavailable = false
+	require.NoError(t, f.controller.ReconcilePending(t.Context()))
+	require.Zero(t, f.build.calls+f.deploy.calls, "recovering a dependency cannot execute an already refused decision")
+	require.NoError(t, f.store.Close())
+	require.NoError(t, f.outbox.Close())
+	store, err := localstore.Open(f.eventsPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	outbox, err := localstore.OpenOutbox(f.outboxPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, outbox.Close()) })
+	runtimeSource, err := NewCanonicalRuntimeSource(store, f.serviceKey.Public().Hex())
+	require.NoError(t, err)
+	restarted := &ToolCanonicalController{Base: &CanonicalAutoApplySource{Runtime: runtimeSource}, Outbox: outbox,
+		DeliveryTarget: f.controller.DeliveryTarget, AllowedAuthors: f.controller.AllowedAuthors,
+		ImageRepo: f.controller.ImageRepo, InstallerVersion: f.controller.InstallerVersion,
+		Decryptor: decryptor, Builder: f.build, DeployEffect: f.deploy, Lock: f.controller.Lock, Signer: f.controller.Signer,
+		Enqueue: func(_ context.Context, event nostr.Event) error {
+			_, err := outbox.Enqueue(localstore.OutboxEntry{Event: event, Target: "default"})
+			return err
+		}}
+	require.NoError(t, restarted.ReconcilePending(t.Context()))
+	require.Zero(t, f.build.calls+f.deploy.calls, "restart must replay refusal, never the external effect")
+	retained, err := restarted.executor(nil, nil, toolDecisionFamily, "tool-decision").readReceipt(f.controllerID())
+	require.NoError(t, err)
+	require.Equal(t, refused.Checkpoint.ID, retained.Checkpoint.ID)
+	require.Equal(t, refused.Sequence, retained.Sequence)
+}

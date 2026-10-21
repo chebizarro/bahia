@@ -230,6 +230,14 @@ func (c *ToolCanonicalController) reconcileOne(ctx context.Context, stage toolPe
 			return terminal.deliverCheckpoint(ctx, receipt.Checkpoint)
 		}
 	}
+	// A retained refusal is a final decision, including when a dependency
+	// later recovers. Replay its exact checkpoint without revisiting effects.
+	decision := c.executor(nil, nil, toolDecisionFamily, "tool-decision")
+	if receipt, err := decision.readReceipt(stage.Decision.IntentID); err != nil {
+		return err
+	} else if receipt != nil {
+		return c.refuseDecision(ctx, stage.Decision, ErrFreshDecisionRequired)
+	}
 	requestID, err := nostr.IDFromHex(stage.RequestEventID)
 	if err != nil {
 		return err
