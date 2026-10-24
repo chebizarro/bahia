@@ -26,11 +26,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|resume|abort|report-drafts|attest-readiness|attest-ack} --config FILE [--confirm-phase PHASE|--confirm-abort|--consumer ID --evidence-ids IDS [--waiver-reason consumer_disabled|consumer_isolated|consumer_decommissioned]] [--confirm-daemon-unreachable] [--rotation-updates FILE]")
+		_, _ = fmt.Fprintln(stderr, "usage: bahia-recover {plan|apply|status|rotation-inventory|resume|abort|report-drafts|attest-readiness|attest-ack} --config FILE [--confirm-phase PHASE|--confirm-abort|--consumer ID --evidence-ids IDS [--waiver-reason consumer_disabled|consumer_isolated|consumer_decommissioned]] [--confirm-daemon-unreachable] [--rotation-updates FILE]")
 		return 2
 	}
 	op := args[0]
-	if op != "plan" && op != "apply" && op != "status" && op != "resume" && op != "abort" && op != "report-drafts" && op != "attest-readiness" && op != "attest-ack" {
+	if op != "plan" && op != "apply" && op != "status" && op != "rotation-inventory" && op != "resume" && op != "abort" && op != "report-drafts" && op != "attest-readiness" && op != "attest-ack" {
 		_, _ = fmt.Fprintln(stderr, "unknown recovery command")
 		return 2
 	}
@@ -130,6 +130,27 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 		_, _ = fmt.Fprintln(stdout, *draftPath)
+		return 0
+	}
+	if op == "rotation-inventory" {
+		refs, inventoryErr := engine.RotationInventory(ctx)
+		if inventoryErr != nil {
+			_, _ = fmt.Fprintln(stderr, "rotation inventory failed:", inventoryErr)
+			return 1
+		}
+		state, statusErr := engine.Status()
+		if statusErr != nil {
+			_, _ = fmt.Fprintln(stderr, "recovery status failed:", statusErr)
+			return 1
+		}
+		view := struct {
+			IncidentID string                       `json:"incident_id"`
+			Phase      identityrecovery.Phase       `json:"phase"`
+			Items      []identityrecovery.SecretRef `json:"items"`
+		}{IncidentID: state.IncidentID, Phase: identityrecovery.RotateExternalSecrets, Items: refs}
+		if err = json.NewEncoder(stdout).Encode(view); err != nil {
+			return 1
+		}
 		return 0
 	}
 	switch op {

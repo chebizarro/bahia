@@ -77,6 +77,28 @@ func (e *Engine) Status() (State, error) {
 	}
 	return s, nil
 }
+
+// RotationInventory prepares and returns the identifier-only external-secret
+// work list for the next recovery phase. It never resolves credential values,
+// rotates a source credential, or publishes a phase receipt.
+func (e *Engine) RotationInventory(ctx context.Context) ([]SecretRef, error) {
+	if err := e.validate(ctx); err != nil {
+		return nil, err
+	}
+	s, err := e.Status()
+	if err != nil {
+		return nil, err
+	}
+	next, ok := s.Next()
+	if !ok || next != RotateExternalSecrets {
+		return nil, fmt.Errorf("rotation inventory requires next phase %s", RotateExternalSecrets)
+	}
+	if e.Rotation == nil {
+		return nil, fmt.Errorf("rotation inventory: %w", ErrAdapterNotRegistered)
+	}
+	return e.Rotation.Inventory(ctx)
+}
+
 func (e *Engine) Apply(ctx context.Context, confirmed Phase) error {
 	if err := e.validate(ctx); err != nil {
 		return err

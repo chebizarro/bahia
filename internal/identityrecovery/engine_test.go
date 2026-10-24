@@ -13,6 +13,7 @@ import (
 
 	"fiatjaf.com/nostr"
 	adapter "github.com/openagentsinc/bahia/internal/adapters/nostr"
+	"github.com/openagentsinc/bahia/internal/domain"
 	"github.com/openagentsinc/bahia/internal/kinds"
 	"github.com/openagentsinc/bahia/internal/nostrutil"
 )
@@ -106,6 +107,21 @@ func (testRotation) Rotate(context.Context, []SecretRef) (map[string]string, err
 	return map[string]string{"secret-1": "rotation-proof"}, nil
 }
 
+type recordingRotation struct {
+	inventoryCalls int
+	rotateCalls    int
+}
+
+func (r *recordingRotation) Inventory(context.Context) ([]SecretRef, error) {
+	r.inventoryCalls++
+	return []SecretRef{{ID: "secret-1", Provider: "signet", Label: "service/api", Credential: domain.SecretCredentialRef{Store: "signet", CredentialID: "cred_1", Version: 1}}}, nil
+}
+
+func (r *recordingRotation) Rotate(context.Context, []SecretRef) (map[string]string, error) {
+	r.rotateCalls++
+	return nil, errors.New("rotation must not run during inventory")
+}
+
 type testPurge struct{}
 
 func (testPurge) Purge(context.Context, []nostr.ID) ([]string, error) {
@@ -185,6 +201,46 @@ func fixture(t *testing.T) (*Engine, *testSource, func()) {
 	}
 	t.Cleanup(func() { _ = e.Ledger.Close() })
 	return e, src, restart
+}
+
+func TestRotationInventoryRequiresNextPhaseAndDoesNotRotateOrPublish(t *testing.T) {
+	ctx := context.Background()
+	e, src, _ := fixture(t)
+	rotation := &recordingRotation{}
+	e.Rotation = rotation
+
+	if _, err := e.RotationInventory(ctx); err == nil || !strings.Contains(err.Error(), string(RotateExternalSecrets)) {
+		t.Fatalf("inventory before rotation phase: %v", err)
+	}
+	for _, phase := range Phases[:6] {
+		if err := e.Apply(ctx, phase); err != nil {
+			t.Fatalf("advance %s: %v", phase, err)
+		}
+	}
+	beforePublishes := len(src.events)
+	refs, err := e.RotationInventory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 1 || refs[0].ID != "secret-1" {
+		t.Fatalf("inventory refs: %+v", refs)
+	}
+	if rotation.inventoryCalls != 1 || rotation.rotateCalls != 0 {
+		t.Fatalf("rotation calls: inventory=%d rotate=%d", rotation.inventoryCalls, rotation.rotateCalls)
+	}
+	if len(src.events) != beforePublishes {
+		t.Fatalf("inventory published %d events", len(src.events)-beforePublishes)
+	}
+	state, err := e.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next, ok := state.Next(); !ok || next != RotateExternalSecrets {
+		t.Fatalf("next phase changed: %s %v", next, ok)
+	}
+	if _, ok := state.Receipt(RotateExternalSecrets); ok {
+		t.Fatal("inventory created a phase receipt")
+	}
 }
 func TestResumeAfterInterruptedCompletedReceiptEveryPhase(t *testing.T) {
 	ctx := context.Background()
